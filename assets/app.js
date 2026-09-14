@@ -183,7 +183,7 @@ function monthSeries() {
 function renderMrr() { const series = monthSeries(); const selectedInvoices = filteredInvoices(); const selected = selectedInvoices.reduce((sum, invoice) => sum + amount(invoice), 0); $('#mrr-total').textContent = money(selected); $('#mrr-label').textContent = periodBounds().label; if (state.mrrChart) state.mrrChart.destroy(); state.mrrChart = new Chart($('#mrr-chart'), { type: 'bar', data: { labels: series.labels, datasets: [{ data: series.values, backgroundColor: series.values.map((_, index) => index === series.values.length - 1 ? colors.authorised : '#d9d8d0'), borderRadius: 2, barPercentage: .58 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => ` ${money(context.raw)}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 10 } } }, y: { beginAtZero: true, grid: { color: '#e5e3dc' }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 9 }, callback: (value) => money(value) } } } } }); $('#mrr-empty').classList.toggle('is-hidden', series.values.length > 0); $('#mrr-breakdown').innerHTML = Object.entries(companyLabels).map(([key, label]) => { const total = selectedInvoices.filter((invoice) => invoice.companyKey === key).reduce((sum, invoice) => sum + amount(invoice), 0); return `<div class="breakdown-item"><span>${label}</span><strong>${money(total)}</strong></div>`; }).join(''); }
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[character])); }
-function renderAll() { renderOverview(); renderMrr(); }
+function renderAll() { renderOverview(); renderMrr(); renderScorecard(); }
 
 $('#period-select').addEventListener('change', (event) => { state.period = event.target.value; $('#date-range').hidden = state.period !== 'custom'; renderAll(); });
 $('#date-from').addEventListener('input', (event) => { state.customStart = event.target.value; });
@@ -202,6 +202,452 @@ $('#apply-date-filter').addEventListener('click', () => {
     renderAll();
 });
 $('#refresh-button').addEventListener('click', loadInvoices);
-document.querySelectorAll('.scope-tab').forEach((button) => button.addEventListener('click', () => { document.querySelectorAll('.scope-tab').forEach((item) => item.classList.remove('is-active')); button.classList.add('is-active'); state.scope = button.dataset.scope; renderAll(); }));
-document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => { document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('is-active')); button.classList.add('is-active'); document.querySelectorAll('.view').forEach((view) => view.classList.remove('is-visible')); $(`#${button.dataset.view}-view`).classList.add('is-visible'); $('#page-title').textContent = button.dataset.view === 'mrr' ? 'MRR tracking' : 'Overview'; }));
+document.querySelectorAll('.scope-tab').forEach((button) => button.addEventListener('click', () => { state.scope = button.dataset.scope; document.querySelectorAll('.scope-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.scope === state.scope)); renderAll(); }));
+document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => { document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('is-active')); button.classList.add('is-active'); document.querySelectorAll('.view').forEach((view) => view.classList.remove('is-visible')); $(`#${button.dataset.view}-view`).classList.add('is-visible'); $('#page-title').textContent = button.dataset.title || button.textContent.trim(); }));
 loadInvoices();
+/* ==========================================================================
+   Scorecard: retention, targets and margin
+   --------------------------------------------------------------------------
+   Derived from the invoices already fetched by api.php:
+     · initial portfolio value  · churned value  · upsells / expansion
+     · active clients           · new business (MRR)  · total MRR + history
+   Everything else (targets, COGS, margin, bonus pool) is typed by hand in
+   MANUAL_INPUTS below until those numbers have a source.
+   ========================================================================== */
+
+/* Numbers that still come from the spreadsheet. Fill them in here. */
+const MANUAL_INPUTS = {
+    retentionTarget: 0.96,   // 96% — retention goal, as a fraction
+    newBusinessTarget: null,
+    totalMrrTarget: null,
+    accumulatedGap: null,
+    cogs: null,
+    cogsTarget: null,
+    margin: null,          // 0.45 = 45%
+    marginTarget: null,
+    bonusPool: null,
+};
+
+/* Placeholder values so the manual cards are not empty while reviewing the UI.
+   Set to false once MANUAL_INPUTS is filled with the real numbers. */
+const USE_DEMO_TARGETS = true;
+const DEMO_MANUAL_INPUTS = {
+    retentionTarget: 0.96,
+    newBusinessTarget: 75000,
+    totalMrrTarget: 475000,
+    accumulatedGap: -32400,
+    cogs: 186400,
+    cogsTarget: 175000,
+    margin: 0.407,
+    marginTarget: 0.45,
+    bonusPool: 18200,
+};
+
+/* Statuses that do not represent billed revenue. */
+const EXCLUDED_STATUSES = ['VOIDED', 'DELETED', 'DRAFT'];
+
+/* How many months to plot on the "actual against plan" chart. */
+const HISTORY_MONTHS = 6;
+
+state.scorecard = null;
+state.scorecardMeta = {};
+state.gapChart = null;
+
+const DASH = '—';
+const hasValue = (value) => value !== null && value !== undefined && Number.isFinite(Number(value));
+const moneyOr = (value) => (hasValue(value) ? money(Number(value)) : DASH);
+const signedMoney = (value) => (hasValue(value) ? `${Number(value) > 0 ? '+' : Number(value) < 0 ? '−' : ''}${money(Math.abs(Number(value)))}` : DASH);
+const percentOr = (value, digits = 1) => (hasValue(value) ? `${(Number(value) * 100).toFixed(digits)}%` : DASH);
+const signedPoints = (value, digits = 1) => (hasValue(value) ? `${Number(value) > 0 ? '+' : Number(value) < 0 ? '−' : ''}${Math.abs(Number(value) * 100).toFixed(digits)} pts` : DASH);
+const share = (part, whole) => (hasValue(part) && hasValue(whole) && Number(whole) !== 0 ? Number(part) / Number(whole) : null);
+const clampPercent = (value) => Math.max(0, Math.min(100, value));
+const plural = (count, word) => `${number(count)} ${word}${count === 1 ? '' : 's'}`;
+
+function setText(selector, value) { const node = $(selector); if (node) node.textContent = value; }
+
+/* ------------------------------- derivation ------------------------------- */
+
+function contactKey(invoice) { return invoice.Contact?.ContactID || invoice.Contact?.Name || 'unknown-contact'; }
+function isBillable(invoice) { return isRevenue(invoice) && !EXCLUDED_STATUSES.includes(normalStatus(invoice)); }
+function scopedInvoices() { return state.invoices.filter((invoice) => isBillable(invoice) && (state.scope === 'all' || invoice.companyKey === state.scope)); }
+function endOfMonth(date) { return new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59); }
+function inWindow(date, window) { return Boolean(date) && date >= window.start && date <= window.end; }
+function isCalendarMonth(start, end) { return start.getDate() === 1 && start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear() && end.getDate() === endOfMonth(start).getDate(); }
+
+/* The selected period, plus the comparable window right before it. */
+function scorecardWindows(invoices) {
+    const bounds = periodBounds();
+    let start = bounds.start;
+    let end = bounds.end;
+    let label = bounds.label;
+
+    if (!start || !end) {
+        const dates = invoices.map(invoiceDate).filter(Boolean);
+        if (!dates.length) return null;
+        const latest = new Date(Math.max(...dates.map((date) => date.getTime())));
+        start = new Date(latest.getFullYear(), latest.getMonth(), 1);
+        end = endOfMonth(start);
+        label = monthLabel(start);
+    }
+
+    const current = { start, end, label };
+    const previous = previousWindowOf(current);
+    return { current, previous, beforePrevious: previousWindowOf(previous) };
+}
+
+/* The comparable window immediately before the given one. */
+function previousWindowOf(window) {
+    if (isCalendarMonth(window.start, window.end)) {
+        const start = new Date(window.start.getFullYear(), window.start.getMonth() - 1, 1);
+        return { start, end: endOfMonth(start), label: monthLabel(start) };
+    }
+    const end = new Date(window.start.getTime() - 1);
+    const start = new Date(end.getTime() - (window.end.getTime() - window.start.getTime()));
+    return { start, end, label: 'previous window' };
+}
+
+function totalsByContact(invoices) {
+    const map = new Map();
+    invoices.forEach((invoice) => {
+        const key = contactKey(invoice);
+        map.set(key, (map.get(key) || 0) + amount(invoice));
+    });
+    return map;
+}
+
+function monthlyHistory(invoices, until) {
+    const months = [];
+    for (let offset = HISTORY_MONTHS - 1; offset >= 0; offset -= 1) {
+        const start = new Date(until.getFullYear(), until.getMonth() - offset, 1);
+        months.push({ start, end: endOfMonth(start) });
+    }
+    return months.map((month) => ({
+        label: monthLabel(month.start),
+        actual: invoices.filter((invoice) => inWindow(invoiceDate(invoice), month)).reduce((sum, invoice) => sum + amount(invoice), 0),
+        target: null,
+    }));
+}
+
+function buildScorecard() {
+    const manual = USE_DEMO_TARGETS ? DEMO_MANUAL_INPUTS : MANUAL_INPUTS;
+    const scorecard = {
+        retention: { initialPortfolio: null, churned: null, upsells: null, retained: null, initialPortfolioPrior: null, target: manual.retentionTarget, activeClients: null },
+        newBusiness: { actual: null, target: manual.newBusinessTarget },
+        totalMrr: { actual: null, target: manual.totalMrrTarget, accumulatedGap: manual.accumulatedGap, history: [] },
+        cogs: { actual: manual.cogs, target: manual.cogsTarget },
+        margin: { current: manual.margin, target: manual.marginTarget, bonusPool: manual.bonusPool },
+    };
+    const meta = { invoiceCount: 0, markedFirstMonth: 0, markedUpsell: 0, reactivated: null, newClients: 0, lostClients: 0, detection: 'none' };
+
+    const invoices = scopedInvoices();
+    const windows = scorecardWindows(invoices);
+    state.scorecardMeta = meta;
+    if (!windows) { state.scorecard = scorecard; return; }
+
+    meta.currentLabel = windows.current.label;
+    meta.previousLabel = windows.previous.label;
+    meta.priorLabel = windows.beforePrevious.label;
+
+    const current = invoices.filter((invoice) => inWindow(invoiceDate(invoice), windows.current));
+    const previous = invoices.filter((invoice) => inWindow(invoiceDate(invoice), windows.previous));
+    const beforePrevious = invoices.filter((invoice) => inWindow(invoiceDate(invoice), windows.beforePrevious));
+    const currentByContact = totalsByContact(current);
+    const previousByContact = totalsByContact(previous);
+
+    // First time each client shows up anywhere in the fetched history.
+    const firstSeen = new Map();
+    let datasetStart = null;
+    invoices.forEach((invoice) => {
+        const date = invoiceDate(invoice);
+        if (!date) return;
+        if (!datasetStart || date < datasetStart) datasetStart = date;
+        const key = contactKey(invoice);
+        const known = firstSeen.get(key);
+        if (!known || date < known) firstSeen.set(key, date);
+    });
+    const historyAvailable = Boolean(datasetStart) && datasetStart < windows.current.start;
+
+    // New business: explicitly marked in Xero, or a client with no earlier invoice.
+    const newContacts = new Set();
+    current.forEach((invoice) => {
+        if (invoice.flags && invoice.flags.firstMonth) { newContacts.add(contactKey(invoice)); meta.markedFirstMonth += 1; }
+        if (invoice.flags && invoice.flags.upsell) meta.markedUpsell += 1;
+    });
+    if (historyAvailable) {
+        currentByContact.forEach((_, key) => {
+            const first = firstSeen.get(key);
+            if (first && first >= windows.current.start) newContacts.add(key);
+        });
+    }
+    meta.detection = meta.markedFirstMonth > 0 && historyAvailable ? 'marker + history'
+        : meta.markedFirstMonth > 0 ? 'marker'
+            : historyAvailable ? 'history' : 'unavailable';
+
+    let churned = 0;
+    let expansion = 0;
+    let retained = 0;
+    previousByContact.forEach((previousValue, key) => {
+        const currentValue = currentByContact.get(key) || 0;
+        retained += currentValue;
+        if (currentValue < previousValue) churned += previousValue - currentValue;
+        if (currentValue > previousValue) expansion += currentValue - previousValue;
+        if (currentValue === 0) meta.lostClients += 1;
+    });
+
+    let newBusiness = 0;
+    let reactivated = 0;
+    currentByContact.forEach((value, key) => {
+        if (previousByContact.has(key)) return;
+        if (newContacts.has(key)) { newBusiness += value; meta.newClients += 1; } else { reactivated += value; }
+    });
+
+    scorecard.retention.initialPortfolio = previous.length ? [...previousByContact.values()].reduce((sum, value) => sum + value, 0) : null;
+    scorecard.retention.churned = previous.length ? churned : null;
+    scorecard.retention.upsells = previous.length ? expansion : null;
+    scorecard.retention.retained = previous.length ? retained : null;
+    scorecard.retention.activeClients = currentByContact.size;
+    scorecard.retention.initialPortfolioPrior = beforePrevious.length
+        ? beforePrevious.reduce((sum, invoice) => sum + amount(invoice), 0)
+        : null;
+
+    scorecard.newBusiness.actual = newBusiness;
+    scorecard.totalMrr.actual = current.reduce((sum, invoice) => sum + amount(invoice), 0);
+    scorecard.totalMrr.history = monthlyHistory(invoices, windows.current.start);
+
+    meta.invoiceCount = current.length;
+    meta.reactivated = reactivated;
+
+    state.scorecard = scorecard;
+}
+
+/* -------------------------------- components ------------------------------ */
+
+function deltaPill(value, { lowerIsBetter = false, suffix = '', formatter = signedMoney } = {}) {
+    if (!hasValue(value)) return `<span class="delta is-flat">${DASH}</span>`;
+    const delta = Number(value);
+    const good = lowerIsBetter ? delta <= 0 : delta >= 0;
+    const tone = delta === 0 ? 'is-flat' : good ? 'is-up' : 'is-down';
+    return `<span class="delta ${tone}">${formatter(delta)}${suffix}</span>`;
+}
+
+function targetBlock({ caption, value, target, note, lowerIsBetter = false, format = 'money', naLabel = DASH }) {
+    if (!hasValue(value) && !hasValue(target)) {
+        return `<p class="empty-line">Waiting for data</p>`;
+    }
+    const isPercent = format === 'percent';
+    const show = (input) => (hasValue(input) ? (isPercent ? percentOr(input, 2) : moneyOr(input)) : naLabel);
+    const progress = share(value, target);                 // "to target" in the spreadsheet
+    const width = hasValue(progress) ? clampPercent(progress * 100) : 0;
+    const gap = hasValue(value) && hasValue(target) ? Number(value) - Number(target) : null;
+    const complete = lowerIsBetter ? hasValue(gap) && gap <= 0 : hasValue(gap) && gap >= 0;
+    const scaleLeft = !hasValue(target)
+        ? 'No target set'
+        : !hasValue(progress)
+            ? `To target <strong>${naLabel}</strong>`
+            : isPercent
+                ? `To target <strong>${percentOr(progress, 2)}</strong>`
+                : `${(progress * 100).toFixed(0)}% of target`;
+    return `
+        <span class="target-caption">${escapeHtml(caption)}</span>
+        <span class="target-value">${show(value)}</span>
+        <div class="target-track"><span class="target-fill${complete ? ' is-complete' : ''}" style="width:${width}%"></span></div>
+        <div class="target-scale"><span>${scaleLeft}</span><span>Target <strong>${show(target)}</strong></span></div>
+        <div class="target-foot">${deltaPill(gap, { lowerIsBetter, formatter: isPercent ? signedPoints : signedMoney })}<small>${escapeHtml(note)}</small></div>
+    `;
+}
+
+function renderRetentionSection() {
+    const data = state.scorecard.retention || {};
+    const meta = state.scorecardMeta || {};
+    const retained = hasValue(data.retained)
+        ? Number(data.retained)
+        : hasValue(data.initialPortfolio) && hasValue(data.churned)
+            ? Number(data.initialPortfolio) - Number(data.churned) + Number(data.upsells || 0)
+            : null;
+
+    setText('#ret-initial', moneyOr(data.initialPortfolio));
+    setText('#ret-churned', moneyOr(data.churned));
+    setText('#ret-upsells', moneyOr(data.upsells));
+    setText('#ret-clients', hasValue(data.activeClients) ? number(data.activeClients) : DASH);
+    setText('#ret-churn-rate', percentOr(share(data.churned, data.initialPortfolio)));
+    setText('#ret-expansion-rate', percentOr(share(data.upsells, data.initialPortfolio)));
+    setText('#ret-initial-note', meta.previousLabel ? `Billed in ${meta.previousLabel}` : 'Previous period');
+    setText('#ret-clients-note', meta.invoiceCount ? `${plural(meta.invoiceCount, 'invoice')} in the period` : 'No invoices in the period');
+    setText('#ret-churn-note', meta.lostClients ? `${plural(meta.lostClients, 'client')} stopped billing` : 'No client stopped billing');
+    setText('#ret-upsell-note', meta.markedUpsell ? `${plural(meta.markedUpsell, 'invoice')} tagged as upsell` : 'Measured by value change');
+
+    const rows = [
+        { label: 'Initial portfolio value', hint: meta.previousLabel ? `Billed in ${meta.previousLabel}` : 'Previous period', value: data.initialPortfolio, tone: '', signed: false },
+        { label: 'Churned value', hint: 'Lost clients and downgrades', value: hasValue(data.churned) ? -Number(data.churned) : null, tone: 'is-negative', signed: true },
+        { label: 'Upsells, cross-sells & referrals', hint: 'Expansion on the same base', value: data.upsells, tone: 'is-positive', signed: true },
+        { label: 'Retention (existing)', hint: 'What the same base is worth now', value: retained, tone: 'is-total', signed: false },
+    ];
+    const max = Math.max(...rows.map((row) => Math.abs(Number(row.value) || 0)), 1);
+
+    $('#retention-waterfall').innerHTML = rows.map((row) => `
+        <div class="waterfall-row ${row.tone}">
+            <div class="waterfall-label">${escapeHtml(row.label)}<span class="waterfall-hint">${escapeHtml(row.hint)}</span></div>
+            <div class="waterfall-bar"><span style="width:${(Math.abs(Number(row.value) || 0) / max) * 100}%"></span></div>
+            <div class="waterfall-value">${row.signed ? signedMoney(row.value) : moneyOr(row.value)}</div>
+        </div>
+    `).join('');
+
+    // Spreadsheet formula: initial portfolio value of this period / of the previous one.
+    const retentionRate = share(data.initialPortfolio, data.initialPortfolioPrior);
+    $('#retention-target').innerHTML = targetBlock({
+        caption: 'Retention (existing)',
+        value: retentionRate,
+        target: data.target,
+        format: 'percent',
+        naLabel: 'N/A',
+        note: hasValue(retentionRate)
+            ? `${moneyOr(data.initialPortfolio)} in ${escapeHtml(meta.previousLabel || 'this period')} against ${moneyOr(data.initialPortfolioPrior)} in ${escapeHtml(meta.priorLabel || 'the one before')}.`
+            : 'Needs two closed periods of history to compare.',
+    });
+}
+
+function renderTargetsSection() {
+    const newBusiness = state.scorecard.newBusiness || {};
+    const totalMrr = state.scorecard.totalMrr || {};
+    const meta = state.scorecardMeta || {};
+
+    const detectionNote = {
+        'marker + history': `${plural(meta.newClients || 0, 'new client')}, detected by the Xero marker and by first invoice.`,
+        marker: `${plural(meta.newClients || 0, 'new client')}, detected by the "first month" marker in Xero.`,
+        history: `${plural(meta.newClients || 0, 'new client')}, detected by first invoice in the fetched history.`,
+        unavailable: 'No history before this period and no marker found — cannot separate new clients yet.',
+        none: 'Waiting for invoice data.',
+    }[meta.detection || 'none'];
+
+    $('#newbiz-target').innerHTML = targetBlock({
+        caption: 'Won this period',
+        value: newBusiness.actual,
+        target: newBusiness.target,
+        note: detectionNote,
+    });
+
+    $('#totalmrr-target').innerHTML = targetBlock({
+        caption: 'Total MRR',
+        value: totalMrr.actual,
+        target: totalMrr.target,
+        note: hasValue(meta.reactivated) && meta.reactivated > 0
+            ? `Includes ${money(meta.reactivated)} from clients that came back after a gap.`
+            : 'Retained base plus new business, normalized to USD.',
+    });
+
+    const difference = hasValue(totalMrr.actual) && hasValue(totalMrr.target) ? Number(totalMrr.actual) - Number(totalMrr.target) : null;
+    const toTarget = hasValue(difference) ? Math.max(0, -difference) : null;
+
+    setText('#mrr-difference', hasValue(difference) ? signedMoney(difference) : DASH);
+    $('#mrr-difference').className = hasValue(difference) ? (difference >= 0 ? 'value-up' : 'value-down') : '';
+    setText('#mrr-to-target', hasValue(toTarget) ? (toTarget === 0 ? 'Target met' : moneyOr(toTarget)) : DASH);
+    setText('#mrr-accumulated', hasValue(totalMrr.accumulatedGap) ? signedMoney(totalMrr.accumulatedGap) : DASH);
+    $('#mrr-accumulated').className = hasValue(totalMrr.accumulatedGap) ? (totalMrr.accumulatedGap >= 0 ? 'value-up' : 'value-down') : '';
+
+    renderGapChart(Array.isArray(totalMrr.history) ? totalMrr.history : []);
+}
+
+function renderGapChart(history) {
+    const canvas = $('#gap-chart');
+    if (!canvas) return;
+    $('#gap-empty').classList.toggle('is-hidden', history.length > 0);
+    if (state.gapChart) state.gapChart.destroy();
+    if (!history.length) { state.gapChart = null; return; }
+
+    const hasTargets = history.some((entry) => hasValue(entry.target));
+    const datasets = [
+        { type: 'bar', label: 'Actual', data: history.map((entry) => entry.actual), backgroundColor: history.map((entry, index) => (index === history.length - 1 ? colors.authorised : '#d9d8d0')), borderRadius: 2, barPercentage: .58, order: 2 },
+    ];
+    if (hasTargets) {
+        datasets.push({ type: 'line', label: 'Target', data: history.map((entry) => entry.target), borderColor: colors.open, borderWidth: 2, borderDash: [5, 4], pointRadius: 3, pointBackgroundColor: colors.open, tension: .25, order: 1 });
+    }
+
+    state.gapChart = new Chart(canvas, {
+        data: { labels: history.map((entry) => entry.label), datasets },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: hasTargets, position: 'bottom', labels: { boxWidth: 10, boxHeight: 10, color: '#7b827d', font: { family: 'Manrope', size: 11 } } },
+                tooltip: { callbacks: { label: (context) => ` ${context.dataset.label}: ${money(context.raw)}` } },
+            },
+            scales: {
+                x: { grid: { display: false }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 10 } } },
+                y: { beginAtZero: true, grid: { color: '#e5e3dc' }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 9 }, callback: (value) => money(value) } },
+            },
+        },
+    });
+}
+
+function renderMarginSection() {
+    const cogs = state.scorecard.cogs || {};
+    const margin = state.scorecard.margin || {};
+    const totalMrr = state.scorecard.totalMrr || {};
+
+    const cogsDifference = hasValue(cogs.actual) && hasValue(cogs.target) ? Number(cogs.actual) - Number(cogs.target) : null;
+    setText('#cogs-actual', moneyOr(cogs.actual));
+    setText('#cogs-target', moneyOr(cogs.target));
+    setText('#cogs-share', percentOr(share(cogs.actual, totalMrr.actual)));
+    setText('#cogs-difference', hasValue(cogsDifference) ? signedMoney(cogsDifference) : DASH);
+    $('#cogs-difference').className = hasValue(cogsDifference) ? (cogsDifference <= 0 ? 'value-up' : 'value-down') : '';
+
+    const gap = hasValue(margin.current) && hasValue(margin.target) ? Number(margin.current) - Number(margin.target) : null;
+    setText('#margin-gap-meta', hasValue(gap) ? `${signedPoints(gap)} vs target` : 'No target set');
+    $('#margin-gauge').innerHTML = marginGauge(margin.current, margin.target);
+
+    setText('#bonus-pool', moneyOr(margin.bonusPool));
+    setText('#bonus-gap', signedPoints(gap));
+    setText('#bonus-status', hasValue(gap) ? (gap >= 0 ? 'Unlocked' : 'Below target') : DASH);
+    setText('#bonus-note', hasValue(gap) && gap < 0
+        ? `Margin is ${Math.abs(gap * 100).toFixed(1)} points short of target. Close the gap to release the pool.`
+        : hasValue(gap) ? 'Margin is at or above target for the period.' : 'Typed by hand until COGS has a source.');
+}
+
+function marginGauge(current, target) {
+    const scaleMax = Math.ceil(Math.max(0.4, Number(current) || 0, Number(target) || 0) * 1.2 * 10) / 10;
+    const radius = 78;
+    const arcLength = Math.PI * radius;
+    const progress = hasValue(current) ? clampPercent((Number(current) / scaleMax) * 100) / 100 : 0;
+    const complete = hasValue(current) && hasValue(target) && Number(current) >= Number(target);
+
+    let marker = '';
+    if (hasValue(target)) {
+        const angle = Math.PI * Math.min(1, Number(target) / scaleMax);
+        const point = (length) => [100 - length * Math.cos(angle), 100 - length * Math.sin(angle)];
+        const [x1, y1] = point(radius - 11);
+        const [x2, y2] = point(radius + 11);
+        marker = `<line class="gauge-marker" x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke-width="2"></line>`;
+    }
+
+    return `
+        <div class="gauge-figure">
+            <svg viewBox="0 0 200 126" role="img" aria-label="Current margin against target">
+                <path class="gauge-track" d="M 22 100 A ${radius} ${radius} 0 0 1 178 100" fill="none" stroke-width="14"></path>
+                <path class="gauge-value${complete ? ' is-complete' : ''}" d="M 22 100 A ${radius} ${radius} 0 0 1 178 100" fill="none" stroke-width="14"
+                      stroke-dasharray="${arcLength.toFixed(1)}" stroke-dashoffset="${(arcLength * (1 - progress)).toFixed(1)}"></path>
+                ${marker}
+                <text class="gauge-caption" x="22" y="118" text-anchor="middle">0%</text>
+                <text class="gauge-caption" x="178" y="118" text-anchor="middle">${(scaleMax * 100).toFixed(0)}%</text>
+            </svg>
+        </div>
+        <div class="gauge-readout">
+            <div><span>Current margin</span><strong>${percentOr(current)}</strong></div>
+            <div><span>Target margin</span><strong>${percentOr(target)}</strong></div>
+            <div><span>Gap</span><strong class="${hasValue(current) && hasValue(target) ? (current >= target ? 'value-up' : 'value-down') : ''}">${signedPoints(hasValue(current) && hasValue(target) ? current - target : null)}</strong></div>
+        </div>
+    `;
+}
+
+function renderScorecard() {
+    buildScorecard();
+    renderRetentionSection();
+    renderTargetsSection();
+    renderMarginSection();
+}
+
+// Charts built inside a hidden view need a nudge once that view becomes visible.
+document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => {
+    requestAnimationFrame(() => { [state.statusChart, state.mrrChart, state.gapChart].forEach((chart) => chart && chart.resize()); });
+}));
+
+renderScorecard();

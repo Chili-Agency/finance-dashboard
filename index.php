@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="assets/styles.css">
+    <link rel="stylesheet" href="assets/styles.css?v=2">
 </head>
 <body>
     <div class="app-shell">
@@ -113,22 +113,22 @@
                     <article class="stat-card">
                         <span class="stat-label">Initial portfolio value</span>
                         <strong id="ret-initial">—</strong>
-                        <p class="stat-note">Recurring base at the start of the period</p>
+                        <p class="stat-note" id="ret-initial-note">Previous period</p>
                     </article>
                     <article class="stat-card is-negative">
                         <span class="stat-label">Churned value</span>
                         <strong id="ret-churned">—</strong>
-                        <p class="stat-note"><span id="ret-churn-rate">—</span> of the initial base</p>
+                        <p class="stat-note"><span id="ret-churn-rate">—</span> of the initial base · <span id="ret-churn-note">—</span></p>
                     </article>
                     <article class="stat-card is-positive">
                         <span class="stat-label">Upsells, cross-sells &amp; referrals</span>
                         <strong id="ret-upsells">—</strong>
-                        <p class="stat-note"><span id="ret-expansion-rate">—</span> expansion on the same base</p>
+                        <p class="stat-note"><span id="ret-expansion-rate">—</span> expansion · <span id="ret-upsell-note">—</span></p>
                     </article>
                     <article class="stat-card is-neutral">
                         <span class="stat-label">Active clients</span>
                         <strong id="ret-clients">—</strong>
-                        <p class="stat-note">Billing at least once in the period</p>
+                        <p class="stat-note" id="ret-clients-note">Billing at least once in the period</p>
                     </article>
                 </div>
 
@@ -275,6 +275,6 @@
         </main>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-    <script src="assets/app.js?v=7"></script>
+    <script src="assets/app.js?v=8"></script>
 </body>
 </html>
