@@ -31,12 +31,35 @@ $companies = [
     ],
 ];
 
+/*
+ * Markers written by the team inside Xero. The invoice text we look at is
+ * Reference + line item descriptions + item/account codes.
+ * Add or adjust patterns here — this is the single place that classifies invoices.
+ */
+$markerPatterns = [
+    'firstMonth' => [
+        '/first\s*month/i',
+        '/1st\s*month/i',
+        '/primeiro\s*m[eê]s/i',
+        '/m[eê]s\s*1\b/i',
+        '/primer\s*mes/i',
+        '/new\s*(client|customer)/i',
+    ],
+    'upsell' => [
+        '/up[-\s]?sell/i',
+        '/cross[-\s]?sell/i',
+        '/referral/i',
+        '/indica[cç][aã]o/i',
+    ],
+];
+
 $source = $_GET['source'] ?? 'all';
 $requested = $source === 'all' ? array_keys($companies) : [$source];
 $invoices = [];
 $errors = [];
 $sourceCounts = [];
 $sourceTypeCounts = [];
+$diagnostics = [];
 
 foreach ($requested as $key) {
     if (!isset($companies[$key])) {
@@ -56,6 +79,8 @@ foreach ($requested as $key) {
 
     $before = count($invoices);
     $sourceTypeCounts[$key] = [];
+    $diagnostics[$key] = ['withLineItems' => 0, 'withReference' => 0, 'firstMonthMarked' => 0, 'upsellMarked' => 0];
+
     foreach ($response['data'] as $invoice) {
         if (!is_array($invoice) || !empty($invoice['_empty'])) {
             continue;
@@ -64,18 +89,34 @@ foreach ($requested as $key) {
         $type = strtoupper((string) ($invoice['Type'] ?? 'UNKNOWN'));
         $sourceTypeCounts[$key][$type] = ($sourceTypeCounts[$key][$type] ?? 0) + 1;
 
-        $invoice['companyKey'] = $key;
-        $invoice['company'] = $company['label'];
-        $invoice['companyCurrency'] = $company['currency'];
-        $invoice['usdRate'] = $company['usdRate'];
-        $invoice['rateSource'] = 'fallback';
-
-        if (!empty($invoice['conversion']['ok']) && isset($invoice['conversion']['usdPerUnit'])) {
-            $invoice['usdRate'] = (float) $invoice['conversion']['usdPerUnit'];
-            $invoice['rateSource'] = 'live';
+        if (!empty($invoice['LineItems']) && is_array($invoice['LineItems'])) {
+            $diagnostics[$key]['withLineItems']++;
+        }
+        if (trim((string) ($invoice['Reference'] ?? '')) !== '') {
+            $diagnostics[$key]['withReference']++;
         }
 
-        $invoices[] = $invoice;
+        $slim = slimInvoice($invoice, $markerPatterns);
+
+        $slim['companyKey'] = $key;
+        $slim['company'] = $company['label'];
+        $slim['companyCurrency'] = $company['currency'];
+        $slim['usdRate'] = $company['usdRate'];
+        $slim['rateSource'] = 'fallback';
+
+        if (!empty($invoice['conversion']['ok']) && isset($invoice['conversion']['usdPerUnit'])) {
+            $slim['usdRate'] = (float) $invoice['conversion']['usdPerUnit'];
+            $slim['rateSource'] = 'live';
+        }
+
+        if (!empty($slim['flags']['firstMonth'])) {
+            $diagnostics[$key]['firstMonthMarked']++;
+        }
+        if (!empty($slim['flags']['upsell'])) {
+            $diagnostics[$key]['upsellMarked']++;
+        }
+
+        $invoices[] = $slim;
     }
 
     $sourceCounts[$key] = count($invoices) - $before;
@@ -90,8 +131,85 @@ echo json_encode([
     }, []),
     'sourceCounts' => $sourceCounts,
     'sourceTypeCounts' => $sourceTypeCounts,
+    'diagnostics' => $diagnostics,
     'fetchedAt' => gmdate('c'),
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+/**
+ * Keeps only the fields the dashboard reads, plus the classification flags.
+ * Xero payloads with line items are heavy; this keeps the browser payload small.
+ */
+function slimInvoice(array $invoice, array $markerPatterns): array
+{
+    $descriptions = [];
+    $itemCodes = [];
+    $accountCodes = [];
+
+    foreach ((array) ($invoice['LineItems'] ?? []) as $line) {
+        if (!is_array($line)) {
+            continue;
+        }
+        if (isset($line['Description'])) {
+            $descriptions[] = (string) $line['Description'];
+        }
+        if (!empty($line['ItemCode'])) {
+            $itemCodes[] = (string) $line['ItemCode'];
+        }
+        if (!empty($line['AccountCode'])) {
+            $accountCodes[] = (string) $line['AccountCode'];
+        }
+        foreach ((array) ($line['Tracking'] ?? []) as $tracking) {
+            if (is_array($tracking) && !empty($tracking['Option'])) {
+                $descriptions[] = (string) $tracking['Option'];
+            }
+        }
+    }
+
+    $haystack = trim(implode(' | ', array_filter(array_merge(
+        [(string) ($invoice['Reference'] ?? '')],
+        $descriptions,
+        $itemCodes
+    ))));
+
+    $flags = [];
+    foreach ($markerPatterns as $flag => $patterns) {
+        $flags[$flag] = false;
+        foreach ($patterns as $pattern) {
+            if ($haystack !== '' && preg_match($pattern, $haystack) === 1) {
+                $flags[$flag] = true;
+                break;
+            }
+        }
+    }
+
+    return [
+        'InvoiceID' => $invoice['InvoiceID'] ?? null,
+        'InvoiceNumber' => $invoice['InvoiceNumber'] ?? null,
+        'Reference' => $invoice['Reference'] ?? null,
+        'Type' => $invoice['Type'] ?? null,
+        'Status' => $invoice['Status'] ?? null,
+        'Date' => $invoice['Date'] ?? null,
+        'DateString' => $invoice['DateString'] ?? null,
+        'DueDate' => $invoice['DueDate'] ?? null,
+        'DueDateString' => $invoice['DueDateString'] ?? null,
+        'CurrencyCode' => $invoice['CurrencyCode'] ?? null,
+        'SubTotal' => $invoice['SubTotal'] ?? null,
+        'TotalTax' => $invoice['TotalTax'] ?? null,
+        'Total' => $invoice['Total'] ?? null,
+        'AmountDue' => $invoice['AmountDue'] ?? null,
+        'AmountPaid' => $invoice['AmountPaid'] ?? null,
+        'Contact' => [
+            'ContactID' => $invoice['Contact']['ContactID'] ?? null,
+            'Name' => $invoice['Contact']['Name'] ?? null,
+        ],
+        'amounts_usd' => $invoice['amounts_usd'] ?? null,
+        'conversion' => $invoice['conversion'] ?? null,
+        'flags' => $flags,
+        'itemCodes' => array_values(array_unique($itemCodes)),
+        'accountCodes' => array_values(array_unique($accountCodes)),
+        'markerText' => mb_substr($haystack, 0, 240),
+    ];
+}
 
 function fetchJson(string $url): array
 {

@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="assets/styles.css">
+    <link rel="stylesheet" href="assets/styles.css?v=2">
 </head>
 <body>
     <div class="app-shell">
@@ -20,8 +20,11 @@
             <div class="sidebar-rule"></div>
             <p class="eyebrow">Workspace</p>
             <nav class="main-nav" aria-label="Main navigation">
-                <button class="nav-item is-active" data-view="overview"><span class="nav-icon">◒</span>Overview</button>
-                <button class="nav-item" data-view="mrr"><span class="nav-icon">↗</span>MRR tracking</button>
+                <button class="nav-item is-active" data-view="overview" data-title="Overview"><span class="nav-icon">◒</span>Overview</button>
+                <button class="nav-item" data-view="mrr" data-title="MRR tracking"><span class="nav-icon">↗</span>MRR tracking</button>
+                <button class="nav-item" data-view="retention" data-title="Retention"><span class="nav-icon">◐</span>Retention</button>
+                <button class="nav-item" data-view="targets" data-title="Targets"><span class="nav-icon">◎</span>Targets</button>
+                <button class="nav-item" data-view="margin" data-title="Margin &amp; COGS"><span class="nav-icon">◇</span>Margin &amp; COGS</button>
             </nav>
             <div class="sidebar-bottom">
                 <div class="sync-card">
@@ -88,9 +91,190 @@
             </section>
 
             <section class="view" id="mrr-view" aria-labelledby="page-title"><div class="section-intro mrr-intro"><div><p class="eyebrow">Revenue intelligence</p><h2>Monthly recurring revenue</h2><p class="section-copy">Issued client invoices, normalized to USD. Use the period selector to compare months.</p></div><div class="mrr-callout"><span>Selected period</span><strong id="mrr-total">$0</strong><small id="mrr-label">Current month</small></div></div><article class="panel mrr-panel"><div class="panel-header"><div><p class="eyebrow">Trend</p><h3>Revenue by month</h3></div><span class="panel-meta">Issued invoices</span></div><div class="mrr-chart-wrap"><canvas id="mrr-chart"></canvas><div class="chart-empty" id="mrr-empty">No revenue data available</div></div></article><div class="mrr-breakdown" id="mrr-breakdown"></div></section>
+
+            <!-- ============================ RETENTION ============================ -->
+            <section class="view" id="retention-view" aria-labelledby="page-title">
+                <div class="section-intro">
+                    <div>
+                        <p class="eyebrow">Portfolio health</p>
+                        <h2>Retention of existing clients</h2>
+                        <p class="section-copy">How much of the base we started the period with is still billing at the end of it.</p>
+                    </div>
+                    <div class="scope-tabs" role="tablist" aria-label="Company scope">
+                        <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
+                        <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
+                        <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
+                        <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
+                        <button class="scope-tab" data-scope="int" role="tab">International</button>
+                    </div>
+                </div>
+
+                <div class="scorecard-grid">
+                    <article class="stat-card">
+                        <span class="stat-label">Initial portfolio value</span>
+                        <strong id="ret-initial">—</strong>
+                        <p class="stat-note" id="ret-initial-note">Previous period</p>
+                    </article>
+                    <article class="stat-card is-negative">
+                        <span class="stat-label">Churned value</span>
+                        <strong id="ret-churned">—</strong>
+                        <p class="stat-note"><span id="ret-churn-rate">—</span> of the initial base · <span id="ret-churn-note">—</span></p>
+                    </article>
+                    <article class="stat-card is-positive">
+                        <span class="stat-label">Upsells, cross-sells &amp; referrals</span>
+                        <strong id="ret-upsells">—</strong>
+                        <p class="stat-note"><span id="ret-expansion-rate">—</span> expansion · <span id="ret-upsell-note">—</span></p>
+                    </article>
+                    <article class="stat-card is-neutral">
+                        <span class="stat-label">Active clients</span>
+                        <strong id="ret-clients">—</strong>
+                        <p class="stat-note" id="ret-clients-note">Billing at least once in the period</p>
+                    </article>
+                </div>
+
+                <div class="split-grid is-wide-left">
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Movement</p><h3>How the base changed</h3></div>
+                            <span class="panel-meta">USD view</span>
+                        </div>
+                        <div class="waterfall" id="retention-waterfall"></div>
+                    </article>
+
+                    <article class="panel target-panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Goal</p><h3>Retention vs target</h3></div>
+                        </div>
+                        <div class="target-block" id="retention-target"></div>
+                    </article>
+                </div>
+            </section>
+
+            <!-- ============================= TARGETS ============================= -->
+            <section class="view" id="targets-view" aria-labelledby="page-title">
+                <div class="section-intro">
+                    <div>
+                        <p class="eyebrow">Growth</p>
+                        <h2>New business and total MRR</h2>
+                        <p class="section-copy">Actuals against plan for the selected period, plus the gap carried from earlier months.</p>
+                    </div>
+                    <div class="scope-tabs" role="tablist" aria-label="Company scope">
+                        <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
+                        <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
+                        <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
+                        <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
+                        <button class="scope-tab" data-scope="int" role="tab">International</button>
+                    </div>
+                </div>
+
+                <div class="split-grid">
+                    <article class="panel target-panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Acquisition</p><h3>New business (MRR)</h3></div>
+                        </div>
+                        <div class="target-block" id="newbiz-target"></div>
+                    </article>
+
+                    <article class="panel target-panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Run rate</p><h3>Total MRR</h3></div>
+                        </div>
+                        <div class="target-block" id="totalmrr-target"></div>
+                    </article>
+                </div>
+
+                <div class="scorecard-grid is-three">
+                    <article class="stat-card">
+                        <span class="stat-label">Total difference</span>
+                        <strong id="mrr-difference">—</strong>
+                        <p class="stat-note">Total MRR minus target, this period</p>
+                    </article>
+                    <article class="stat-card">
+                        <span class="stat-label">To target</span>
+                        <strong id="mrr-to-target">—</strong>
+                        <p class="stat-note">Still missing to close the period</p>
+                    </article>
+                    <article class="stat-card">
+                        <span class="stat-label">Accumulated gap / excess</span>
+                        <strong id="mrr-accumulated">—</strong>
+                        <p class="stat-note">Carried from the start of the year</p>
+                    </article>
+                </div>
+
+                <article class="panel">
+                    <div class="panel-header">
+                        <div><p class="eyebrow">Trend</p><h3>Actual against plan</h3></div>
+                        <span class="panel-meta">Monthly, USD</span>
+                    </div>
+                    <div class="mrr-chart-wrap">
+                        <canvas id="gap-chart"></canvas>
+                        <div class="chart-empty is-hidden" id="gap-empty">Connect the targets source to plot this chart</div>
+                    </div>
+                </article>
+            </section>
+
+            <!-- ========================== MARGIN & COGS ========================== -->
+            <section class="view" id="margin-view" aria-labelledby="page-title">
+                <div class="section-intro">
+                    <div>
+                        <p class="eyebrow">Profitability</p>
+                        <h2>Cost of delivery and margin</h2>
+                        <p class="section-copy">What delivery costs against plan, and what is left for the team.</p>
+                    </div>
+                    <div class="scope-tabs" role="tablist" aria-label="Company scope">
+                        <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
+                        <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
+                        <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
+                        <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
+                        <button class="scope-tab" data-scope="int" role="tab">International</button>
+                    </div>
+                </div>
+
+                <div class="scorecard-grid is-three">
+                    <article class="stat-card">
+                        <span class="stat-label">COGS</span>
+                        <strong id="cogs-actual">—</strong>
+                        <p class="stat-note"><span id="cogs-share">—</span> of total MRR</p>
+                    </article>
+                    <article class="stat-card">
+                        <span class="stat-label">Target COGS</span>
+                        <strong id="cogs-target">—</strong>
+                        <p class="stat-note">Budgeted cost of delivery</p>
+                    </article>
+                    <article class="stat-card">
+                        <span class="stat-label">Difference</span>
+                        <strong id="cogs-difference">—</strong>
+                        <p class="stat-note">Spending below budget is good here</p>
+                    </article>
+                </div>
+
+                <div class="split-grid">
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Margin</p><h3>Current against target</h3></div>
+                            <span class="panel-meta" id="margin-gap-meta">—</span>
+                        </div>
+                        <div class="gauge-wrap" id="margin-gauge"></div>
+                    </article>
+
+                    <article class="panel bonus-panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Upside</p><h3>Potential bonus pool</h3></div>
+                        </div>
+                        <div class="bonus-body">
+                            <strong id="bonus-pool">—</strong>
+                            <p id="bonus-note">Released when margin clears the target for the period.</p>
+                            <div class="bonus-meta">
+                                <div><span>Margin gap</span><strong id="bonus-gap">—</strong></div>
+                                <div><span>Status</span><strong id="bonus-status">—</strong></div>
+                            </div>
+                        </div>
+                    </article>
+                </div>
+            </section>
         </main>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-    <script src="assets/app.js?v=6"></script>
+    <script src="assets/app.js?v=8"></script>
 </body>
 </html>
