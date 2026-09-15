@@ -90,3 +90,18 @@
   .gauge-figure{flex:0 0 100%}
   .bonus-body strong{font-size:29px}
 }
+/* ===================== Service line filter (All · SEO · PPC) ===================== */
+.filter-stack{display:flex;flex-direction:column;align-items:flex-end;gap:12px;min-width:0}
+.category-filter{display:flex;align-items:center;gap:10px}
+.category-filter>span{color:var(--muted);font:500 9px 'DM Mono',monospace;text-transform:uppercase;letter-spacing:.1em}
+.category-tabs{display:inline-flex;gap:2px;padding:3px;border:1px solid var(--line);background:var(--panel)}
+.category-tab{border:0;background:transparent;padding:6px 14px;color:var(--muted);font:600 11px Manrope;cursor:pointer}
+.category-tab:hover{color:var(--ink)}
+.category-tab.is-active{background:var(--ink);color:#fff}
+.category-tab:focus-visible,.scope-tab:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+.category-tag{color:var(--red-deep)}
+@media(max-width:700px){
+  .filter-stack{align-items:stretch;margin-top:18px}
+  .filter-stack .scope-tabs{margin-top:0}
+  .category-filter{justify-content:flex-start}
+}

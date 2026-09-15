@@ -1,5 +1,6 @@
-const state = { invoices: [], sourceTypeCounts: {}, scope: 'all', period: 'current', customStart: '', customEnd: '', statusChart: null, mrrChart: null };
+const state = { invoices: [], sourceTypeCounts: {}, categoryCounts: {}, scope: 'all', category: 'all', period: 'current', customStart: '', customEnd: '', statusChart: null, mrrChart: null };
 const companyLabels = { br: 'Brazil', mx: 'Mexico', pa: 'Panama', int: 'International' };
+const categoryLabels = { seo: 'SEO', ppc: 'PPC' };
 const colors = { paid: '#57745d', late: '#d49b35', open: '#55778a', authorised: '#e84d2c', voided: '#a5a6a0' };
 
 const $ = (selector) => document.querySelector(selector);
@@ -29,7 +30,18 @@ function startOfToday() {
 
 function invoiceDate(invoice) { return parseDate(invoice.DateString || invoice.Date); }
 function dueDate(invoice) { return parseDate(invoice.DueDateString || invoice.DueDate); }
-function amount(invoice) {
+function categoryShare(invoice, category = state.category) {
+    if (category === 'all') return 1;
+    const value = Number(invoice.categoryShares?.[category]);
+    return Number.isFinite(value) ? value : 0;
+}
+function inCategory(invoice) { return state.category === 'all' || categoryShare(invoice) > 0; }
+function categoryTag(invoice) {
+    const list = (invoice.categories || []).map((key) => categoryLabels[key]).filter(Boolean);
+    return list.length ? list.join(' + ') : '';
+}
+function amount(invoice) { return fullAmount(invoice) * categoryShare(invoice); }
+function fullAmount(invoice) {
     const usd = invoice.amounts_usd;
     if (usd) {
         const value = usd.Total ?? usd.SubTotal ?? usd.AmountDue;
@@ -64,7 +76,7 @@ function filteredInvoices() {
         const inScope = state.scope === 'all' || invoice.companyKey === state.scope;
         const inPeriod = (!bounds.start && !bounds.end)
             || (date && (!bounds.start || date >= bounds.start) && (!bounds.end || date <= bounds.end));
-        return isRevenue(invoice) && inScope && inPeriod;
+        return isRevenue(invoice) && inScope && inPeriod && inCategory(invoice);
     }).sort((a, b) => (invoiceDate(b)?.getTime() || 0) - (invoiceDate(a)?.getTime() || 0));
 }
 
@@ -87,7 +99,9 @@ async function loadInvoices() {
         const data = await response.json();
         state.invoices = Array.isArray(data.invoices) ? data.invoices : [];
         state.sourceTypeCounts = data.sourceTypeCounts || {};
+        state.categoryCounts = data.categoryCounts || {};
         const errors = Array.isArray(data.errors) ? data.errors : [];
+        delete $('#error-notice').dataset.dynamic;
             const currentPeriodHasInvoices = filteredInvoices().length > 0;
             const shouldShowAvailableData = state.period === 'current' && state.invoices.length > 0 && !currentPeriodHasInvoices;
             if (shouldShowAvailableData) {
@@ -138,39 +152,61 @@ function renderMarkets(invoices) {
 
 function renderTable(invoices) {
     $('#table-summary').textContent = `${number(invoices.length)} record${invoices.length === 1 ? '' : 's'}`;
-    $('#invoice-table').innerHTML = invoices.map((invoice) => { const bucket = invoiceBucket(invoice); const date = invoiceDate(invoice); const due = dueDate(invoice); const statusLabel = bucket === 'late' ? 'Late' : bucket[0].toUpperCase() + bucket.slice(1); return `<tr><td>${escapeHtml(invoice.Contact?.Name || 'Unknown client')}<div class="client-sub">${escapeHtml(invoice.InvoiceNumber || invoice.InvoiceID || 'Unnumbered')}</div></td><td>${companyLabels[invoice.companyKey] || invoice.company || '—'}</td><td>${date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td><td>${due ? due.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td><td><span class="status-pill ${bucket}">${statusLabel}</span></td><td class="align-right">${money(amount(invoice))}</td></tr>`; }).join('');
+    $('#invoice-table').innerHTML = invoices.map((invoice) => { const bucket = invoiceBucket(invoice); const date = invoiceDate(invoice); const due = dueDate(invoice); const statusLabel = bucket === 'late' ? 'Late' : bucket[0].toUpperCase() + bucket.slice(1); return `<tr><td>${escapeHtml(invoice.Contact?.Name || 'Unknown client')}<div class="client-sub">${escapeHtml(invoice.InvoiceNumber || invoice.InvoiceID || 'Unnumbered')}${categoryTag(invoice) ? ` · <span class="category-tag">${escapeHtml(categoryTag(invoice))}</span>` : ''}</div></td><td>${companyLabels[invoice.companyKey] || invoice.company || '—'}</td><td>${date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td><td>${due ? due.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td><td><span class="status-pill ${bucket}">${statusLabel}</span></td><td class="align-right">${money(amount(invoice))}</td></tr>`; }).join('');
     $('#table-empty').classList.toggle('is-hidden', invoices.length > 0);
+}
+
+function showDynamicNotice(text) {
+    const notice = $('#error-notice');
+    notice.classList.remove('is-hidden');
+    notice.classList.add('is-info');
+    notice.dataset.dynamic = '1';
+    notice.textContent = text;
+}
+
+function clearDynamicNotice() {
+    const notice = $('#error-notice');
+    if (notice.dataset.dynamic !== '1') return;
+    delete notice.dataset.dynamic;
+    notice.textContent = '';
+    notice.classList.add('is-hidden');
+    notice.classList.remove('is-info');
 }
 
 function renderOverview() {
     const invoices = filteredInvoices();
+    clearDynamicNotice();
     renderMetrics(invoices);
     renderStatusChart(invoices);
     renderMarkets(invoices);
     renderTable(invoices);
+    const noticeFree = $('#error-notice').classList.contains('is-hidden');
+    if (state.category !== 'all' && invoices.length === 0 && noticeFree && state.invoices.length) {
+        const label = categoryLabels[state.category];
+        showDynamicNotice(Number(state.categoryCounts[state.category] || 0) === 0
+            ? `No invoice line is linked to a ${label} account yet. Check that the n8n workflow sends AccountName, or add the ${label} account codes to $categoryRules in api.php.`
+            : `No ${label} client invoices match this market and reporting period.`);
+        return;
+    }
     if (state.scope !== 'all' && invoices.length === 0 && state.sourceTypeCounts[state.scope]) {
         const types = state.sourceTypeCounts[state.scope];
         const rawCount = Object.values(types).reduce((sum, count) => sum + count, 0);
         const expenseCount = types.ACCPAY || 0;
-        $('#error-notice').classList.remove('is-hidden');
-        $('#error-notice').classList.add('is-info');
-        $('#error-notice').textContent = expenseCount === rawCount
+        showDynamicNotice(expenseCount === rawCount
             ? `${companyLabels[state.scope]} returned ${rawCount} records, but they are expense invoices (ACCPAY), not client invoices (ACCREC).`
-            : `${companyLabels[state.scope]} returned ${rawCount} records, but none match the selected reporting period.`;
+            : `${companyLabels[state.scope]} returned ${rawCount} records, but none match the selected reporting period.`);
         return;
     }
 
     const unconverted = invoices.filter((invoice) => invoice.conversion && invoice.conversion.ok === false);
     if (unconverted.length && $('#error-notice').classList.contains('is-hidden')) {
-        $('#error-notice').classList.remove('is-hidden');
-        $('#error-notice').classList.add('is-info');
-        $('#error-notice').textContent = `${number(unconverted.length)} invoice${unconverted.length === 1 ? '' : 's'} without a live FX rate — shown using the fallback rate.`;
+        showDynamicNotice(`${number(unconverted.length)} invoice${unconverted.length === 1 ? '' : 's'} without a live FX rate — shown using the fallback rate.`);
     }
 }
 
 function monthSeries() {
     const bounds = periodBounds();
-    const source = state.invoices.filter((invoice) => isRevenue(invoice) && (state.scope === 'all' || invoice.companyKey === state.scope));
+    const source = state.invoices.filter((invoice) => isRevenue(invoice) && inCategory(invoice) && (state.scope === 'all' || invoice.companyKey === state.scope));
     const dates = source.map(invoiceDate).filter(Boolean).filter((date) => (!bounds.start || date >= bounds.start) && (!bounds.end || date <= bounds.end));
     if (!dates.length) return { labels: [], values: [] };
     const first = new Date(Math.min(...dates.map((date) => date.getTime()))); first.setDate(1);
@@ -203,33 +239,22 @@ $('#apply-date-filter').addEventListener('click', () => {
 });
 $('#refresh-button').addEventListener('click', loadInvoices);
 document.querySelectorAll('.scope-tab').forEach((button) => button.addEventListener('click', () => { state.scope = button.dataset.scope; document.querySelectorAll('.scope-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.scope === state.scope)); renderAll(); }));
+document.querySelectorAll('.category-tab').forEach((button) => button.addEventListener('click', () => { state.category = button.dataset.category; document.querySelectorAll('.category-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.category === state.category)); renderAll(); }));
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => { document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('is-active')); button.classList.add('is-active'); document.querySelectorAll('.view').forEach((view) => view.classList.remove('is-visible')); $(`#${button.dataset.view}-view`).classList.add('is-visible'); $('#page-title').textContent = button.dataset.title || button.textContent.trim(); }));
 loadInvoices();
-/* ==========================================================================
-   Scorecard: retention, targets and margin
-   --------------------------------------------------------------------------
-   Derived from the invoices already fetched by api.php:
-     · initial portfolio value  · churned value  · upsells / expansion
-     · active clients           · new business (MRR)  · total MRR + history
-   Everything else (targets, COGS, margin, bonus pool) is typed by hand in
-   MANUAL_INPUTS below until those numbers have a source.
-   ========================================================================== */
 
-/* Numbers that still come from the spreadsheet. Fill them in here. */
 const MANUAL_INPUTS = {
-    retentionTarget: 0.96,   // 96% — retention goal, as a fraction
+    retentionTarget: 0.96,
     newBusinessTarget: null,
     totalMrrTarget: null,
     accumulatedGap: null,
     cogs: null,
     cogsTarget: null,
-    margin: null,          // 0.45 = 45%
+    margin: null,
     marginTarget: null,
     bonusPool: null,
 };
 
-/* Placeholder values so the manual cards are not empty while reviewing the UI.
-   Set to false once MANUAL_INPUTS is filled with the real numbers. */
 const USE_DEMO_TARGETS = true;
 const DEMO_MANUAL_INPUTS = {
     retentionTarget: 0.96,
@@ -243,10 +268,8 @@ const DEMO_MANUAL_INPUTS = {
     bonusPool: 18200,
 };
 
-/* Statuses that do not represent billed revenue. */
 const EXCLUDED_STATUSES = ['VOIDED', 'DELETED', 'DRAFT'];
 
-/* How many months to plot on the "actual against plan" chart. */
 const HISTORY_MONTHS = 6;
 
 state.scorecard = null;
@@ -269,12 +292,11 @@ function setText(selector, value) { const node = $(selector); if (node) node.tex
 
 function contactKey(invoice) { return invoice.Contact?.ContactID || invoice.Contact?.Name || 'unknown-contact'; }
 function isBillable(invoice) { return isRevenue(invoice) && !EXCLUDED_STATUSES.includes(normalStatus(invoice)); }
-function scopedInvoices() { return state.invoices.filter((invoice) => isBillable(invoice) && (state.scope === 'all' || invoice.companyKey === state.scope)); }
+function scopedInvoices() { return state.invoices.filter((invoice) => isBillable(invoice) && inCategory(invoice) && (state.scope === 'all' || invoice.companyKey === state.scope)); }
 function endOfMonth(date) { return new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59); }
 function inWindow(date, window) { return Boolean(date) && date >= window.start && date <= window.end; }
 function isCalendarMonth(start, end) { return start.getDate() === 1 && start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear() && end.getDate() === endOfMonth(start).getDate(); }
 
-/* The selected period, plus the comparable window right before it. */
 function scorecardWindows(invoices) {
     const bounds = periodBounds();
     let start = bounds.start;
@@ -295,7 +317,6 @@ function scorecardWindows(invoices) {
     return { current, previous, beforePrevious: previousWindowOf(previous) };
 }
 
-/* The comparable window immediately before the given one. */
 function previousWindowOf(window) {
     if (isCalendarMonth(window.start, window.end)) {
         const start = new Date(window.start.getFullYear(), window.start.getMonth() - 1, 1);
@@ -354,7 +375,6 @@ function buildScorecard() {
     const currentByContact = totalsByContact(current);
     const previousByContact = totalsByContact(previous);
 
-    // First time each client shows up anywhere in the fetched history.
     const firstSeen = new Map();
     let datasetStart = null;
     invoices.forEach((invoice) => {
@@ -367,7 +387,6 @@ function buildScorecard() {
     });
     const historyAvailable = Boolean(datasetStart) && datasetStart < windows.current.start;
 
-    // New business: explicitly marked in Xero, or a client with no earlier invoice.
     const newContacts = new Set();
     current.forEach((invoice) => {
         if (invoice.flags && invoice.flags.firstMonth) { newContacts.add(contactKey(invoice)); meta.markedFirstMonth += 1; }
@@ -492,7 +511,6 @@ function renderRetentionSection() {
         </div>
     `).join('');
 
-    // Spreadsheet formula: initial portfolio value of this period / of the previous one.
     const retentionRate = share(data.initialPortfolio, data.initialPortfolioPrior);
     $('#retention-target').innerHTML = targetBlock({
         caption: 'Retention (existing)',
@@ -645,7 +663,6 @@ function renderScorecard() {
     renderMarginSection();
 }
 
-// Charts built inside a hidden view need a nudge once that view becomes visible.
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => {
     requestAnimationFrame(() => { [state.statusChart, state.mrrChart, state.gapChart].forEach((chart) => chart && chart.resize()); });
 }));
