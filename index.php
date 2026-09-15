@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="assets/styles.css?v=3">
+    <link rel="stylesheet" href="assets/styles.css?v=4">
 </head>
 <body>
     <div class="app-shell">
@@ -250,6 +250,10 @@
                         <p class="eyebrow">Profitability</p>
                         <h2>Cost of delivery and margin</h2>
                         <p class="section-copy">What delivery costs against plan, and what is left for the team.</p>
+                        <div class="manual-input-bar">
+                            <button type="button" class="input-button" id="open-margin-modal" aria-haspopup="dialog" aria-controls="margin-modal"><span aria-hidden="true">+</span> Enter COGS &amp; margin</button>
+                            <p class="manual-input-status" id="margin-input-status" aria-live="polite"></p>
+                        </div>
                     </div>
                     <div class="filter-stack">
                         <div class="scope-tabs" role="tablist" aria-label="Company scope">
@@ -314,7 +318,71 @@
             </section>
         </main>
     </div>
+
+    <!-- ===================== MANUAL INPUT: COGS & MARGIN ===================== -->
+    <dialog class="modal" id="margin-modal" aria-labelledby="margin-modal-title">
+        <form class="modal-form" id="margin-form" novalidate>
+            <header class="modal-header">
+                <div>
+                    <p class="eyebrow">Manual input</p>
+                    <h2 id="margin-modal-title">COGS and margin</h2>
+                </div>
+                <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+            </header>
+            <p class="modal-copy">Figures from the finance spreadsheet for one month, market and service line. Money in USD, margins in percent.</p>
+
+            <fieldset class="form-group">
+                <legend>Applies to</legend>
+                <div class="form-grid is-three">
+                    <label class="field"><span>Month</span><input type="month" name="month" id="margin-month" autofocus></label>
+                    <label class="field"><span>Market</span>
+                        <select name="scope">
+                            <option value="all">Global</option>
+                            <option value="br">Brazil</option>
+                            <option value="mx">Mexico</option>
+                            <option value="pa">Panama</option>
+                            <option value="int">International</option>
+                        </select>
+                    </label>
+                    <label class="field"><span>Service</span>
+                        <select name="category">
+                            <option value="all">All</option>
+                            <option value="seo">SEO</option>
+                            <option value="ppc">PPC</option>
+                        </select>
+                    </label>
+                </div>
+            </fieldset>
+
+            <fieldset class="form-group">
+                <legend>Cost of delivery</legend>
+                <div class="form-grid">
+                    <label class="field"><span>COGS</span><div class="input-affix"><i>$</i><input type="number" name="cogs" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div></label>
+                    <label class="field"><span>Target COGS</span><div class="input-affix"><i>$</i><input type="number" name="cogsTarget" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div></label>
+                </div>
+            </fieldset>
+
+            <fieldset class="form-group">
+                <legend>Margin and bonus</legend>
+                <div class="form-grid is-three">
+                    <label class="field"><span>Current margin</span><div class="input-affix is-suffix"><input type="number" name="margin" min="-100" max="100" step="0.1" inputmode="decimal" placeholder="0.0"><i>%</i></div></label>
+                    <label class="field"><span>Target margin</span><div class="input-affix is-suffix"><input type="number" name="marginTarget" min="0" max="100" step="0.1" inputmode="decimal" placeholder="0.0"><i>%</i></div></label>
+                    <label class="field"><span>Bonus pool</span><div class="input-affix"><i>$</i><input type="number" name="bonusPool" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div></label>
+                </div>
+            </fieldset>
+
+            <p class="form-error" id="margin-form-error" role="alert" hidden></p>
+
+            <footer class="modal-footer">
+                <small>Not stored in a database yet. Values last until the page is reloaded.</small>
+                <div class="modal-actions">
+                    <button type="button" class="button-secondary" data-close-modal>Cancel</button>
+                    <button type="submit" class="button-primary" id="margin-form-submit">Save figures</button>
+                </div>
+            </footer>
+        </form>
+    </dialog>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-    <script src="assets/app.js?v=9"></script>
+    <script src="assets/app.js?v=10"></script>
 </body>
 </html>
