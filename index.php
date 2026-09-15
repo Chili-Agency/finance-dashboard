@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="assets/styles.css?v=4">
+    <link rel="stylesheet" href="assets/styles.css?v=5">
 </head>
 <body>
     <div class="app-shell">
@@ -374,7 +374,6 @@
             <p class="form-error" id="margin-form-error" role="alert" hidden></p>
 
             <footer class="modal-footer">
-                <small>Not stored in a database yet. Values last until the page is reloaded.</small>
                 <div class="modal-actions">
                     <button type="button" class="button-secondary" data-close-modal>Cancel</button>
                     <button type="submit" class="button-primary" id="margin-form-submit">Save figures</button>
@@ -383,6 +382,6 @@
         </form>
     </dialog>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-    <script src="assets/app.js?v=10"></script>
+    <script src="assets/app.js?v=12"></script>
 </body>
 </html>

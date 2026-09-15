@@ -4,28 +4,38 @@ declare(strict_types=1);
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
+// Webhook URLs come from .env (see config.php).
+try {
+    $config = require __DIR__ . '/config.php';
+} catch (Throwable $error) {
+    error_log('[api] ' . $error->getMessage());
+    http_response_code(500);
+    echo json_encode(['invoices' => [], 'errors' => ['Server configuration error. Check the .env file.']]);
+    exit;
+}
+
 $companies = [
     'br' => [
         'label' => 'Brazil',
-        'url' => 'https://chilidigital.app.n8n.cloud/webhook/fetch-invoices-br',
+        'url' => $config['n8n']['br'],
         'currency' => 'BRL',
         'usdRate' => 0.18,
     ],
     'int' => [
         'label' => 'International',
-        'url' => 'https://chilidigital.app.n8n.cloud/webhook/fetch-invoices-int',
+        'url' => $config['n8n']['int'],
         'currency' => 'USD',
         'usdRate' => 1,
     ],
     'pa' => [
         'label' => 'Panama',
-        'url' => 'https://chilidigital.app.n8n.cloud/webhook/fetch-invoices-pa',
+        'url' => $config['n8n']['pa'],
         'currency' => 'USD',
         'usdRate' => 1,
     ],
     'mx' => [
         'label' => 'Mexico',
-        'url' => 'https://chilidigital.app.n8n.cloud/webhook/fetch-invoices-mx',
+        'url' => $config['n8n']['mx'],
         'currency' => 'MXN',
         'usdRate' => 0.055,
     ],

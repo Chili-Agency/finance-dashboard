@@ -113,6 +113,7 @@
 .manual-input-status{margin:0;font-size:10px;line-height:1.5;color:var(--muted);max-width:52ch}
 .manual-input-status[data-tone="manual"]{color:var(--green);font-weight:600}
 .manual-input-status[data-tone="sample"]{color:#a06f18}
+.manual-input-status[data-tone="error"]{color:var(--red-deep);font-weight:600}
 
 .modal{border:0;padding:0;width:min(600px,calc(100vw - 32px));max-height:calc(100vh - 48px);background:var(--panel);color:var(--ink);box-shadow:0 24px 60px rgba(32,37,34,.22);border-top:3px solid var(--red)}
 .modal::backdrop{background:rgba(32,37,34,.55)}
@@ -144,8 +145,7 @@
 
 .form-error{margin:16px 0 0;background:#fae2dc;border-left:3px solid var(--red);padding:10px 12px;font-size:11px;color:#823020}
 .form-error[hidden]{display:none}
-.modal-footer{display:flex;justify-content:space-between;align-items:center;gap:16px;border-top:1px solid var(--line);margin-top:22px;padding-top:18px}
-.modal-footer small{color:var(--muted);font-size:10px;line-height:1.5;max-width:30ch}
+.modal-footer{display:flex;justify-content:flex-end;align-items:center;gap:16px;border-top:1px solid var(--line);margin-top:22px;padding-top:18px}
 .modal-actions{display:flex;gap:8px;flex-shrink:0}
 .button-primary,.button-secondary{height:39px;padding:0 16px;font:600 11px Manrope;cursor:pointer}
 .button-primary{border:1px solid var(--red);background:var(--red);color:#fff}
@@ -159,6 +159,5 @@
   .modal-form{padding:20px 18px}
   .form-grid,.form-grid.is-three{grid-template-columns:1fr}
   .modal-footer{flex-direction:column;align-items:stretch}
-  .modal-footer small{max-width:none}
   .modal-actions .button-primary{flex:1}
 }
