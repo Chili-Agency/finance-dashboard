@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+
+error_log
+*.log
+
+*.sql.gz
+*.bak
+
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

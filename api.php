@@ -4,33 +4,48 @@ declare(strict_types=1);
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
+// Webhook URLs come from .env (see config.php).
+try {
+    $config = require __DIR__ . '/config.php';
+} catch (Throwable $error) {
+    error_log('[api] ' . $error->getMessage());
+    http_response_code(500);
+    echo json_encode(['invoices' => [], 'errors' => ['Server configuration error. Check the .env file.']]);
+    exit;
+}
+
 $companies = [
     'br' => [
         'label' => 'Brazil',
-        'url' => 'https://chilidigital.app.n8n.cloud/webhook/fetch-invoices-br',
+        'url' => $config['n8n']['br'],
         'currency' => 'BRL',
         'usdRate' => 0.18,
     ],
     'int' => [
         'label' => 'International',
-        'url' => 'https://chilidigital.app.n8n.cloud/webhook/fetch-invoices-int',
+        'url' => $config['n8n']['int'],
         'currency' => 'USD',
         'usdRate' => 1,
     ],
     'pa' => [
         'label' => 'Panama',
-        'url' => 'https://chilidigital.app.n8n.cloud/webhook/fetch-invoices-pa',
+        'url' => $config['n8n']['pa'],
         'currency' => 'USD',
         'usdRate' => 1,
     ],
     'mx' => [
         'label' => 'Mexico',
-        'url' => 'https://chilidigital.app.n8n.cloud/webhook/fetch-invoices-mx',
+        'url' => $config['n8n']['mx'],
         'currency' => 'MXN',
         'usdRate' => 0.055,
     ],
 ];
 
+/*
+ * Markers written by the team inside Xero. The invoice text we look at is
+ * Reference + line item descriptions + item/account codes.
+ * Add or adjust patterns here — this is the single place that classifies invoices.
+ */
 $markerPatterns = [
     'firstMonth' => [
         '/first\s*month/i',
@@ -48,6 +63,15 @@ $markerPatterns = [
     ],
 ];
 
+/*
+ * Service line (SEO / PPC). In Xero the account shows as "201 - SEO - Recurring":
+ * the code (201) comes on every line item; the name comes from the chart of
+ * accounts and is attached to each line as AccountName by the n8n workflow.
+ * Each line is checked in this order:
+ *   1. AccountName patterns  2. AccountCode list  3. Description text (only
+ *   when the line has no AccountName, e.g. before the workflow was updated).
+ * Lines that match nothing count as "other" and only show under "All".
+ */
 $categoryRules = [
     'seo' => [
         'accountName' => ['/\bSEO\b/i'],
@@ -158,6 +182,10 @@ echo json_encode([
     'fetchedAt' => gmdate('c'),
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
+/**
+ * Keeps only the fields the dashboard reads, plus the classification flags.
+ * Xero payloads with line items are heavy; this keeps the browser payload small.
+ */
 function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules): array
 {
     $descriptions = [];
@@ -251,6 +279,9 @@ function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules
     ];
 }
 
+/**
+ * Returns the service line of one invoice line ("seo", "ppc"…) or null.
+ */
 function classifyLine(array $line, array $categoryRules): ?string
 {
     $name = trim((string) ($line['AccountName'] ?? ''));
@@ -288,6 +319,11 @@ function classifyLine(array $line, array $categoryRules): ?string
     return null;
 }
 
+/**
+ * Share of the invoice value that belongs to each service line, based on LineAmount.
+ * A mixed invoice (SEO + PPC lines) is split proportionally, so the dashboard
+ * shows only the SEO part or only the PPC part of it.
+ */
 function categoryShares(array $lineWeights, array $categoryKeys): array
 {
     $shares = array_fill_keys($categoryKeys, 0.0);
@@ -297,6 +333,7 @@ function categoryShares(array $lineWeights, array $categoryKeys): array
         return $shares;
     }
 
+    // Weighting strategies, in order: signed amounts, absolute amounts, line count.
     $strategies = [
         static fn (array $line): float => $line['amount'],
         static fn (array $line): float => abs($line['amount']),

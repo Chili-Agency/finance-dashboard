@@ -30,6 +30,8 @@ function startOfToday() {
 
 function invoiceDate(invoice) { return parseDate(invoice.DateString || invoice.Date); }
 function dueDate(invoice) { return parseDate(invoice.DueDateString || invoice.DueDate); }
+/* Share of the invoice that belongs to the selected service line (1 when "All").
+   Mixed SEO + PPC invoices are split by api.php from their line amounts. */
 function categoryShare(invoice, category = state.category) {
     if (category === 'all') return 1;
     const value = Number(invoice.categoryShares?.[category]);
@@ -95,7 +97,10 @@ async function loadInvoices() {
     setSyncStatus('Fetching data', 'Contacting n8n endpoints', true);
     try {
         const response = await fetch('api.php?source=all', { cache: 'no-store' });
-        if (!response.ok) throw new Error(`Dashboard proxy returned HTTP ${response.status}`);
+        if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(Array.isArray(body.errors) && body.errors.length ? body.errors.join(' · ') : `Dashboard proxy returned HTTP ${response.status}`);
+        }
         const data = await response.json();
         state.invoices = Array.isArray(data.invoices) ? data.invoices : [];
         state.sourceTypeCounts = data.sourceTypeCounts || {};
@@ -242,20 +247,32 @@ document.querySelectorAll('.scope-tab').forEach((button) => button.addEventListe
 document.querySelectorAll('.category-tab').forEach((button) => button.addEventListener('click', () => { state.category = button.dataset.category; document.querySelectorAll('.category-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.category === state.category)); renderAll(); }));
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => { document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('is-active')); button.classList.add('is-active'); document.querySelectorAll('.view').forEach((view) => view.classList.remove('is-visible')); $(`#${button.dataset.view}-view`).classList.add('is-visible'); $('#page-title').textContent = button.dataset.title || button.textContent.trim(); }));
 loadInvoices();
+/* ==========================================================================
+   Scorecard: retention, targets and margin
+   --------------------------------------------------------------------------
+   Derived from the invoices already fetched by api.php:
+     · initial portfolio value  · churned value  · upsells / expansion
+     · active clients           · new business (MRR)  · total MRR + history
+   Everything else (targets, COGS, margin, bonus pool) is typed by hand in
+   MANUAL_INPUTS below until those numbers have a source.
+   ========================================================================== */
 
+/* Numbers that still come from the spreadsheet. Fill them in here. */
 const MANUAL_INPUTS = {
-    retentionTarget: 0.96,
+    retentionTarget: 0.96,   // 96% — retention goal, as a fraction
     newBusinessTarget: null,
     totalMrrTarget: null,
     accumulatedGap: null,
     cogs: null,
     cogsTarget: null,
-    margin: null,
+    margin: null,          // 0.45 = 45%
     marginTarget: null,
     bonusPool: null,
 };
 
-const USE_DEMO_TARGETS = true;
+/* Placeholder values so the manual cards are not empty while reviewing the UI.
+   Set to false once MANUAL_INPUTS is filled with the real numbers. */
+const USE_DEMO_TARGETS = false;
 const DEMO_MANUAL_INPUTS = {
     retentionTarget: 0.96,
     newBusinessTarget: 75000,
@@ -268,8 +285,10 @@ const DEMO_MANUAL_INPUTS = {
     bonusPool: 18200,
 };
 
+/* Statuses that do not represent billed revenue. */
 const EXCLUDED_STATUSES = ['VOIDED', 'DELETED', 'DRAFT'];
 
+/* How many months to plot on the "actual against plan" chart. */
 const HISTORY_MONTHS = 6;
 
 state.scorecard = null;
@@ -297,6 +316,7 @@ function endOfMonth(date) { return new Date(date.getFullYear(), date.getMonth() 
 function inWindow(date, window) { return Boolean(date) && date >= window.start && date <= window.end; }
 function isCalendarMonth(start, end) { return start.getDate() === 1 && start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear() && end.getDate() === endOfMonth(start).getDate(); }
 
+/* The selected period, plus the comparable window right before it. */
 function scorecardWindows(invoices) {
     const bounds = periodBounds();
     let start = bounds.start;
@@ -317,6 +337,7 @@ function scorecardWindows(invoices) {
     return { current, previous, beforePrevious: previousWindowOf(previous) };
 }
 
+/* The comparable window immediately before the given one. */
 function previousWindowOf(window) {
     if (isCalendarMonth(window.start, window.end)) {
         const start = new Date(window.start.getFullYear(), window.start.getMonth() - 1, 1);
@@ -363,6 +384,16 @@ function buildScorecard() {
     const invoices = scopedInvoices();
     const windows = scorecardWindows(invoices);
     state.scorecardMeta = meta;
+
+    // Figures typed in the "Enter COGS & margin" modal win over MANUAL_INPUTS / demo values.
+    const entry = marginInputFor(windows);
+    meta.marginEntry = entry;
+    meta.marginMonth = windows && isCalendarMonth(windows.current.start, windows.current.end) ? windows.current.start : null;
+    if (entry) {
+        scorecard.cogs = { actual: entry.cogs, target: entry.cogsTarget };
+        scorecard.margin = { current: entry.margin, target: entry.marginTarget, bonusPool: entry.bonusPool };
+    }
+
     if (!windows) { state.scorecard = scorecard; return; }
 
     meta.currentLabel = windows.current.label;
@@ -375,6 +406,7 @@ function buildScorecard() {
     const currentByContact = totalsByContact(current);
     const previousByContact = totalsByContact(previous);
 
+    // First time each client shows up anywhere in the fetched history.
     const firstSeen = new Map();
     let datasetStart = null;
     invoices.forEach((invoice) => {
@@ -387,6 +419,7 @@ function buildScorecard() {
     });
     const historyAvailable = Boolean(datasetStart) && datasetStart < windows.current.start;
 
+    // New business: explicitly marked in Xero, or a client with no earlier invoice.
     const newContacts = new Set();
     current.forEach((invoice) => {
         if (invoice.flags && invoice.flags.firstMonth) { newContacts.add(contactKey(invoice)); meta.markedFirstMonth += 1; }
@@ -511,6 +544,7 @@ function renderRetentionSection() {
         </div>
     `).join('');
 
+    // Spreadsheet formula: initial portfolio value of this period / of the previous one.
     const retentionRate = share(data.initialPortfolio, data.initialPortfolioPrior);
     $('#retention-target').innerHTML = targetBlock({
         caption: 'Retention (existing)',
@@ -616,6 +650,8 @@ function renderMarginSection() {
     setText('#bonus-pool', moneyOr(margin.bonusPool));
     setText('#bonus-gap', signedPoints(gap));
     setText('#bonus-status', hasValue(gap) ? (gap >= 0 ? 'Unlocked' : 'Below target') : DASH);
+    renderMarginInputStatus();
+
     setText('#bonus-note', hasValue(gap) && gap < 0
         ? `Margin is ${Math.abs(gap * 100).toFixed(1)} points short of target. Close the gap to release the pool.`
         : hasValue(gap) ? 'Margin is at or above target for the period.' : 'Typed by hand until COGS has a source.');
@@ -663,8 +699,219 @@ function renderScorecard() {
     renderMarginSection();
 }
 
+// Charts built inside a hidden view need a nudge once that view becomes visible.
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => {
     requestAnimationFrame(() => { [state.statusChart, state.mrrChart, state.gapChart].forEach((chart) => chart && chart.resize()); });
 }));
 
+/* ==========================================================================
+   Manual input: COGS & margin
+   --------------------------------------------------------------------------
+   One entry per month + market + service line, stored in MySQL (table
+   margin_inputs) through margin-inputs.php. state.marginInputs is the local
+   copy, loaded on start-up and updated after each save.
+   ========================================================================== */
+
+state.marginInputs = {};
+state.marginInputsStatus = 'loading'; // loading | ready | error
+const MARGIN_ENDPOINT = 'margin-inputs.php';
+
+const MARGIN_FIELDS = {
+    cogs: { kind: 'money' },
+    cogsTarget: { kind: 'money' },
+    margin: { kind: 'percent', min: -100, max: 100 },
+    marginTarget: { kind: 'percent', min: 0, max: 100 },
+    bonusPool: { kind: 'money' },
+};
+
+const marginModal = $('#margin-modal');
+const marginForm = $('#margin-form');
+
+const monthKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+const marginInputKey = (month, scope, category) => `${month}|${scope}|${category}`;
+const monthFromKey = (key) => { const [year, month] = key.split('-').map(Number); return new Date(year, month - 1, 1); };
+
+/* Entry that matches the period currently on screen (only whole calendar months). */
+function marginInputFor(windows) {
+    if (!windows || !isCalendarMonth(windows.current.start, windows.current.end)) return null;
+    return state.marginInputs[marginInputKey(monthKey(windows.current.start), state.scope, state.category)] || null;
+}
+
+async function marginRequest(options = {}) {
+    const response = await fetch(MARGIN_ENDPOINT, { cache: 'no-store', ...options });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `The server answered HTTP ${response.status}.`);
+    return body;
+}
+
+function storeMarginEntry(entry) {
+    state.marginInputs[marginInputKey(entry.month, entry.scope, entry.category)] = entry;
+}
+
+/* Loads every saved entry once, on start-up. */
+async function loadMarginInputs() {
+    state.marginInputsStatus = 'loading';
+    renderMarginInputStatus();
+    try {
+        const { entries = [] } = await marginRequest();
+        state.marginInputs = {};
+        entries.forEach(storeMarginEntry);
+        state.marginInputsStatus = 'ready';
+    } catch (error) {
+        state.marginInputsStatus = 'error';
+        state.marginInputsError = error.message;
+    }
+    renderScorecard();
+}
+
+/* Sends one entry to the database and keeps the stored version. */
+async function saveMarginInput(entry) {
+    const { entry: saved } = await marginRequest({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry),
+    });
+    storeMarginEntry(saved);
+    return saved;
+}
+
+function renderMarginInputStatus() {
+    const meta = state.scorecardMeta || {};
+    const node = $('#margin-input-status');
+    if (!node) return;
+    if (state.marginInputsStatus === 'loading') { node.textContent = 'Loading saved figures…'; node.dataset.tone = 'muted'; return; }
+    if (state.marginInputsStatus === 'error') { node.textContent = `Could not load saved figures: ${state.marginInputsError}`; node.dataset.tone = 'error'; return; }
+    const context = `${companyLabels[state.scope] || 'Global'}, ${state.category === 'all' ? 'all services' : categoryLabels[state.category]}`;
+    if (meta.marginEntry) {
+        const saved = new Date(meta.marginEntry.enteredAt).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+        node.textContent = `Figures saved for ${monthLabel(monthFromKey(meta.marginEntry.month))} (${context}), last updated ${saved}.`;
+        node.dataset.tone = 'manual';
+    } else if (!meta.marginMonth) {
+        node.textContent = 'Pick a single month in the reporting period to see figures entered by hand.';
+        node.dataset.tone = 'muted';
+    } else {
+        node.textContent = `Nothing entered for ${monthLabel(meta.marginMonth)} (${context}) yet.${USE_DEMO_TARGETS ? ' Showing sample figures.' : ''}`;
+        node.dataset.tone = USE_DEMO_TARGETS ? 'sample' : 'muted';
+    }
+}
+
+function fillMarginValues(entry) {
+    Object.entries(MARGIN_FIELDS).forEach(([name, field]) => {
+        const value = entry ? entry[name] : null;
+        marginForm.elements[name].value = hasValue(value)
+            ? (field.kind === 'percent' ? Number((Number(value) * 100).toFixed(2)) : Number(value))
+            : '';
+    });
+}
+
+function loadMarginEntryIntoForm() {
+    const { month, scope, category } = marginForm.elements;
+    const entry = month.value ? state.marginInputs[marginInputKey(month.value, scope.value, category.value)] : null;
+    if (entry) fillMarginValues(entry);
+    $('#margin-form-submit').textContent = entry ? 'Update figures' : 'Save figures';
+}
+
+function showMarginError(message, field) {
+    const node = $('#margin-form-error');
+    marginForm.querySelectorAll('[aria-invalid]').forEach((input) => input.removeAttribute('aria-invalid'));
+    node.hidden = !message;
+    node.textContent = message || '';
+    if (field) { field.setAttribute('aria-invalid', 'true'); field.focus(); }
+}
+
+function openMarginModal() {
+    const meta = state.scorecardMeta || {};
+    marginForm.reset();
+    showMarginError('');
+    marginForm.elements.month.value = monthKey(meta.marginMonth || new Date());
+    marginForm.elements.scope.value = state.scope;
+    marginForm.elements.category.value = state.category;
+    fillMarginValues(null);
+    loadMarginEntryIntoForm();
+    marginModal.showModal();
+}
+
+function closeMarginModal() { marginModal.close(); $('#open-margin-modal').focus(); }
+
+/* Reads and validates the form. Returns the entry, or null after showing an error. */
+function readMarginForm() {
+    const { elements } = marginForm;
+    if (!/^\d{4}-\d{2}$/.test(elements.month.value)) { showMarginError('Choose the month these figures belong to.', elements.month); return null; }
+
+    const entry = { month: elements.month.value, scope: elements.scope.value, category: elements.category.value };
+    for (const [name, field] of Object.entries(MARGIN_FIELDS)) {
+        const input = elements[name];
+        const label = input.closest('.field').querySelector('span').textContent;
+        if (input.value.trim() === '') {
+            if (input.validity.badInput) { showMarginError(`${label} is not a valid number.`, input); return null; }
+            entry[name] = null;
+            continue;
+        }
+        const value = Number(input.value);
+        if (!Number.isFinite(value)) { showMarginError(`${label} is not a valid number.`, input); return null; }
+        if (field.kind === 'money' && value < 0) { showMarginError(`${label} cannot be negative.`, input); return null; }
+        if (field.kind === 'percent' && (value < field.min || value > field.max)) { showMarginError(`${label} must be between ${field.min}% and ${field.max}%.`, input); return null; }
+        entry[name] = field.kind === 'percent' ? value / 100 : value;
+    }
+
+    if (Object.keys(MARGIN_FIELDS).every((name) => entry[name] === null)) {
+        showMarginError('Fill in at least one figure.', elements.cogs);
+        return null;
+    }
+    entry.enteredAt = new Date().toISOString();
+    return entry;
+}
+
+/* Moves the dashboard to the month, market and service of the entry just saved. */
+function showMarginEntry(entry) {
+    state.scope = entry.scope;
+    state.category = entry.category;
+    document.querySelectorAll('.scope-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.scope === state.scope));
+    document.querySelectorAll('.category-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.category === state.category));
+
+    const start = monthFromKey(entry.month);
+    const today = new Date();
+    const offset = (start.getFullYear() - today.getFullYear()) * 12 + start.getMonth() - today.getMonth();
+    const named = { 0: 'current', '-1': 'previous', '-2': 'two-previous' }[offset];
+    if (named) {
+        state.period = named;
+    } else {
+        state.period = 'custom';
+        state.customStart = `${entry.month}-01`;
+        state.customEnd = `${entry.month}-${String(endOfMonth(start).getDate()).padStart(2, '0')}`;
+        $('#date-from').value = state.customStart;
+        $('#date-to').value = state.customEnd;
+    }
+    $('#period-select').value = state.period;
+    $('#date-range').hidden = state.period !== 'custom';
+    renderAll();
+}
+
+$('#open-margin-modal').addEventListener('click', openMarginModal);
+marginModal.querySelectorAll('[data-close-modal]').forEach((button) => button.addEventListener('click', closeMarginModal));
+marginModal.addEventListener('click', (event) => { if (event.target === marginModal) closeMarginModal(); });
+['month', 'scope', 'category'].forEach((name) => marginForm.elements[name].addEventListener('change', loadMarginEntryIntoForm));
+marginForm.addEventListener('input', () => { if (!$('#margin-form-error').hidden) showMarginError(''); });
+
+marginForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const entry = readMarginForm();
+    if (!entry) return;
+    const submit = $('#margin-form-submit');
+    const label = submit.textContent;
+    submit.disabled = true;
+    submit.textContent = 'Saving…';
+    try {
+        const saved = await saveMarginInput(entry);
+        closeMarginModal();
+        showMarginEntry(saved);
+    } catch (error) {
+        showMarginError(error.message || 'Could not save the figures.');
+    } finally {
+        submit.disabled = false;
+        submit.textContent = label;
+    }
+});
+
 renderScorecard();
+loadMarginInputs();
