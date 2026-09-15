@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="assets/styles.css?v=2">
+    <link rel="stylesheet" href="assets/styles.css?v=3">
 </head>
 <body>
     <div class="app-shell">
@@ -67,12 +67,22 @@
             <section class="view is-visible" id="overview-view" aria-labelledby="page-title">
                 <div class="section-intro">
                     <div><p class="eyebrow">Invoice pulse</p><h2>What is happening now?</h2></div>
-                    <div class="scope-tabs" role="tablist" aria-label="Company scope">
-                        <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
-                        <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
-                        <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
-                        <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
-                        <button class="scope-tab" data-scope="int" role="tab">International</button>
+                    <div class="filter-stack">
+                        <div class="scope-tabs" role="tablist" aria-label="Company scope">
+                            <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
+                            <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
+                            <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
+                            <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
+                            <button class="scope-tab" data-scope="int" role="tab">International</button>
+                        </div>
+                        <div class="category-filter">
+                            <span>Service</span>
+                            <div class="category-tabs" role="tablist" aria-label="Service line">
+                                <button class="category-tab is-active" data-category="all" role="tab">All</button>
+                                <button class="category-tab" data-category="seo" role="tab">SEO</button>
+                                <button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -100,12 +110,22 @@
                         <h2>Retention of existing clients</h2>
                         <p class="section-copy">How much of the base we started the period with is still billing at the end of it.</p>
                     </div>
-                    <div class="scope-tabs" role="tablist" aria-label="Company scope">
-                        <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
-                        <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
-                        <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
-                        <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
-                        <button class="scope-tab" data-scope="int" role="tab">International</button>
+                    <div class="filter-stack">
+                        <div class="scope-tabs" role="tablist" aria-label="Company scope">
+                            <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
+                            <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
+                            <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
+                            <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
+                            <button class="scope-tab" data-scope="int" role="tab">International</button>
+                        </div>
+                        <div class="category-filter">
+                            <span>Service</span>
+                            <div class="category-tabs" role="tablist" aria-label="Service line">
+                                <button class="category-tab is-active" data-category="all" role="tab">All</button>
+                                <button class="category-tab" data-category="seo" role="tab">SEO</button>
+                                <button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -158,12 +178,22 @@
                         <h2>New business and total MRR</h2>
                         <p class="section-copy">Actuals against plan for the selected period, plus the gap carried from earlier months.</p>
                     </div>
-                    <div class="scope-tabs" role="tablist" aria-label="Company scope">
-                        <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
-                        <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
-                        <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
-                        <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
-                        <button class="scope-tab" data-scope="int" role="tab">International</button>
+                    <div class="filter-stack">
+                        <div class="scope-tabs" role="tablist" aria-label="Company scope">
+                            <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
+                            <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
+                            <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
+                            <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
+                            <button class="scope-tab" data-scope="int" role="tab">International</button>
+                        </div>
+                        <div class="category-filter">
+                            <span>Service</span>
+                            <div class="category-tabs" role="tablist" aria-label="Service line">
+                                <button class="category-tab is-active" data-category="all" role="tab">All</button>
+                                <button class="category-tab" data-category="seo" role="tab">SEO</button>
+                                <button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -221,12 +251,22 @@
                         <h2>Cost of delivery and margin</h2>
                         <p class="section-copy">What delivery costs against plan, and what is left for the team.</p>
                     </div>
-                    <div class="scope-tabs" role="tablist" aria-label="Company scope">
-                        <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
-                        <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
-                        <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
-                        <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
-                        <button class="scope-tab" data-scope="int" role="tab">International</button>
+                    <div class="filter-stack">
+                        <div class="scope-tabs" role="tablist" aria-label="Company scope">
+                            <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
+                            <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
+                            <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
+                            <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
+                            <button class="scope-tab" data-scope="int" role="tab">International</button>
+                        </div>
+                        <div class="category-filter">
+                            <span>Service</span>
+                            <div class="category-tabs" role="tablist" aria-label="Service line">
+                                <button class="category-tab is-active" data-category="all" role="tab">All</button>
+                                <button class="category-tab" data-category="seo" role="tab">SEO</button>
+                                <button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -275,6 +315,6 @@
         </main>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-    <script src="assets/app.js?v=8"></script>
+    <script src="assets/app.js?v=9"></script>
 </body>
 </html>

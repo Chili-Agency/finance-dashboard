@@ -31,11 +31,6 @@ $companies = [
     ],
 ];
 
-/*
- * Markers written by the team inside Xero. The invoice text we look at is
- * Reference + line item descriptions + item/account codes.
- * Add or adjust patterns here — this is the single place that classifies invoices.
- */
 $markerPatterns = [
     'firstMonth' => [
         '/first\s*month/i',
@@ -53,6 +48,19 @@ $markerPatterns = [
     ],
 ];
 
+$categoryRules = [
+    'seo' => [
+        'accountName' => ['/\bSEO\b/i'],
+        'accountCodes' => ['201'],
+        'text' => ['/\bSEO\b/i'],
+    ],
+    'ppc' => [
+        'accountName' => ['/\bPPC\b/i'],
+        'accountCodes' => [],
+        'text' => ['/\bPPC\b/i'],
+    ],
+];
+
 $source = $_GET['source'] ?? 'all';
 $requested = $source === 'all' ? array_keys($companies) : [$source];
 $invoices = [];
@@ -60,6 +68,7 @@ $errors = [];
 $sourceCounts = [];
 $sourceTypeCounts = [];
 $diagnostics = [];
+$categoryCounts = ['seo' => 0, 'ppc' => 0, 'other' => 0];
 
 foreach ($requested as $key) {
     if (!isset($companies[$key])) {
@@ -79,7 +88,7 @@ foreach ($requested as $key) {
 
     $before = count($invoices);
     $sourceTypeCounts[$key] = [];
-    $diagnostics[$key] = ['withLineItems' => 0, 'withReference' => 0, 'firstMonthMarked' => 0, 'upsellMarked' => 0];
+    $diagnostics[$key] = ['withLineItems' => 0, 'withReference' => 0, 'firstMonthMarked' => 0, 'upsellMarked' => 0, 'withAccountName' => 0, 'seo' => 0, 'ppc' => 0, 'unclassified' => 0];
 
     foreach ($response['data'] as $invoice) {
         if (!is_array($invoice) || !empty($invoice['_empty'])) {
@@ -96,7 +105,7 @@ foreach ($requested as $key) {
             $diagnostics[$key]['withReference']++;
         }
 
-        $slim = slimInvoice($invoice, $markerPatterns);
+        $slim = slimInvoice($invoice, $markerPatterns, $categoryRules);
 
         $slim['companyKey'] = $key;
         $slim['company'] = $company['label'];
@@ -115,6 +124,19 @@ foreach ($requested as $key) {
         if (!empty($slim['flags']['upsell'])) {
             $diagnostics[$key]['upsellMarked']++;
         }
+        if (!empty($slim['hasAccountNames'])) {
+            $diagnostics[$key]['withAccountName']++;
+        }
+        foreach (['seo', 'ppc'] as $category) {
+            if (in_array($category, $slim['categories'], true)) {
+                $diagnostics[$key][$category]++;
+                $categoryCounts[$category]++;
+            }
+        }
+        if ($slim['categories'] === []) {
+            $diagnostics[$key]['unclassified']++;
+            $categoryCounts['other']++;
+        }
 
         $invoices[] = $slim;
     }
@@ -132,16 +154,16 @@ echo json_encode([
     'sourceCounts' => $sourceCounts,
     'sourceTypeCounts' => $sourceTypeCounts,
     'diagnostics' => $diagnostics,
+    'categoryCounts' => $categoryCounts,
     'fetchedAt' => gmdate('c'),
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
-/**
- * Keeps only the fields the dashboard reads, plus the classification flags.
- * Xero payloads with line items are heavy; this keeps the browser payload small.
- */
-function slimInvoice(array $invoice, array $markerPatterns): array
+function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules): array
 {
     $descriptions = [];
+    $categoryKeys = array_merge(array_keys($categoryRules), ['other']);
+    $lineWeights = [];
+    $hasAccountNames = false;
     $itemCodes = [];
     $accountCodes = [];
 
@@ -158,6 +180,13 @@ function slimInvoice(array $invoice, array $markerPatterns): array
         if (!empty($line['AccountCode'])) {
             $accountCodes[] = (string) $line['AccountCode'];
         }
+        if (trim((string) ($line['AccountName'] ?? '')) !== '') {
+            $hasAccountNames = true;
+        }
+        $lineWeights[] = [
+            'category' => classifyLine($line, $categoryRules) ?? 'other',
+            'amount' => (float) ($line['LineAmount'] ?? 0),
+        ];
         foreach ((array) ($line['Tracking'] ?? []) as $tracking) {
             if (is_array($tracking) && !empty($tracking['Option'])) {
                 $descriptions[] = (string) $tracking['Option'];
@@ -179,6 +208,14 @@ function slimInvoice(array $invoice, array $markerPatterns): array
                 $flags[$flag] = true;
                 break;
             }
+        }
+    }
+
+    $categoryShares = categoryShares($lineWeights, $categoryKeys);
+    $categories = [];
+    foreach (array_keys($categoryRules) as $category) {
+        if (($categoryShares[$category] ?? 0) > 0) {
+            $categories[] = $category;
         }
     }
 
@@ -208,7 +245,79 @@ function slimInvoice(array $invoice, array $markerPatterns): array
         'itemCodes' => array_values(array_unique($itemCodes)),
         'accountCodes' => array_values(array_unique($accountCodes)),
         'markerText' => mb_substr($haystack, 0, 240),
+        'categories' => $categories,
+        'categoryShares' => $categoryShares,
+        'hasAccountNames' => $hasAccountNames,
     ];
+}
+
+function classifyLine(array $line, array $categoryRules): ?string
+{
+    $name = trim((string) ($line['AccountName'] ?? ''));
+    $code = trim((string) ($line['AccountCode'] ?? ''));
+
+    if ($name !== '') {
+        foreach ($categoryRules as $category => $rule) {
+            foreach ($rule['accountName'] ?? [] as $pattern) {
+                if (preg_match($pattern, $name) === 1) {
+                    return $category;
+                }
+            }
+        }
+    }
+
+    if ($code !== '') {
+        foreach ($categoryRules as $category => $rule) {
+            if (in_array($code, $rule['accountCodes'] ?? [], true)) {
+                return $category;
+            }
+        }
+    }
+
+    if ($name === '') {
+        $text = (string) ($line['Description'] ?? '');
+        foreach ($categoryRules as $category => $rule) {
+            foreach ($rule['text'] ?? [] as $pattern) {
+                if ($text !== '' && preg_match($pattern, $text) === 1) {
+                    return $category;
+                }
+            }
+        }
+    }
+
+    return null;
+}
+
+function categoryShares(array $lineWeights, array $categoryKeys): array
+{
+    $shares = array_fill_keys($categoryKeys, 0.0);
+
+    if ($lineWeights === []) {
+        $shares['other'] = 1.0;
+        return $shares;
+    }
+
+    $strategies = [
+        static fn (array $line): float => $line['amount'],
+        static fn (array $line): float => abs($line['amount']),
+        static fn (array $line): float => 1.0,
+    ];
+
+    foreach ($strategies as $weight) {
+        $sums = array_fill_keys($categoryKeys, 0.0);
+        foreach ($lineWeights as $line) {
+            $sums[$line['category']] += $weight($line);
+        }
+        $total = array_sum($sums);
+        if (abs($total) >= 0.00001) {
+            foreach ($sums as $category => $sum) {
+                $shares[$category] = round($sum / $total, 6);
+            }
+            return $shares;
+        }
+    }
+
+    return $shares;
 }
 
 function fetchJson(string $url): array
