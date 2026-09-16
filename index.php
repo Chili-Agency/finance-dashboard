@@ -36,9 +36,12 @@ function asset(string $path): string
                 <button class="nav-item" data-view="margin" data-title="Margin &amp; COGS"><span class="nav-icon">◇</span>Margin &amp; COGS</button>
             </nav>
             <div class="sidebar-bottom">
-                <div class="sync-card">
-                    <span class="sync-dot"></span>
-                    <div><strong id="sync-status">Connecting</strong><small id="sync-time">Waiting for data</small></div>
+                <div class="sync-card" id="sync-card" data-state="loading" role="status" aria-live="polite">
+                    <div class="sync-head">
+                        <span class="sync-dot" aria-hidden="true"></span>
+                        <div><strong id="sync-status">Loading data…</strong><small id="sync-time">Contacting the n8n workflows</small></div>
+                    </div>
+                    <ul class="sync-sources" id="sync-sources"></ul>
                 </div>
                 <p class="sidebar-note">Four entities · three markets<br>USD reporting view</p>
             </div>
@@ -99,6 +102,7 @@ function asset(string $path): string
                     <article class="metric-card metric-paid"><div class="metric-heading"><span class="metric-label">Paid invoices</span><span class="metric-badge">01</span></div><strong id="paid-total">$0</strong><p><span id="paid-count">0 invoices</span> collected in period</p></article>
                     <article class="metric-card metric-late"><div class="metric-heading"><span class="metric-label">Late invoices</span><span class="metric-badge">02</span></div><strong id="late-total">$0</strong><p><span id="late-count">0 invoices</span> past their due date</p></article>
                     <article class="metric-card metric-open"><div class="metric-heading"><span class="metric-label">Open invoices</span><span class="metric-badge">03</span></div><strong id="open-total">$0</strong><p><span id="open-count">0 invoices</span> still outstanding</p></article>
+                    <article class="metric-card metric-total"><div class="metric-heading"><span class="metric-label">Total invoiced</span><span class="metric-badge">04</span></div><strong id="all-total">$0</strong><p><span id="all-count">0 invoices</span> <span class="metric-muted" id="all-note">issued in period</span></p></article>
                 </div>
 
                 <div class="dashboard-grid">
@@ -109,9 +113,8 @@ function asset(string $path): string
                 <article class="panel table-panel"><div class="panel-header"><div><p class="eyebrow">Ledger</p><h3>Client invoices</h3></div><span class="panel-meta" id="table-summary">0 records</span></div><div class="table-scroll"><table><thead><tr><th>Client / invoice</th><th>Market</th><th>Issued</th><th>Due</th><th>Status</th><th class="align-right">Amount (USD)</th></tr></thead><tbody id="invoice-table"></tbody></table><div class="table-empty is-hidden" id="table-empty">No client invoices match this period.</div></div></article>
             </section>
 
-            <section class="view" id="mrr-view" aria-labelledby="page-title"><div class="section-intro mrr-intro"><div><p class="eyebrow">Revenue intelligence</p><h2>Monthly recurring revenue</h2><p class="section-copy">Issued client invoices, normalized to USD. Use the period selector to compare months.</p></div><div class="mrr-callout"><span>Selected period</span><strong id="mrr-total">$0</strong><small id="mrr-label">Current month</small></div></div><article class="panel mrr-panel"><div class="panel-header"><div><p class="eyebrow">Trend</p><h3>Revenue by month</h3></div><span class="panel-meta">Issued invoices</span></div><div class="mrr-chart-wrap"><canvas id="mrr-chart"></canvas><div class="chart-empty" id="mrr-empty">No revenue data available</div></div></article><div class="mrr-breakdown" id="mrr-breakdown"></div></section>
+            <section class="view" id="mrr-view" aria-labelledby="page-title"><div class="section-intro mrr-intro"><div><p class="eyebrow">Revenue intelligence</p><h2>Monthly recurring revenue</h2><p class="section-copy">Issued client invoices, normalized to USD. Use the period selector to compare months.</p></div><div class="mrr-side"><div class="filter-stack"><div class="scope-tabs" role="tablist" aria-label="Company scope"><button class="scope-tab is-active" data-scope="all" role="tab">Global</button><button class="scope-tab" data-scope="br" role="tab">Brazil</button><button class="scope-tab" data-scope="mx" role="tab">Mexico</button><button class="scope-tab" data-scope="pa" role="tab">Panama</button><button class="scope-tab" data-scope="int" role="tab">International</button></div><div class="category-filter"><span>Service</span><div class="category-tabs" role="tablist" aria-label="Service line"><button class="category-tab is-active" data-category="all" role="tab">All</button><button class="category-tab" data-category="seo" role="tab">SEO</button><button class="category-tab" data-category="ppc" role="tab">PPC</button></div></div></div><div class="mrr-callout"><span>Selected period</span><strong id="mrr-total">$0</strong><small id="mrr-label">Current month</small></div></div></div><article class="panel mrr-panel"><div class="panel-header"><div><p class="eyebrow">Trend</p><h3>Revenue by month</h3></div><span class="panel-meta">Issued invoices</span></div><div class="mrr-chart-wrap"><canvas id="mrr-chart"></canvas><div class="chart-empty" id="mrr-empty">No revenue data available</div></div></article><div class="mrr-breakdown" id="mrr-breakdown"></div></section>
 
-            <!-- ============================ RETENTION ============================ -->
             <section class="view" id="retention-view" aria-labelledby="page-title">
                 <div class="section-intro">
                     <div>
@@ -150,7 +153,7 @@ function asset(string $path): string
                         <p class="stat-note"><span id="ret-churn-rate">—</span> of the initial base · <span id="ret-churn-note">—</span></p>
                     </article>
                     <article class="stat-card is-positive">
-                        <span class="stat-label">Upsells, cross-sells &amp; referrals</span>
+                        <span class="stat-label">Upsells &amp; cross-sells</span>
                         <strong id="ret-upsells">—</strong>
                         <p class="stat-note"><span id="ret-expansion-rate">—</span> expansion · <span id="ret-upsell-note">—</span></p>
                     </article>
@@ -179,7 +182,6 @@ function asset(string $path): string
                 </div>
             </section>
 
-            <!-- ============================= TARGETS ============================= -->
             <section class="view" id="targets-view" aria-labelledby="page-title">
                 <div class="section-intro">
                     <div>
@@ -252,7 +254,6 @@ function asset(string $path): string
                 </article>
             </section>
 
-            <!-- ========================== MARGIN & COGS ========================== -->
             <section class="view" id="margin-view" aria-labelledby="page-title">
                 <div class="section-intro">
                     <div>
@@ -324,11 +325,30 @@ function asset(string $path): string
                         </div>
                     </article>
                 </div>
+
+                <article class="panel table-panel entries-panel">
+                    <div class="panel-header">
+                        <div><p class="eyebrow">Manual input log</p><h3>Saved entries</h3></div>
+                        <div class="entries-tools">
+                            <span class="panel-meta" id="margin-entries-summary">0 entries</span>
+                            <div class="category-tabs entries-tabs" role="tablist" aria-label="Entries shown">
+                                <button class="entries-tab is-active" data-entries="all" role="tab">All entries</button>
+                                <button class="entries-tab" data-entries="view" role="tab">Current view</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="table-scroll">
+                        <table class="entries-table">
+                            <thead><tr><th>Month</th><th>Market</th><th>Service</th><th class="align-right">COGS</th><th class="align-right">Target COGS</th><th class="align-right">Margin</th><th class="align-right">Target margin</th><th class="align-right">Bonus pool</th><th>Last updated</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
+                            <tbody id="margin-entries-table"></tbody>
+                        </table>
+                        <div class="table-empty is-hidden" id="margin-entries-empty"></div>
+                    </div>
+                </article>
             </section>
         </main>
     </div>
 
-    <!-- ===================== MANUAL INPUT: COGS & MARGIN ===================== -->
     <dialog class="modal" id="margin-modal" aria-labelledby="margin-modal-title">
         <form class="modal-form" id="margin-form" novalidate>
             <header class="modal-header">

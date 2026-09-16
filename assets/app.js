@@ -89,50 +89,182 @@ function invoiceBucket(invoice) {
     return 'open';
 }
 
-function setSyncStatus(text, detail, loading = false) { $('#sync-status').textContent = text; $('#sync-time').textContent = detail; document.body.classList.toggle('loading', loading); }
+const STALE_AFTER_MINUTES = 30;
+state.sync = { phase: 'loading', startedAt: Date.now(), finishedAt: null, sources: {}, error: null };
+
+function shortReason(message) {
+    const text = String(message || '');
+    const code = /HTTP (\d{3})/.exec(text)?.[1];
+    if (/Xero/i.test(text)) return 'Xero request failed';
+    if (/timed? ?out/i.test(text)) return 'Timed out';
+    if (/resolve|refused|connect/i.test(text)) return 'n8n unreachable';
+    if (code === '404') return 'Webhook not found';
+    if (code) return `n8n error ${code}`;
+    if (/not JSON|empty response/i.test(text)) return 'Unexpected response';
+    if (/configuration|\.env/i.test(text)) return 'Server setup error';
+    return 'Failed';
+}
+
+function relativeTime(timestamp) {
+    const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+    if (seconds < 45) return 'just now';
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `${minutes} min ago`;
+    const hours = Math.round(minutes / 60);
+    return hours < 24 ? `${hours} h ago` : new Date(timestamp).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function listNames(names) {
+    return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+function syncSummary() {
+    const sync = state.sync;
+    const keys = Object.keys(companyLabels);
+    const failed = keys.filter((key) => sync.sources[key]?.error);
+    const warned = keys.filter((key) => !sync.sources[key]?.error && sync.sources[key]?.warnings?.length);
+    const elapsed = Math.round((Date.now() - sync.startedAt) / 1000);
+
+    if (sync.phase === 'loading') {
+        return { tone: 'loading', title: sync.finishedAt ? 'Refreshing…' : 'Loading data…', detail: `Asking n8n for invoices from ${keys.length} Xero companies · ${elapsed}s` };
+    }
+    if (sync.phase === 'failed') {
+        return sync.finishedAt
+            ? { tone: 'error', title: 'Refresh failed', detail: `Still showing data from ${relativeTime(sync.finishedAt)}. ${shortReason(sync.error)}.` }
+            : { tone: 'error', title: 'No connection', detail: `Could not load invoices (${shortReason(sync.error)}). Press Refresh to try again.` };
+    }
+    if (failed.length === keys.length) {
+        return { tone: 'error', title: 'No data received', detail: 'None of the n8n workflows answered. Press Refresh to try again.' };
+    }
+    const updated = `${plural(state.invoices.length, 'invoice')} · updated ${relativeTime(sync.finishedAt)}`;
+    if (failed.length) {
+        return { tone: 'partial', title: `${keys.length - failed.length} of ${keys.length} companies loaded`, detail: `${listNames(failed.map((key) => companyLabels[key]))} missing from totals · ${updated}` };
+    }
+    if ((Date.now() - sync.finishedAt) / 60000 > STALE_AFTER_MINUTES) {
+        return { tone: 'stale', title: 'Data may be outdated', detail: `Last updated ${relativeTime(sync.finishedAt)}. Press Refresh for the latest invoices.` };
+    }
+    return { tone: warned.length ? 'warn' : 'ok', title: 'All companies up to date', detail: warned.length ? `${updated} · check the flagged ${warned.length === 1 ? 'company' : 'companies'}` : updated };
+}
+
+function renderSyncStatus() {
+    const card = $('#sync-card');
+    if (!card) return;
+    const sync = state.sync;
+    const summary = syncSummary();
+    card.dataset.state = summary.tone;
+    setText('#sync-status', summary.title);
+    setText('#sync-time', summary.detail);
+    document.body.classList.toggle('loading', sync.phase === 'loading');
+
+    const rows = Object.entries(companyLabels).map(([key, label]) => {
+        const source = sync.sources[key];
+        if (!source) return { label, tone: 'loading', value: sync.phase === 'loading' ? '…' : '—', note: '', title: 'Waiting for n8n' };
+        if (source.error) return { label, tone: 'error', value: 'Failed', note: shortReason(source.error), title: source.error };
+        const warnings = source.warnings || [];
+        return {
+            label,
+            tone: warnings.length ? 'warn' : 'ok',
+            value: number(source.count),
+            note: warnings[0] || '',
+            title: [`${plural(source.count, 'invoice')}${hasValue(source.seconds) ? ` in ${source.seconds}s` : ''}`, ...warnings].join(' · '),
+        };
+    });
+    const margin = state.marginInputsStatus;
+    const entries = Object.keys(state.marginInputs || {}).length;
+    rows.push(margin === 'error'
+        ? { label: 'Saved figures', tone: 'error', value: 'Failed', note: 'Database unavailable', title: state.marginInputsError || '' }
+        : margin === 'ready'
+            ? { label: 'Saved figures', tone: 'ok', value: number(entries), note: '', title: `${number(entries)} manual ${entries === 1 ? 'entry' : 'entries'} in the database` }
+            : { label: 'Saved figures', tone: 'loading', value: '…', note: '', title: 'Loading from the database' });
+
+    $('#sync-sources').innerHTML = rows.map((row) => `<li data-tone="${row.tone}" title="${escapeHtml(row.title)}"><span class="sync-source-name">${escapeHtml(row.label)}</span><span class="sync-source-value">${escapeHtml(row.value)}</span>${row.note ? `<small>${escapeHtml(row.note)}</small>` : ''}</li>`).join('');
+}
+
+function sourceErrorNotice(errors) {
+    const failed = Object.keys(state.sync.sources).filter((key) => state.sync.sources[key].error);
+    if (!failed.length) return errors.join(' · ');
+    const names = listNames(failed.map((key) => companyLabels[key] || key));
+    const reasons = failed.map((key) => `${companyLabels[key] || key}: ${state.sync.sources[key].error}`).join(' · ');
+    return `${names} could not be loaded, so the figures below leave ${failed.length === 1 ? 'it' : 'them'} out. Details: ${reasons}`;
+}
 
 async function loadInvoices() {
-    setSyncStatus('Fetching data', 'Contacting n8n endpoints', true);
+    if (state.sync.phase === 'loading' && state.sync.inFlight) return;
+    state.sync.phase = 'loading';
+    state.sync.inFlight = true;
+    state.sync.startedAt = Date.now();
+    $('#refresh-button').disabled = true;
+    renderSyncStatus();
     try {
         const response = await fetch('api.php?source=all', { cache: 'no-store' });
-        if (!response.ok) {
-            const body = await response.json().catch(() => ({}));
-            throw new Error(Array.isArray(body.errors) && body.errors.length ? body.errors.join(' · ') : `Dashboard proxy returned HTTP ${response.status}`);
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data) {
+            throw new Error(data && Array.isArray(data.errors) && data.errors.length ? data.errors.join(' · ') : `The dashboard server answered HTTP ${response.status}`);
         }
-        const data = await response.json();
         state.invoices = Array.isArray(data.invoices) ? data.invoices : [];
         state.sourceTypeCounts = data.sourceTypeCounts || {};
         state.categoryCounts = data.categoryCounts || {};
         const errors = Array.isArray(data.errors) ? data.errors : [];
-        delete $('#error-notice').dataset.dynamic;
-            const currentPeriodHasInvoices = filteredInvoices().length > 0;
-            const shouldShowAvailableData = !state.periodFromUrl && state.period === 'current' && state.invoices.length > 0 && !currentPeriodHasInvoices;
-            if (shouldShowAvailableData) {
-                state.period = 'all';
-                $('#period-select').value = 'all';
-            }
-            $('#error-notice').classList.remove('is-info');
-            $('#error-notice').textContent = errors.length
-                ? errors.join(' · ')
-                : shouldShowAvailableData
-                    ? 'No client invoices were issued in the current month. Showing all available fetched records.'
-                    : '';
-        $('#error-notice').classList.toggle('is-hidden', errors.length === 0);
-            $('#error-notice').classList.toggle('is-info', errors.length === 0 && shouldShowAvailableData);
-        const fetchedCount = state.invoices.length;
-        setSyncStatus(errors.length ? 'Partially synced' : 'Synced', `${fetchedCount} records · Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
+        const sourceErrors = data.sourceErrors || {};
+        const legacyErrors = !data.sourceErrors;
+        state.sync.sources = {};
+        Object.entries(data.sourceCounts || {}).forEach(([key, count]) => {
+            const legacy = legacyErrors ? errors.find((message) => message.startsWith(`${companyLabels[key]}:`)) : null;
+            state.sync.sources[key] = {
+                count: Number(count) || 0,
+                error: sourceErrors[key] || (legacy ? legacy.slice(companyLabels[key].length + 1).trim() : null),
+                warnings: (data.sourceWarnings || {})[key] || [],
+                seconds: (data.sourceSeconds || {})[key],
+            };
+        });
+        state.sync.phase = 'done';
+        state.sync.error = null;
+        state.sync.finishedAt = Date.now();
+
+        const notice = $('#error-notice');
+        delete notice.dataset.dynamic;
+        const currentPeriodHasInvoices = filteredInvoices().length > 0;
+        const shouldShowAvailableData = !state.periodFromUrl && state.period === 'current' && state.invoices.length > 0 && !currentPeriodHasInvoices;
+        if (shouldShowAvailableData) {
+            state.period = 'all';
+            $('#period-select').value = 'all';
+        }
+        notice.textContent = errors.length
+            ? sourceErrorNotice(errors)
+            : shouldShowAvailableData
+                ? 'No client invoices were issued in the current month, so the dashboard is showing every invoice it fetched.'
+                : '';
+        notice.classList.toggle('is-hidden', !notice.textContent);
+        notice.classList.toggle('is-info', errors.length === 0 && shouldShowAvailableData);
         renderAll();
     } catch (error) {
-        setSyncStatus('Connection issue', 'Could not load invoice data');
-        $('#error-notice').textContent = error.message;
-        $('#error-notice').classList.remove('is-hidden');
+        state.sync.phase = 'failed';
+        state.sync.error = error.message;
+        const notice = $('#error-notice');
+        delete notice.dataset.dynamic;
+        notice.classList.remove('is-info');
+        notice.textContent = state.sync.finishedAt
+            ? `Refresh failed, the figures below are from the previous load. ${error.message}`
+            : `Could not load invoices. ${error.message}`;
+        notice.classList.remove('is-hidden');
+    } finally {
+        state.sync.inFlight = false;
+        $('#refresh-button').disabled = false;
+        renderSyncStatus();
     }
 }
+
+setInterval(() => { if (state.sync.phase === 'loading' || state.sync.finishedAt) renderSyncStatus(); }, 1000);
 
 function renderMetrics(invoices) {
     const totals = { paid: 0, late: 0, open: 0, paidCount: 0, lateCount: 0, openCount: 0 };
     invoices.forEach((invoice) => { const bucket = invoiceBucket(invoice); if (bucket === 'paid') { totals.paid += amount(invoice); totals.paidCount++; } if (bucket === 'late') { totals.late += amount(invoice); totals.lateCount++; } if (bucket === 'open') { totals.open += amount(invoice); totals.openCount++; } });
     $('#paid-total').textContent = money(totals.paid); $('#late-total').textContent = money(totals.late); $('#open-total').textContent = money(totals.open);
+    const totalCount = totals.paidCount + totals.lateCount + totals.openCount;
+    const voidedCount = invoices.filter((invoice) => invoiceBucket(invoice) === 'voided').length;
+    $('#all-total').textContent = money(totals.paid + totals.late + totals.open);
+    $('#all-count').textContent = `${number(totalCount)} invoice${totalCount === 1 ? '' : 's'}`;
+    $('#all-note').textContent = voidedCount ? `issued, ${number(voidedCount)} voided excluded` : 'issued in period';
     $('#paid-count').textContent = `${number(totals.paidCount)} invoice${totals.paidCount === 1 ? '' : 's'}`; $('#late-count').textContent = `${number(totals.lateCount)} invoice${totals.lateCount === 1 ? '' : 's'}`; $('#open-count').textContent = `${number(totals.openCount)} invoice${totals.openCount === 1 ? '' : 's'}`;
 }
 
@@ -219,7 +351,7 @@ function monthSeries() {
     return { labels: months.map(monthLabel), values: months.map((month) => source.filter((invoice) => { const date = invoiceDate(invoice); return date && date.getFullYear() === month.getFullYear() && date.getMonth() === month.getMonth() && (!bounds.start || date >= bounds.start) && (!bounds.end || date <= bounds.end); }).reduce((sum, invoice) => sum + amount(invoice), 0)) };
 }
 
-function renderMrr() { const series = monthSeries(); const selectedInvoices = filteredInvoices(); const selected = selectedInvoices.reduce((sum, invoice) => sum + amount(invoice), 0); $('#mrr-total').textContent = money(selected); $('#mrr-label').textContent = periodBounds().label; if (state.mrrChart) state.mrrChart.destroy(); state.mrrChart = new Chart($('#mrr-chart'), { type: 'bar', data: { labels: series.labels, datasets: [{ data: series.values, backgroundColor: series.values.map((_, index) => index === series.values.length - 1 ? colors.authorised : '#d9d8d0'), borderRadius: 2, barPercentage: .58 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => ` ${money(context.raw)}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 10 } } }, y: { beginAtZero: true, grid: { color: '#e5e3dc' }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 9 }, callback: (value) => money(value) } } } } }); $('#mrr-empty').classList.toggle('is-hidden', series.values.length > 0); $('#mrr-breakdown').innerHTML = Object.entries(companyLabels).map(([key, label]) => { const total = selectedInvoices.filter((invoice) => invoice.companyKey === key).reduce((sum, invoice) => sum + amount(invoice), 0); return `<div class="breakdown-item"><span>${label}</span><strong>${money(total)}</strong></div>`; }).join(''); }
+function renderMrr() { const series = monthSeries(); const selectedInvoices = filteredInvoices(); const selected = selectedInvoices.reduce((sum, invoice) => sum + amount(invoice), 0); $('#mrr-total').textContent = money(selected); $('#mrr-label').textContent = periodBounds().label; if (state.mrrChart) state.mrrChart.destroy(); state.mrrChart = new Chart($('#mrr-chart'), { type: 'bar', data: { labels: series.labels, datasets: [{ data: series.values, backgroundColor: series.values.map((_, index) => index === series.values.length - 1 ? colors.authorised : '#d9d8d0'), borderRadius: 2, barPercentage: .58 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => ` ${money(context.raw)}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 10 } } }, y: { beginAtZero: true, grid: { color: '#e5e3dc' }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 9 }, callback: (value) => money(value) } } } } }); $('#mrr-empty').classList.toggle('is-hidden', series.values.length > 0); $('#mrr-breakdown').innerHTML = Object.entries(companyLabels).map(([key, label]) => { const total = selectedInvoices.filter((invoice) => invoice.companyKey === key).reduce((sum, invoice) => sum + amount(invoice), 0); const dimmed = state.scope !== 'all' && state.scope !== key; return `<div class="breakdown-item${dimmed ? ' is-dimmed' : ''}"><span>${label}</span><strong>${money(total)}</strong></div>`; }).join(''); }
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[character])); }
 function renderAll() { renderOverview(); renderMrr(); renderScorecard(); syncViewToUrl(); }
@@ -346,7 +478,37 @@ function setText(selector, value) { const node = $(selector); if (node) node.tex
 
 function contactKey(invoice) { return invoice.Contact?.ContactID || invoice.Contact?.Name || 'unknown-contact'; }
 function isBillable(invoice) { return isRevenue(invoice) && !EXCLUDED_STATUSES.includes(normalStatus(invoice)); }
-function scopedInvoices() { return state.invoices.filter((invoice) => isBillable(invoice) && inCategory(invoice) && (state.scope === 'all' || invoice.companyKey === state.scope)); }
+function inScopeBillable() { return state.invoices.filter((invoice) => isBillable(invoice) && (state.scope === 'all' || invoice.companyKey === state.scope)); }
+function scopedInvoices() { return inScopeBillable().filter(inCategory); }
+const SERVICE_LINES = ['seo', 'ppc', 'other'];
+function linesInView() { return state.category === 'all' ? SERVICE_LINES : [state.category]; }
+function lineAmount(invoice, line) {
+    const shares = invoice.categoryShares;
+    if (!shares) return line === 'other' ? fullAmount(invoice) : 0;
+    return fullAmount(invoice) * (Number(shares[line]) || 0);
+}
+function upsellAmount(invoice, line) {
+    if (invoice.upsellShares) return fullAmount(invoice) * (Number(invoice.upsellShares[line]) || 0);
+    return invoice.flags && invoice.flags.upsell ? lineAmount(invoice, line) : 0;
+}
+function totalsByContactLine(invoices) {
+    const map = new Map();
+    invoices.forEach((invoice) => {
+        const key = contactKey(invoice);
+        if (!map.has(key)) map.set(key, new Map());
+        const lines = map.get(key);
+        linesInView().forEach((line) => {
+            const value = lineAmount(invoice, line);
+            const tagged = upsellAmount(invoice, line);
+            if (!value && !tagged) return;
+            const entry = lines.get(line) || { value: 0, tagged: 0 };
+            entry.value += value;
+            entry.tagged += tagged;
+            lines.set(line, entry);
+        });
+    });
+    return map;
+}
 function endOfMonth(date) { return new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59); }
 function inWindow(date, window) { return Boolean(date) && date >= window.start && date <= window.end; }
 function isCalendarMonth(start, end) { return start.getDate() === 1 && start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear() && end.getDate() === endOfMonth(start).getDate(); }
@@ -406,13 +568,13 @@ function monthlyHistory(invoices, until) {
 function buildScorecard() {
     const manual = USE_DEMO_TARGETS ? DEMO_MANUAL_INPUTS : MANUAL_INPUTS;
     const scorecard = {
-        retention: { initialPortfolio: null, churned: null, upsells: null, retained: null, initialPortfolioPrior: null, target: manual.retentionTarget, activeClients: null },
+        retention: { initialPortfolio: null, churned: null, upsells: null, retained: null, target: manual.retentionTarget, activeClients: null },
         newBusiness: { actual: null, target: manual.newBusinessTarget },
         totalMrr: { actual: null, target: manual.totalMrrTarget, accumulatedGap: manual.accumulatedGap, history: [] },
         cogs: { actual: manual.cogs, target: manual.cogsTarget },
         margin: { current: manual.margin, target: manual.marginTarget, bonusPool: manual.bonusPool },
     };
-    const meta = { invoiceCount: 0, markedFirstMonth: 0, markedUpsell: 0, reactivated: null, newClients: 0, lostClients: 0, detection: 'none' };
+    const meta = { invoiceCount: 0, markedFirstMonth: 0, markedUpsell: 0, taggedUpsell: 0, crossSells: 0, upsellOutsideBase: 0, reactivated: null, newClients: 0, lostClients: 0, detection: 'none' };
 
     const invoices = scopedInvoices();
     const windows = scorecardWindows(invoices);
@@ -439,15 +601,17 @@ function buildScorecard() {
     meta.previousLabel = windows.previous.label;
     meta.priorLabel = windows.beforePrevious.label;
 
+    const everyLine = inScopeBillable();
     const current = invoices.filter((invoice) => inWindow(invoiceDate(invoice), windows.current));
     const previous = invoices.filter((invoice) => inWindow(invoiceDate(invoice), windows.previous));
-    const beforePrevious = invoices.filter((invoice) => inWindow(invoiceDate(invoice), windows.beforePrevious));
     const currentByContact = totalsByContact(current);
-    const previousByContact = totalsByContact(previous);
+    const baseContacts = new Set(everyLine.filter((invoice) => inWindow(invoiceDate(invoice), windows.previous)).map(contactKey));
+    const currentLines = totalsByContactLine(current);
+    const previousLines = totalsByContactLine(previous);
 
     const firstSeen = new Map();
     let datasetStart = null;
-    invoices.forEach((invoice) => {
+    everyLine.forEach((invoice) => {
         const date = invoiceDate(invoice);
         if (!date) return;
         if (!datasetStart || date < datasetStart) datasetStart = date;
@@ -460,7 +624,10 @@ function buildScorecard() {
     const newContacts = new Set();
     current.forEach((invoice) => {
         if (invoice.flags && invoice.flags.firstMonth) { newContacts.add(contactKey(invoice)); meta.markedFirstMonth += 1; }
-        if (invoice.flags && invoice.flags.upsell) meta.markedUpsell += 1;
+        if (invoice.flags && invoice.flags.upsell) {
+            meta.markedUpsell += 1;
+            if (!baseContacts.has(contactKey(invoice))) meta.upsellOutsideBase += 1;
+        }
     });
     if (historyAvailable) {
         currentByContact.forEach((_, key) => {
@@ -472,32 +639,46 @@ function buildScorecard() {
         : meta.markedFirstMonth > 0 ? 'marker'
             : historyAvailable ? 'history' : 'unavailable';
 
+    let initial = 0;
     let churned = 0;
     let expansion = 0;
     let retained = 0;
-    previousByContact.forEach((previousValue, key) => {
-        const currentValue = currentByContact.get(key) || 0;
-        retained += currentValue;
-        if (currentValue < previousValue) churned += previousValue - currentValue;
-        if (currentValue > previousValue) expansion += currentValue - previousValue;
-        if (currentValue === 0) meta.lostClients += 1;
+    baseContacts.forEach((key) => {
+        const before = previousLines.get(key) || new Map();
+        const after = currentLines.get(key) || new Map();
+        let beforeTotal = 0;
+        let afterTotal = 0;
+        linesInView().forEach((line) => {
+            const previousValue = before.get(line)?.value || 0;
+            const currentValue = after.get(line)?.value || 0;
+            const tagged = Math.min(after.get(line)?.tagged || 0, currentValue);
+            const delta = currentValue - previousValue;
+            const up = Math.max(delta, 0, tagged);
+            expansion += up;
+            churned += up - delta;
+            if (tagged > 0) meta.taggedUpsell += tagged;
+            if (line !== 'other' && previousValue <= 0 && currentValue > 0) meta.crossSells += 1;
+            beforeTotal += previousValue;
+            afterTotal += currentValue;
+        });
+        initial += beforeTotal;
+        retained += afterTotal;
+        if (beforeTotal > 0 && Math.abs(afterTotal) < 0.005) meta.lostClients += 1;
     });
 
     let newBusiness = 0;
     let reactivated = 0;
     currentByContact.forEach((value, key) => {
-        if (previousByContact.has(key)) return;
+        if (baseContacts.has(key)) return;
         if (newContacts.has(key)) { newBusiness += value; meta.newClients += 1; } else { reactivated += value; }
     });
 
-    scorecard.retention.initialPortfolio = previous.length ? [...previousByContact.values()].reduce((sum, value) => sum + value, 0) : null;
-    scorecard.retention.churned = previous.length ? churned : null;
-    scorecard.retention.upsells = previous.length ? expansion : null;
-    scorecard.retention.retained = previous.length ? retained : null;
+    const hasBase = baseContacts.size > 0;
+    scorecard.retention.initialPortfolio = hasBase ? initial : null;
+    scorecard.retention.churned = hasBase ? churned : null;
+    scorecard.retention.upsells = hasBase ? expansion : null;
+    scorecard.retention.retained = hasBase ? retained : null;
     scorecard.retention.activeClients = currentByContact.size;
-    scorecard.retention.initialPortfolioPrior = beforePrevious.length
-        ? beforePrevious.reduce((sum, invoice) => sum + amount(invoice), 0)
-        : null;
 
     scorecard.newBusiness.actual = newBusiness;
     scorecard.totalMrr.actual = current.reduce((sum, invoice) => sum + amount(invoice), 0);
@@ -523,7 +704,7 @@ function targetBlock({ caption, value, target, note, lowerIsBetter = false, form
     }
     const isPercent = format === 'percent';
     const show = (input) => (hasValue(input) ? (isPercent ? percentOr(input, 2) : moneyOr(input)) : naLabel);
-    const progress = share(value, target);                 // "to target" in the spreadsheet
+    const progress = share(value, target);
     const width = hasValue(progress) ? clampPercent(progress * 100) : 0;
     const gap = hasValue(value) && hasValue(target) ? Number(value) - Number(target) : null;
     const complete = lowerIsBetter ? hasValue(gap) && gap <= 0 : hasValue(gap) && gap >= 0;
@@ -561,12 +742,12 @@ function renderRetentionSection() {
     setText('#ret-initial-note', meta.previousLabel ? `Billed in ${meta.previousLabel}` : 'Previous period');
     setText('#ret-clients-note', meta.invoiceCount ? `${plural(meta.invoiceCount, 'invoice')} in the period` : 'No invoices in the period');
     setText('#ret-churn-note', meta.lostClients ? `${plural(meta.lostClients, 'client')} stopped billing` : 'No client stopped billing');
-    setText('#ret-upsell-note', meta.markedUpsell ? `${plural(meta.markedUpsell, 'invoice')} tagged as upsell` : 'Measured by value change');
+    setText('#ret-upsell-note', upsellNote(meta));
 
     const rows = [
         { label: 'Initial portfolio value', hint: meta.previousLabel ? `Billed in ${meta.previousLabel}` : 'Previous period', value: data.initialPortfolio, tone: '', signed: false },
         { label: 'Churned value', hint: 'Lost clients and downgrades', value: hasValue(data.churned) ? -Number(data.churned) : null, tone: 'is-negative', signed: true },
-        { label: 'Upsells, cross-sells & referrals', hint: 'Expansion on the same base', value: data.upsells, tone: 'is-positive', signed: true },
+        { label: 'Upsells & cross-sells', hint: meta.taggedUpsell > 0 ? `${money(meta.taggedUpsell)} tagged in Xero, rest from growth per service line` : 'Growth per client and service line', value: data.upsells, tone: 'is-positive', signed: true },
         { label: 'Retention (existing)', hint: 'What the same base is worth now', value: retained, tone: 'is-total', signed: false },
     ];
     const max = Math.max(...rows.map((row) => Math.abs(Number(row.value) || 0)), 1);
@@ -579,7 +760,8 @@ function renderRetentionSection() {
         </div>
     `).join('');
 
-    const retentionRate = share(data.initialPortfolio, data.initialPortfolioPrior);
+    const retentionRate = share(retained, data.initialPortfolio);
+    const grossRate = hasValue(data.churned) ? share(Number(data.initialPortfolio) - Number(data.churned), data.initialPortfolio) : null;
     $('#retention-target').innerHTML = targetBlock({
         caption: 'Retention (existing)',
         value: retentionRate,
@@ -587,9 +769,17 @@ function renderRetentionSection() {
         format: 'percent',
         naLabel: 'N/A',
         note: hasValue(retentionRate)
-            ? `${moneyOr(data.initialPortfolio)} in ${escapeHtml(meta.previousLabel || 'this period')} against ${moneyOr(data.initialPortfolioPrior)} in ${escapeHtml(meta.priorLabel || 'the one before')}.`
-            : 'Needs two closed periods of history to compare.',
+            ? `The ${meta.previousLabel || 'previous'} base is worth ${moneyOr(retained)} now, against ${moneyOr(data.initialPortfolio)} before. Without upsells: ${percentOr(grossRate)}.`
+            : 'Needs billing in the previous period to compare.',
     });
+}
+
+function upsellNote(meta) {
+    const parts = [];
+    if (meta.taggedUpsell > 0) parts.push(`${money(meta.taggedUpsell)} tagged in Xero`);
+    if (meta.crossSells > 0) parts.push(`${plural(meta.crossSells, 'new service line')} on existing clients`);
+    if (meta.upsellOutsideBase > 0) parts.push(`${plural(meta.upsellOutsideBase, 'upsell invoice')} for clients not billed in ${meta.previousLabel || 'the previous period'}`);
+    return parts.length ? parts.join(' · ') : 'Measured by value change';
 }
 
 function renderTargetsSection() {
@@ -685,6 +875,7 @@ function renderMarginSection() {
     setText('#bonus-gap', signedPoints(gap));
     setText('#bonus-status', hasValue(gap) ? (gap >= 0 ? 'Unlocked' : 'Below target') : DASH);
     renderMarginInputStatus();
+    renderMarginEntriesTable();
 
     setText('#bonus-note', hasValue(gap) && gap < 0
         ? `Margin is ${Math.abs(gap * 100).toFixed(1)} points short of target. Close the gap to release the pool.`
@@ -738,7 +929,7 @@ document.querySelectorAll('.nav-item').forEach((button) => button.addEventListen
 }));
 
 state.marginInputs = {};
-state.marginInputsStatus = 'loading'; // loading | ready | error
+state.marginInputsStatus = 'loading';
 const MARGIN_ENDPOINT = 'margin-inputs.php';
 
 const MARGIN_FIELDS = {
@@ -868,7 +1059,6 @@ function storeMarginEntry(entry) {
     state.marginInputs[marginInputKey(entry.month, entry.scope, entry.category)] = entry;
 }
 
-/* Loads every saved entry once, on start-up. */
 async function loadMarginInputs() {
     state.marginInputsStatus = 'loading';
     renderMarginInputStatus();
@@ -882,6 +1072,7 @@ async function loadMarginInputs() {
         state.marginInputsError = error.message;
     }
     renderScorecard();
+    renderSyncStatus();
 }
 
 async function saveMarginInput(entry) {
@@ -973,13 +1164,13 @@ function showMarginError(message, field) {
     if (field) { field.setAttribute('aria-invalid', 'true'); field.focus(); }
 }
 
-function openMarginModal() {
+function openMarginModal(entry = null) {
     const meta = state.scorecardMeta || {};
     marginForm.reset();
     showMarginError('');
-    marginForm.elements.month.value = monthKey(meta.marginMonth || new Date());
-    marginForm.elements.scope.value = state.scope;
-    marginForm.elements.category.value = state.category;
+    marginForm.elements.month.value = entry ? entry.month : monthKey(meta.marginMonth || new Date());
+    marginForm.elements.scope.value = entry ? entry.scope : state.scope;
+    marginForm.elements.category.value = entry ? entry.category : state.category;
     fillMarginValues(null);
     loadMarginEntryIntoForm();
     marginModal.showModal();
@@ -1035,7 +1226,80 @@ function showMarginEntry(entry) {
     renderAll();
 }
 
-$('#open-margin-modal').addEventListener('click', openMarginModal);
+state.marginEntriesMode = 'all';
+
+function entryInView(entry) {
+    const { start, end } = periodBounds();
+    return entry.scope === state.scope
+        && (state.category === 'all' || entry.category === state.category)
+        && (!start || entry.month >= monthKey(start))
+        && (!end || entry.month <= monthKey(end));
+}
+
+function formatEnteredAt(value) {
+    const date = value ? new Date(value) : null;
+    return date && !Number.isNaN(date.getTime())
+        ? date.toLocaleString('en-US', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+        : DASH;
+}
+
+function renderMarginEntriesTable() {
+    const body = $('#margin-entries-table');
+    const empty = $('#margin-entries-empty');
+    if (!body || !empty) return;
+    const all = Object.values(state.marginInputs).sort((a, b) => b.month.localeCompare(a.month)
+        || VIEW_SCOPES.indexOf(a.scope) - VIEW_SCOPES.indexOf(b.scope)
+        || VIEW_CATEGORIES.indexOf(a.category) - VIEW_CATEGORIES.indexOf(b.category));
+    const rows = state.marginEntriesMode === 'view' ? all.filter(entryInView) : all;
+    const inViewCount = all.filter(entryInView).length;
+
+    const entriesLabel = (count) => `${number(count)} ${count === 1 ? 'entry' : 'entries'}`;
+    setText('#margin-entries-summary', state.marginEntriesMode === 'view'
+        ? `${entriesLabel(rows.length)} of ${number(all.length)}`
+        : `${entriesLabel(all.length)} · ${number(inViewCount)} used in current view`);
+
+    body.innerHTML = rows.map((entry) => {
+        const key = marginInputKey(entry.month, entry.scope, entry.category);
+        const used = state.marginEntriesMode === 'all' && entryInView(entry);
+        return `<tr class="${used ? 'is-in-view' : ''}"${used ? ' title="Used by the current view"' : ''}>
+            <td>${escapeHtml(monthLabel(monthFromKey(entry.month)))}</td>
+            <td>${escapeHtml(companyLabels[entry.scope] || 'Global')}</td>
+            <td>${escapeHtml(entry.category === 'all' ? 'All services' : categoryLabels[entry.category] || entry.category)}</td>
+            <td class="align-right mono">${moneyOr(entry.cogs)}</td>
+            <td class="align-right mono">${moneyOr(entry.cogsTarget)}</td>
+            <td class="align-right mono">${percentOr(entry.margin)}</td>
+            <td class="align-right mono">${percentOr(entry.marginTarget)}</td>
+            <td class="align-right mono">${moneyOr(entry.bonusPool)}</td>
+            <td class="entry-date">${escapeHtml(formatEnteredAt(entry.enteredAt))}</td>
+            <td class="align-right entry-actions"><button type="button" class="row-button" data-entry-show="${escapeHtml(key)}">Show</button><button type="button" class="row-button" data-entry-edit="${escapeHtml(key)}">Edit</button></td>
+        </tr>`;
+    }).join('');
+
+    let message = '';
+    if (state.marginInputsStatus === 'loading') message = 'Loading saved entries…';
+    else if (state.marginInputsStatus === 'error') message = `Could not load saved entries: ${state.marginInputsError}`;
+    else if (!all.length) message = 'No figures have been entered yet. Use "Enter COGS & margin" to add the first one.';
+    else if (!rows.length) message = 'No saved entry matches the current market, service and period.';
+    empty.textContent = message;
+    empty.classList.toggle('is-hidden', !message || rows.length > 0);
+}
+
+document.querySelectorAll('.entries-tab').forEach((button) => button.addEventListener('click', () => {
+    state.marginEntriesMode = button.dataset.entries;
+    document.querySelectorAll('.entries-tab').forEach((item) => item.classList.toggle('is-active', item === button));
+    renderMarginEntriesTable();
+}));
+
+$('#margin-entries-table').addEventListener('click', (event) => {
+    const button = event.target.closest('button');
+    if (!button) return;
+    const entry = state.marginInputs[button.dataset.entryShow || button.dataset.entryEdit];
+    if (!entry) return;
+    if (button.dataset.entryEdit) openMarginModal(entry);
+    else { showMarginEntry(entry); $('#margin-view').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+});
+
+$('#open-margin-modal').addEventListener('click', () => openMarginModal());
 marginModal.querySelectorAll('[data-close-modal]').forEach((button) => button.addEventListener('click', closeMarginModal));
 marginModal.addEventListener('click', (event) => { if (event.target === marginModal) closeMarginModal(); });
 ['month', 'scope', 'category'].forEach((name) => marginForm.elements[name].addEventListener('change', loadMarginEntryIntoForm));
@@ -1062,4 +1326,5 @@ marginForm.addEventListener('submit', async (event) => {
 });
 
 renderScorecard();
+loadMarginInputs();
 loadMarginInputs();
