@@ -30,8 +30,6 @@ function startOfToday() {
 
 function invoiceDate(invoice) { return parseDate(invoice.DateString || invoice.Date); }
 function dueDate(invoice) { return parseDate(invoice.DueDateString || invoice.DueDate); }
-/* Share of the invoice that belongs to the selected service line (1 when "All").
-   Mixed SEO + PPC invoices are split by api.php from their line amounts. */
 function categoryShare(invoice, category = state.category) {
     if (category === 'all') return 1;
     const value = Number(invoice.categoryShares?.[category]);
@@ -108,7 +106,7 @@ async function loadInvoices() {
         const errors = Array.isArray(data.errors) ? data.errors : [];
         delete $('#error-notice').dataset.dynamic;
             const currentPeriodHasInvoices = filteredInvoices().length > 0;
-            const shouldShowAvailableData = state.period === 'current' && state.invoices.length > 0 && !currentPeriodHasInvoices;
+            const shouldShowAvailableData = !state.periodFromUrl && state.period === 'current' && state.invoices.length > 0 && !currentPeriodHasInvoices;
             if (shouldShowAvailableData) {
                 state.period = 'all';
                 $('#period-select').value = 'all';
@@ -224,9 +222,9 @@ function monthSeries() {
 function renderMrr() { const series = monthSeries(); const selectedInvoices = filteredInvoices(); const selected = selectedInvoices.reduce((sum, invoice) => sum + amount(invoice), 0); $('#mrr-total').textContent = money(selected); $('#mrr-label').textContent = periodBounds().label; if (state.mrrChart) state.mrrChart.destroy(); state.mrrChart = new Chart($('#mrr-chart'), { type: 'bar', data: { labels: series.labels, datasets: [{ data: series.values, backgroundColor: series.values.map((_, index) => index === series.values.length - 1 ? colors.authorised : '#d9d8d0'), borderRadius: 2, barPercentage: .58 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => ` ${money(context.raw)}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 10 } } }, y: { beginAtZero: true, grid: { color: '#e5e3dc' }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 9 }, callback: (value) => money(value) } } } } }); $('#mrr-empty').classList.toggle('is-hidden', series.values.length > 0); $('#mrr-breakdown').innerHTML = Object.entries(companyLabels).map(([key, label]) => { const total = selectedInvoices.filter((invoice) => invoice.companyKey === key).reduce((sum, invoice) => sum + amount(invoice), 0); return `<div class="breakdown-item"><span>${label}</span><strong>${money(total)}</strong></div>`; }).join(''); }
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[character])); }
-function renderAll() { renderOverview(); renderMrr(); renderScorecard(); }
+function renderAll() { renderOverview(); renderMrr(); renderScorecard(); syncViewToUrl(); }
 
-$('#period-select').addEventListener('change', (event) => { state.period = event.target.value; $('#date-range').hidden = state.period !== 'custom'; renderAll(); });
+$('#period-select').addEventListener('change', (event) => { state.period = event.target.value; state.periodFromUrl = true; $('#date-range').hidden = state.period !== 'custom'; renderAll(); });
 $('#date-from').addEventListener('input', (event) => { state.customStart = event.target.value; });
 $('#date-to').addEventListener('input', (event) => { state.customEnd = event.target.value; });
 $('#apply-date-filter').addEventListener('click', () => {
@@ -238,6 +236,7 @@ $('#apply-date-filter').addEventListener('click', () => {
         return;
     }
     state.period = 'custom';
+    state.periodFromUrl = true;
     $('#period-select').value = 'custom';
     $('#error-notice').classList.add('is-hidden');
     renderAll();
@@ -246,32 +245,71 @@ $('#refresh-button').addEventListener('click', loadInvoices);
 document.querySelectorAll('.scope-tab').forEach((button) => button.addEventListener('click', () => { state.scope = button.dataset.scope; document.querySelectorAll('.scope-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.scope === state.scope)); renderAll(); }));
 document.querySelectorAll('.category-tab').forEach((button) => button.addEventListener('click', () => { state.category = button.dataset.category; document.querySelectorAll('.category-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.category === state.category)); renderAll(); }));
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => { document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('is-active')); button.classList.add('is-active'); document.querySelectorAll('.view').forEach((view) => view.classList.remove('is-visible')); $(`#${button.dataset.view}-view`).classList.add('is-visible'); $('#page-title').textContent = button.dataset.title || button.textContent.trim(); }));
-loadInvoices();
-/* ==========================================================================
-   Scorecard: retention, targets and margin
-   --------------------------------------------------------------------------
-   Derived from the invoices already fetched by api.php:
-     · initial portfolio value  · churned value  · upsells / expansion
-     · active clients           · new business (MRR)  · total MRR + history
-   Everything else (targets, COGS, margin, bonus pool) is typed by hand in
-   MANUAL_INPUTS below until those numbers have a source.
-   ========================================================================== */
 
-/* Numbers that still come from the spreadsheet. Fill them in here. */
+const VIEW_PERIODS = ['current', 'previous', 'two-previous', 'quarter', 'all', 'custom'];
+const VIEW_SCOPES = ['all', ...Object.keys(companyLabels)];
+const VIEW_CATEGORIES = ['all', ...Object.keys(categoryLabels)];
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+function applyViewControls() {
+    document.querySelectorAll('.scope-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.scope === state.scope));
+    document.querySelectorAll('.category-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.category === state.category));
+    $('#period-select').value = state.period;
+    $('#date-from').value = state.customStart;
+    $('#date-to').value = state.customEnd;
+    $('#date-range').hidden = state.period !== 'custom';
+}
+
+function restoreViewFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const period = params.get('period');
+    const scope = params.get('scope');
+    const category = params.get('category');
+    const from = params.get('from') || '';
+    const to = params.get('to') || '';
+    if (VIEW_SCOPES.includes(scope)) state.scope = scope;
+    if (VIEW_CATEGORIES.includes(category)) state.category = category;
+    if (period === 'custom') {
+        if (ISO_DATE.test(from) && ISO_DATE.test(to) && from <= to) {
+            state.period = 'custom';
+            state.customStart = from;
+            state.customEnd = to;
+            state.periodFromUrl = true;
+        }
+    } else if (VIEW_PERIODS.includes(period)) {
+        state.period = period;
+        state.periodFromUrl = true;
+    }
+    applyViewControls();
+}
+
+function syncViewToUrl() {
+    const params = new URLSearchParams(window.location.search);
+    params.set('scope', state.scope);
+    params.set('category', state.category);
+    if (state.periodFromUrl) params.set('period', state.period); else params.delete('period');
+    if (state.periodFromUrl && state.period === 'custom') { params.set('from', state.customStart); params.set('to', state.customEnd); }
+    else { params.delete('from'); params.delete('to'); }
+    const query = params.toString();
+    const url = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`;
+    if (url !== `${window.location.pathname}${window.location.search}${window.location.hash}`) history.replaceState(null, '', url);
+}
+
+restoreViewFromUrl();
+loadInvoices();
+
 const MANUAL_INPUTS = {
-    retentionTarget: 0.96,   // 96% — retention goal, as a fraction
+    retentionTarget: 0.96,
     newBusinessTarget: null,
     totalMrrTarget: null,
     accumulatedGap: null,
     cogs: null,
     cogsTarget: null,
-    margin: null,          // 0.45 = 45%
+    margin: null,
     marginTarget: null,
     bonusPool: null,
 };
 
-/* Placeholder values so the manual cards are not empty while reviewing the UI.
-   Set to false once MANUAL_INPUTS is filled with the real numbers. */
 const USE_DEMO_TARGETS = false;
 const DEMO_MANUAL_INPUTS = {
     retentionTarget: 0.96,
@@ -285,10 +323,8 @@ const DEMO_MANUAL_INPUTS = {
     bonusPool: 18200,
 };
 
-/* Statuses that do not represent billed revenue. */
 const EXCLUDED_STATUSES = ['VOIDED', 'DELETED', 'DRAFT'];
 
-/* How many months to plot on the "actual against plan" chart. */
 const HISTORY_MONTHS = 6;
 
 state.scorecard = null;
@@ -307,7 +343,6 @@ const plural = (count, word) => `${number(count)} ${word}${count === 1 ? '' : 's
 
 function setText(selector, value) { const node = $(selector); if (node) node.textContent = value; }
 
-/* ------------------------------- derivation ------------------------------- */
 
 function contactKey(invoice) { return invoice.Contact?.ContactID || invoice.Contact?.Name || 'unknown-contact'; }
 function isBillable(invoice) { return isRevenue(invoice) && !EXCLUDED_STATUSES.includes(normalStatus(invoice)); }
@@ -316,7 +351,6 @@ function endOfMonth(date) { return new Date(date.getFullYear(), date.getMonth() 
 function inWindow(date, window) { return Boolean(date) && date >= window.start && date <= window.end; }
 function isCalendarMonth(start, end) { return start.getDate() === 1 && start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear() && end.getDate() === endOfMonth(start).getDate(); }
 
-/* The selected period, plus the comparable window right before it. */
 function scorecardWindows(invoices) {
     const bounds = periodBounds();
     let start = bounds.start;
@@ -337,7 +371,6 @@ function scorecardWindows(invoices) {
     return { current, previous, beforePrevious: previousWindowOf(previous) };
 }
 
-/* The comparable window immediately before the given one. */
 function previousWindowOf(window) {
     if (isCalendarMonth(window.start, window.end)) {
         const start = new Date(window.start.getFullYear(), window.start.getMonth() - 1, 1);
@@ -385,13 +418,19 @@ function buildScorecard() {
     const windows = scorecardWindows(invoices);
     state.scorecardMeta = meta;
 
-    // Figures typed in the "Enter COGS & margin" modal win over MANUAL_INPUTS / demo values.
-    const entry = marginInputFor(windows);
+    const singleMonth = selectedSingleMonth();
+    const entry = singleMonth ? marginEntryFor(monthKey(singleMonth), invoices) : null;
+    const aggregate = singleMonth ? null : aggregateMarginEntries(marginEntriesInPeriod(invoices), invoices);
     meta.marginEntry = entry;
-    meta.marginMonth = windows && isCalendarMonth(windows.current.start, windows.current.end) ? windows.current.start : null;
+    meta.marginAggregate = aggregate;
+    meta.marginMonth = singleMonth;
     if (entry) {
         scorecard.cogs = { actual: entry.cogs, target: entry.cogsTarget };
+        if ('revenue' in entry) scorecard.cogs.revenue = entry.revenue;
         scorecard.margin = { current: entry.margin, target: entry.marginTarget, bonusPool: entry.bonusPool };
+    } else if (aggregate) {
+        scorecard.cogs = { actual: aggregate.cogs, target: aggregate.cogsTarget, revenue: aggregate.revenue };
+        scorecard.margin = { current: aggregate.margin, target: aggregate.marginTarget, bonusPool: aggregate.bonusPool };
     }
 
     if (!windows) { state.scorecard = scorecard; return; }
@@ -406,7 +445,6 @@ function buildScorecard() {
     const currentByContact = totalsByContact(current);
     const previousByContact = totalsByContact(previous);
 
-    // First time each client shows up anywhere in the fetched history.
     const firstSeen = new Map();
     let datasetStart = null;
     invoices.forEach((invoice) => {
@@ -419,7 +457,6 @@ function buildScorecard() {
     });
     const historyAvailable = Boolean(datasetStart) && datasetStart < windows.current.start;
 
-    // New business: explicitly marked in Xero, or a client with no earlier invoice.
     const newContacts = new Set();
     current.forEach((invoice) => {
         if (invoice.flags && invoice.flags.firstMonth) { newContacts.add(contactKey(invoice)); meta.markedFirstMonth += 1; }
@@ -471,8 +508,6 @@ function buildScorecard() {
 
     state.scorecard = scorecard;
 }
-
-/* -------------------------------- components ------------------------------ */
 
 function deltaPill(value, { lowerIsBetter = false, suffix = '', formatter = signedMoney } = {}) {
     if (!hasValue(value)) return `<span class="delta is-flat">${DASH}</span>`;
@@ -544,7 +579,6 @@ function renderRetentionSection() {
         </div>
     `).join('');
 
-    // Spreadsheet formula: initial portfolio value of this period / of the previous one.
     const retentionRate = share(data.initialPortfolio, data.initialPortfolioPrior);
     $('#retention-target').innerHTML = targetBlock({
         caption: 'Retention (existing)',
@@ -639,7 +673,7 @@ function renderMarginSection() {
     const cogsDifference = hasValue(cogs.actual) && hasValue(cogs.target) ? Number(cogs.actual) - Number(cogs.target) : null;
     setText('#cogs-actual', moneyOr(cogs.actual));
     setText('#cogs-target', moneyOr(cogs.target));
-    setText('#cogs-share', percentOr(share(cogs.actual, totalMrr.actual)));
+    setText('#cogs-share', percentOr(share(cogs.actual, 'revenue' in cogs ? cogs.revenue : totalMrr.actual)));
     setText('#cogs-difference', hasValue(cogsDifference) ? signedMoney(cogsDifference) : DASH);
     $('#cogs-difference').className = hasValue(cogsDifference) ? (cogsDifference <= 0 ? 'value-up' : 'value-down') : '';
 
@@ -699,18 +733,9 @@ function renderScorecard() {
     renderMarginSection();
 }
 
-// Charts built inside a hidden view need a nudge once that view becomes visible.
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => {
     requestAnimationFrame(() => { [state.statusChart, state.mrrChart, state.gapChart].forEach((chart) => chart && chart.resize()); });
 }));
-
-/* ==========================================================================
-   Manual input: COGS & margin
-   --------------------------------------------------------------------------
-   One entry per month + market + service line, stored in MySQL (table
-   margin_inputs) through margin-inputs.php. state.marginInputs is the local
-   copy, loaded on start-up and updated after each save.
-   ========================================================================== */
 
 state.marginInputs = {};
 state.marginInputsStatus = 'loading'; // loading | ready | error
@@ -731,10 +756,105 @@ const monthKey = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).
 const marginInputKey = (month, scope, category) => `${month}|${scope}|${category}`;
 const monthFromKey = (key) => { const [year, month] = key.split('-').map(Number); return new Date(year, month - 1, 1); };
 
-/* Entry that matches the period currently on screen (only whole calendar months). */
-function marginInputFor(windows) {
-    if (!windows || !isCalendarMonth(windows.current.start, windows.current.end)) return null;
-    return state.marginInputs[marginInputKey(monthKey(windows.current.start), state.scope, state.category)] || null;
+function selectedSingleMonth() {
+    const { start, end } = periodBounds();
+    return start && end && isCalendarMonth(start, end) ? start : null;
+}
+
+function marginEntryFor(month, invoices) {
+    const exact = state.marginInputs[marginInputKey(month, state.scope, state.category)];
+    if (exact || state.category !== 'all') return exact || null;
+    const parts = Object.keys(categoryLabels)
+        .map((category) => state.marginInputs[marginInputKey(month, state.scope, category)])
+        .filter(Boolean);
+    return parts.length ? combineServiceLines(month, parts, invoices) : null;
+}
+
+function combineServiceLines(month, parts, invoices) {
+    const revenue = {};
+    invoices.forEach((invoice) => {
+        const date = invoiceDate(invoice);
+        if (!date || monthKey(date) !== month) return;
+        parts.forEach((part) => {
+            revenue[part.category] = (revenue[part.category] || 0) + fullAmount(invoice) * categoryShare(invoice, part.category);
+        });
+    });
+    const revenueOf = (part) => revenue[part.category] || 0;
+    const sum = (field) => {
+        const rows = parts.filter((part) => hasValue(part[field]));
+        return rows.length ? rows.reduce((total, part) => total + Number(part[field]), 0) : null;
+    };
+    const weighted = (field) => {
+        const rows = parts.filter((part) => hasValue(part[field]));
+        if (!rows.length) return null;
+        const weight = rows.reduce((total, part) => total + revenueOf(part), 0);
+        if (weight > 0) return rows.reduce((total, part) => total + Number(part[field]) * revenueOf(part), 0) / weight;
+        return rows.reduce((total, part) => total + Number(part[field]), 0) / rows.length;
+    };
+    const cogsRevenue = parts.filter((part) => hasValue(part.cogs)).reduce((total, part) => total + revenueOf(part), 0);
+    return {
+        month,
+        scope: state.scope,
+        category: 'all',
+        cogs: sum('cogs'),
+        cogsTarget: sum('cogsTarget'),
+        margin: weighted('margin'),
+        marginTarget: weighted('marginTarget'),
+        bonusPool: sum('bonusPool'),
+        revenue: cogsRevenue > 0 ? cogsRevenue : null,
+        combinedFrom: parts.map((part) => part.category),
+        enteredAt: parts.map((part) => part.enteredAt).filter(Boolean).sort().pop() || null,
+    };
+}
+
+function marginEntriesInPeriod(invoices) {
+    const { start, end } = periodBounds();
+    const from = start ? monthKey(start) : null;
+    const to = end ? monthKey(end) : null;
+    const months = new Set(Object.values(state.marginInputs)
+        .filter((entry) => entry.scope === state.scope)
+        .filter((entry) => state.category === 'all' || entry.category === state.category)
+        .map((entry) => entry.month)
+        .filter((month) => (!from || month >= from) && (!to || month <= to)));
+    return [...months].sort()
+        .map((month) => marginEntryFor(month, invoices))
+        .filter(Boolean);
+}
+
+function aggregateMarginEntries(entries, invoices) {
+    if (!entries.length) return null;
+    const revenueByMonth = new Map();
+    invoices.forEach((invoice) => {
+        const date = invoiceDate(invoice);
+        if (!date) return;
+        const key = monthKey(date);
+        revenueByMonth.set(key, (revenueByMonth.get(key) || 0) + amount(invoice));
+    });
+    const revenueOf = (entry) => revenueByMonth.get(entry.month) || 0;
+    const sum = (field) => {
+        const rows = entries.filter((entry) => hasValue(entry[field]));
+        return rows.length ? rows.reduce((total, entry) => total + Number(entry[field]), 0) : null;
+    };
+    const weighted = (field) => {
+        const rows = entries.filter((entry) => hasValue(entry[field]));
+        if (!rows.length) return null;
+        const weight = rows.reduce((total, entry) => total + revenueOf(entry), 0);
+        if (weight > 0) return rows.reduce((total, entry) => total + Number(entry[field]) * revenueOf(entry), 0) / weight;
+        return rows.reduce((total, entry) => total + Number(entry[field]), 0) / rows.length;
+    };
+    const cogsRows = entries.filter((entry) => hasValue(entry.cogs));
+    const revenue = cogsRows.reduce((total, entry) => total + ('revenue' in entry ? Number(entry.revenue) || 0 : revenueOf(entry)), 0);
+    return {
+        cogs: sum('cogs'),
+        cogsTarget: sum('cogsTarget'),
+        margin: weighted('margin'),
+        marginTarget: weighted('marginTarget'),
+        bonusPool: sum('bonusPool'),
+        revenue: revenue > 0 ? revenue : null,
+        months: entries.map((entry) => entry.month),
+        combinedFrom: [...new Set(entries.flatMap((entry) => entry.combinedFrom || []))],
+        enteredAt: entries.map((entry) => entry.enteredAt).filter(Boolean).sort().pop() || null,
+    };
 }
 
 async function marginRequest(options = {}) {
@@ -764,7 +884,6 @@ async function loadMarginInputs() {
     renderScorecard();
 }
 
-/* Sends one entry to the database and keeps the stored version. */
 async function saveMarginInput(entry) {
     const { entry: saved } = await marginRequest({
         method: 'POST',
@@ -784,15 +903,50 @@ function renderMarginInputStatus() {
     const context = `${companyLabels[state.scope] || 'Global'}, ${state.category === 'all' ? 'all services' : categoryLabels[state.category]}`;
     if (meta.marginEntry) {
         const saved = new Date(meta.marginEntry.enteredAt).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-        node.textContent = `Figures saved for ${monthLabel(monthFromKey(meta.marginEntry.month))} (${context}), last updated ${saved}.`;
+        node.textContent = `Figures saved for ${monthLabel(monthFromKey(meta.marginEntry.month))} (${context}), last updated ${saved}.${combinedNote(meta.marginEntry)}`;
+        node.dataset.tone = 'manual';
+    } else if (meta.marginAggregate) {
+        const months = meta.marginAggregate.months;
+        const range = months.length === 1
+            ? monthLabel(monthFromKey(months[0]))
+            : `${months.length} months, ${monthLabel(monthFromKey(months[0]))} to ${monthLabel(monthFromKey(months[months.length - 1]))}`;
+        node.textContent = `Figures saved for ${range} (${context}). COGS and bonus pool are summed; margins are weighted by revenue.${combinedNote(meta.marginAggregate)}`;
         node.dataset.tone = 'manual';
     } else if (!meta.marginMonth) {
-        node.textContent = 'Pick a single month in the reporting period to see figures entered by hand.';
+        node.textContent = `No figures saved in this period (${context}).`;
         node.dataset.tone = 'muted';
     } else {
         node.textContent = `Nothing entered for ${monthLabel(meta.marginMonth)} (${context}) yet.${USE_DEMO_TARGETS ? ' Showing sample figures.' : ''}`;
         node.dataset.tone = USE_DEMO_TARGETS ? 'sample' : 'muted';
     }
+    appendSavedEntryLinks(node, meta);
+}
+
+function combinedNote(figures) {
+    const parts = (figures && figures.combinedFrom) || [];
+    return parts.length ? ` Combined from ${parts.map((key) => categoryLabels[key]).join(' + ')} entries.` : '';
+}
+
+function appendSavedEntryLinks(node, meta) {
+    if (meta.marginEntry || meta.marginAggregate) return;
+    const month = meta.marginMonth ? monthKey(meta.marginMonth) : null;
+    const entries = Object.values(state.marginInputs)
+        .sort((a, b) => (a.month === month ? 0 : 1) - (b.month === month ? 0 : 1) || b.month.localeCompare(a.month))
+        .slice(0, 4);
+    if (!entries.length) return;
+    const wrap = document.createElement('span');
+    wrap.className = 'saved-entry-links';
+    wrap.append(' Saved figures: ');
+    entries.forEach((entry, index) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'link-button';
+        button.textContent = `${monthLabel(monthFromKey(entry.month))} · ${companyLabels[entry.scope] || 'Global'} · ${entry.category === 'all' ? 'All services' : categoryLabels[entry.category]}`;
+        button.addEventListener('click', () => showMarginEntry(entry));
+        if (index) wrap.append(' · ');
+        wrap.append(button);
+    });
+    node.append(wrap);
 }
 
 function fillMarginValues(entry) {
@@ -833,7 +987,6 @@ function openMarginModal() {
 
 function closeMarginModal() { marginModal.close(); $('#open-margin-modal').focus(); }
 
-/* Reads and validates the form. Returns the entry, or null after showing an error. */
 function readMarginForm() {
     const { elements } = marginForm;
     if (!/^\d{4}-\d{2}$/.test(elements.month.value)) { showMarginError('Choose the month these figures belong to.', elements.month); return null; }
@@ -862,12 +1015,10 @@ function readMarginForm() {
     return entry;
 }
 
-/* Moves the dashboard to the month, market and service of the entry just saved. */
 function showMarginEntry(entry) {
     state.scope = entry.scope;
     state.category = entry.category;
-    document.querySelectorAll('.scope-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.scope === state.scope));
-    document.querySelectorAll('.category-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.category === state.category));
+    state.periodFromUrl = true;
 
     const start = monthFromKey(entry.month);
     const today = new Date();
@@ -879,11 +1030,8 @@ function showMarginEntry(entry) {
         state.period = 'custom';
         state.customStart = `${entry.month}-01`;
         state.customEnd = `${entry.month}-${String(endOfMonth(start).getDate()).padStart(2, '0')}`;
-        $('#date-from').value = state.customStart;
-        $('#date-to').value = state.customEnd;
     }
-    $('#period-select').value = state.period;
-    $('#date-range').hidden = state.period !== 'custom';
+    applyViewControls();
     renderAll();
 }
 
