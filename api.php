@@ -4,7 +4,6 @@ declare(strict_types=1);
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
-// Webhook URLs come from .env (see config.php).
 try {
     $config = require __DIR__ . '/config.php';
 } catch (Throwable $error) {
@@ -41,11 +40,6 @@ $companies = [
     ],
 ];
 
-/*
- * Markers written by the team inside Xero. The invoice text we look at is
- * Reference + line item descriptions + item/account codes.
- * Add or adjust patterns here — this is the single place that classifies invoices.
- */
 $markerPatterns = [
     'firstMonth' => [
         '/first\s*month/i',
@@ -58,20 +52,17 @@ $markerPatterns = [
     'upsell' => [
         '/up[-\s]?sell/i',
         '/cross[-\s]?sell/i',
+        '/expans[aã]o/i',
+        '/amplia[cç][aã]o/i',
+    ],
+    'referral' => [
         '/referral/i',
         '/indica[cç][aã]o/i',
     ],
 ];
 
-/*
- * Service line (SEO / PPC). In Xero the account shows as "201 - SEO - Recurring":
- * the code (201) comes on every line item; the name comes from the chart of
- * accounts and is attached to each line as AccountName by the n8n workflow.
- * Each line is checked in this order:
- *   1. AccountName patterns  2. AccountCode list  3. Description text (only
- *   when the line has no AccountName, e.g. before the workflow was updated).
- * Lines that match nothing count as "other" and only show under "All".
- */
+$lineMarkers = ['upsell'];
+
 $categoryRules = [
     'seo' => [
         'accountName' => ['/\bSEO\b/i'],
@@ -93,6 +84,9 @@ $sourceCounts = [];
 $sourceTypeCounts = [];
 $diagnostics = [];
 $categoryCounts = ['seo' => 0, 'ppc' => 0, 'other' => 0];
+$sourceErrors = [];
+$sourceWarnings = [];
+$sourceSeconds = [];
 
 foreach ($requested as $key) {
     if (!isset($companies[$key])) {
@@ -101,9 +95,15 @@ foreach ($requested as $key) {
     }
 
     $company = $companies[$key];
+    $startedAt = microtime(true);
     $response = fetchJson($company['url']);
+    $sourceSeconds[$key] = round(microtime(true) - $startedAt, 1);
+    $warnings = [];
+    $unconverted = 0;
 
     if (!$response['ok']) {
+        $sourceErrors[$key] = $response['error'];
+        $sourceWarnings[$key] = [];
         $errors[] = $company['label'] . ': ' . $response['error'];
         $sourceCounts[$key] = 0;
         $sourceTypeCounts[$key] = [];
@@ -112,11 +112,30 @@ foreach ($requested as $key) {
 
     $before = count($invoices);
     $sourceTypeCounts[$key] = [];
-    $diagnostics[$key] = ['withLineItems' => 0, 'withReference' => 0, 'firstMonthMarked' => 0, 'upsellMarked' => 0, 'withAccountName' => 0, 'seo' => 0, 'ppc' => 0, 'unclassified' => 0];
+    $diagnostics[$key] = ['withLineItems' => 0, 'withReference' => 0, 'firstMonthMarked' => 0, 'upsellMarked' => 0, 'referralMarked' => 0, 'withAccountName' => 0, 'seo' => 0, 'ppc' => 0, 'unclassified' => 0];
 
     foreach ($response['data'] as $invoice) {
-        if (!is_array($invoice) || !empty($invoice['_empty'])) {
+        if (!is_array($invoice)) {
             continue;
+        }
+        if (!empty($invoice['_empty'])) {
+            if (!empty($invoice['_error'])) {
+                $sourceErrors[$key] = 'Xero request failed inside n8n: ' . (string) $invoice['_error'];
+                $errors[] = $company['label'] . ': ' . $sourceErrors[$key];
+            }
+            if (($invoice['fxOk'] ?? true) === false) {
+                $warnings['fx'] = 'Live exchange rates unavailable';
+            }
+            if (!empty($invoice['accountsError'])) {
+                $warnings['accounts'] = 'Chart of accounts unavailable, SEO/PPC split may be incomplete';
+            }
+            continue;
+        }
+        if (!empty($invoice['accountsError'])) {
+            $warnings['accounts'] = 'Chart of accounts unavailable, SEO/PPC split may be incomplete';
+        }
+        if (isset($invoice['conversion']['ok']) && $invoice['conversion']['ok'] === false) {
+            $unconverted++;
         }
 
         $type = strtoupper((string) ($invoice['Type'] ?? 'UNKNOWN'));
@@ -129,7 +148,7 @@ foreach ($requested as $key) {
             $diagnostics[$key]['withReference']++;
         }
 
-        $slim = slimInvoice($invoice, $markerPatterns, $categoryRules);
+        $slim = slimInvoice($invoice, $markerPatterns, $categoryRules, $lineMarkers);
 
         $slim['companyKey'] = $key;
         $slim['company'] = $company['label'];
@@ -147,6 +166,9 @@ foreach ($requested as $key) {
         }
         if (!empty($slim['flags']['upsell'])) {
             $diagnostics[$key]['upsellMarked']++;
+        }
+        if (!empty($slim['flags']['referral'])) {
+            $diagnostics[$key]['referralMarked']++;
         }
         if (!empty($slim['hasAccountNames'])) {
             $diagnostics[$key]['withAccountName']++;
@@ -166,6 +188,10 @@ foreach ($requested as $key) {
     }
 
     $sourceCounts[$key] = count($invoices) - $before;
+    if ($unconverted > 0) {
+        $warnings['fx'] = $unconverted . ' invoice' . ($unconverted === 1 ? '' : 's') . ' converted with the fallback rate';
+    }
+    $sourceWarnings[$key] = array_values($warnings);
 }
 
 echo json_encode([
@@ -176,18 +202,18 @@ echo json_encode([
         return $carry;
     }, []),
     'sourceCounts' => $sourceCounts,
+    'sourceErrors' => (object) $sourceErrors,
+    'sourceWarnings' => (object) $sourceWarnings,
+    'sourceSeconds' => (object) $sourceSeconds,
     'sourceTypeCounts' => $sourceTypeCounts,
     'diagnostics' => $diagnostics,
     'categoryCounts' => $categoryCounts,
     'fetchedAt' => gmdate('c'),
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
-/**
- * Keeps only the fields the dashboard reads, plus the classification flags.
- * Xero payloads with line items are heavy; this keeps the browser payload small.
- */
-function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules): array
+function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules, array $lineMarkers): array
 {
+    $reference = (string) ($invoice['Reference'] ?? '');
     $descriptions = [];
     $categoryKeys = array_merge(array_keys($categoryRules), ['other']);
     $lineWeights = [];
@@ -211,35 +237,43 @@ function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules
         if (trim((string) ($line['AccountName'] ?? '')) !== '') {
             $hasAccountNames = true;
         }
-        $lineWeights[] = [
-            'category' => classifyLine($line, $categoryRules) ?? 'other',
-            'amount' => (float) ($line['LineAmount'] ?? 0),
-        ];
+        $lineText = [(string) ($line['Description'] ?? ''), (string) ($line['ItemCode'] ?? ''), (string) ($line['AccountName'] ?? '')];
         foreach ((array) ($line['Tracking'] ?? []) as $tracking) {
             if (is_array($tracking) && !empty($tracking['Option'])) {
                 $descriptions[] = (string) $tracking['Option'];
+                $lineText[] = (string) $tracking['Option'];
             }
         }
+        $lineFlags = [];
+        foreach ($lineMarkers as $marker) {
+            $lineFlags[$marker] = matchesAny(implode(' | ', $lineText), $markerPatterns[$marker] ?? [])
+                || matchesAny($reference, $markerPatterns[$marker] ?? []);
+        }
+        $lineWeights[] = [
+            'category' => classifyLine($line, $categoryRules) ?? 'other',
+            'amount' => (float) ($line['LineAmount'] ?? 0),
+            'flags' => $lineFlags,
+        ];
     }
 
     $haystack = trim(implode(' | ', array_filter(array_merge(
-        [(string) ($invoice['Reference'] ?? '')],
+        [$reference],
         $descriptions,
         $itemCodes
     ))));
 
     $flags = [];
     foreach ($markerPatterns as $flag => $patterns) {
-        $flags[$flag] = false;
-        foreach ($patterns as $pattern) {
-            if ($haystack !== '' && preg_match($pattern, $haystack) === 1) {
-                $flags[$flag] = true;
-                break;
-            }
-        }
+        $flags[$flag] = matchesAny($haystack, $patterns);
     }
 
     $categoryShares = categoryShares($lineWeights, $categoryKeys);
+    $markerShares = [];
+    foreach ($lineMarkers as $marker) {
+        $markerShares[$marker] = $lineWeights === [] && $flags[$marker]
+            ? $categoryShares
+            : categoryShares($lineWeights, $categoryKeys, static fn (array $line): bool => !empty($line['flags'][$marker]));
+    }
     $categories = [];
     foreach (array_keys($categoryRules) as $category) {
         if (($categoryShares[$category] ?? 0) > 0) {
@@ -275,13 +309,24 @@ function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules
         'markerText' => mb_substr($haystack, 0, 240),
         'categories' => $categories,
         'categoryShares' => $categoryShares,
+        'upsellShares' => $markerShares['upsell'] ?? null,
         'hasAccountNames' => $hasAccountNames,
     ];
 }
 
-/**
- * Returns the service line of one invoice line ("seo", "ppc"…) or null.
- */
+function matchesAny(string $text, array $patterns): bool
+{
+    if (trim($text) === '') {
+        return false;
+    }
+    foreach ($patterns as $pattern) {
+        if (preg_match($pattern, $text) === 1) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function classifyLine(array $line, array $categoryRules): ?string
 {
     $name = trim((string) ($line['AccountName'] ?? ''));
@@ -319,21 +364,17 @@ function classifyLine(array $line, array $categoryRules): ?string
     return null;
 }
 
-/**
- * Share of the invoice value that belongs to each service line, based on LineAmount.
- * A mixed invoice (SEO + PPC lines) is split proportionally, so the dashboard
- * shows only the SEO part or only the PPC part of it.
- */
-function categoryShares(array $lineWeights, array $categoryKeys): array
+function categoryShares(array $lineWeights, array $categoryKeys, ?callable $filter = null): array
 {
     $shares = array_fill_keys($categoryKeys, 0.0);
 
     if ($lineWeights === []) {
-        $shares['other'] = 1.0;
+        if ($filter === null) {
+            $shares['other'] = 1.0;
+        }
         return $shares;
     }
 
-    // Weighting strategies, in order: signed amounts, absolute amounts, line count.
     $strategies = [
         static fn (array $line): float => $line['amount'],
         static fn (array $line): float => abs($line['amount']),
@@ -342,10 +383,13 @@ function categoryShares(array $lineWeights, array $categoryKeys): array
 
     foreach ($strategies as $weight) {
         $sums = array_fill_keys($categoryKeys, 0.0);
+        $total = 0.0;
         foreach ($lineWeights as $line) {
-            $sums[$line['category']] += $weight($line);
+            $total += $weight($line);
+            if ($filter === null || $filter($line)) {
+                $sums[$line['category']] += $weight($line);
+            }
         }
-        $total = array_sum($sums);
         if (abs($total) >= 0.00001) {
             foreach ($sums as $category => $sum) {
                 $shares[$category] = round($sum / $total, 6);
