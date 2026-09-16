@@ -188,6 +188,10 @@ function asset(string $path): string
                         <p class="eyebrow">Growth</p>
                         <h2>New business and total MRR</h2>
                         <p class="section-copy">Actuals against plan for the selected period, plus the gap carried from earlier months.</p>
+                        <div class="manual-input-bar">
+                            <button type="button" class="input-button" id="open-targets-modal" aria-haspopup="dialog" aria-controls="targets-modal"><span aria-hidden="true">+</span> Set Target MRR</button>
+                            <p class="manual-input-status" id="targets-input-status" aria-live="polite"></p>
+                        </div>
                     </div>
                     <div class="filter-stack">
                         <div class="scope-tabs" role="tablist" aria-label="Company scope">
@@ -211,7 +215,7 @@ function asset(string $path): string
                 <div class="split-grid">
                     <article class="panel target-panel">
                         <div class="panel-header">
-                            <div><p class="eyebrow">Acquisition</p><h3>New business (MRR)</h3></div>
+                            <div><p class="eyebrow">Acquisition</p><h3>New Business (MRR)</h3></div>
                         </div>
                         <div class="target-block" id="newbiz-target"></div>
                     </article>
@@ -226,19 +230,19 @@ function asset(string $path): string
 
                 <div class="scorecard-grid is-three">
                     <article class="stat-card">
-                        <span class="stat-label">Total difference</span>
+                        <span class="stat-label">Total Difference</span>
                         <strong id="mrr-difference">—</strong>
                         <p class="stat-note">Total MRR minus target, this period</p>
                     </article>
                     <article class="stat-card">
-                        <span class="stat-label">To target</span>
+                        <span class="stat-label">To Target</span>
                         <strong id="mrr-to-target">—</strong>
                         <p class="stat-note">Still missing to close the period</p>
                     </article>
                     <article class="stat-card">
-                        <span class="stat-label">Accumulated gap / excess</span>
+                        <span class="stat-label">Accumulated Gap/Excess</span>
                         <strong id="mrr-accumulated">—</strong>
-                        <p class="stat-note">Carried from the start of the year</p>
+                        <p class="stat-note" id="mrr-accumulated-note">Carried from the start of the year</p>
                     </article>
                 </div>
 
@@ -406,6 +410,58 @@ function asset(string $path): string
                 <div class="modal-actions">
                     <button type="button" class="button-secondary" data-close-modal>Cancel</button>
                     <button type="submit" class="button-primary" id="margin-form-submit">Save figures</button>
+                </div>
+            </footer>
+        </form>
+    </dialog>
+    <dialog class="modal" id="targets-modal" aria-labelledby="targets-modal-title">
+        <form class="modal-form" id="targets-form" novalidate>
+            <header class="modal-header">
+                <div>
+                    <p class="eyebrow">Manual input</p>
+                    <h2 id="targets-modal-title">Target MRR</h2>
+                </div>
+                <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+            </header>
+            <p class="modal-copy">Target MRR for one month, market and service line, in USD. Target New Business (MRR) is derived from it: Target MRR minus Total MRR.</p>
+
+            <fieldset class="form-group">
+                <legend>Applies to</legend>
+                <div class="form-grid is-three">
+                    <label class="field"><span>Month</span><input type="month" name="month" autofocus></label>
+                    <label class="field"><span>Market</span>
+                        <select name="scope">
+                            <option value="all">Global</option>
+                            <option value="br">Brazil</option>
+                            <option value="mx">Mexico</option>
+                            <option value="pa">Panama</option>
+                            <option value="int">International</option>
+                        </select>
+                    </label>
+                    <label class="field"><span>Service</span>
+                        <select name="category">
+                            <option value="all">All</option>
+                            <option value="seo">SEO</option>
+                            <option value="ppc">PPC</option>
+                        </select>
+                    </label>
+                </div>
+            </fieldset>
+
+            <fieldset class="form-group">
+                <legend>Target</legend>
+                <div class="form-grid">
+                    <label class="field"><span>Target MRR</span><div class="input-affix"><i>$</i><input type="number" name="totalMrrTarget" min="0" step="0.01" inputmode="decimal" required></div></label>
+                </div>
+            </fieldset>
+
+            <p class="form-error" id="targets-form-error" role="alert" hidden></p>
+
+            <footer class="modal-footer">
+                <p class="modal-hint" id="targets-form-hint"></p>
+                <div class="modal-actions">
+                    <button type="button" class="button-secondary" data-close-modal>Cancel</button>
+                    <button type="submit" class="button-primary" id="targets-form-submit">Save Target MRR</button>
                 </div>
             </footer>
         </form>
