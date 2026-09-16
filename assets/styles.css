@@ -114,6 +114,8 @@
 .manual-input-status[data-tone="manual"]{color:var(--green);font-weight:600}
 .manual-input-status[data-tone="sample"]{color:#a06f18}
 .manual-input-status[data-tone="error"]{color:var(--red-deep);font-weight:600}
+.manual-input-status .link-button{padding:0;border:0;background:none;font:inherit;font-weight:600;color:var(--ink,inherit);text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.manual-input-status .link-button:hover{color:var(--red-deep)}
 
 .modal{border:0;padding:0;width:min(600px,calc(100vw - 32px));max-height:calc(100vh - 48px);background:var(--panel);color:var(--ink);box-shadow:0 24px 60px rgba(32,37,34,.22);border-top:3px solid var(--red)}
 .modal::backdrop{background:rgba(32,37,34,.55)}
