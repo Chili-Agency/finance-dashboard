@@ -33,7 +33,7 @@ function asset(string $path): string
             <div class="sidebar-rule"></div>
             <p class="eyebrow">Workspace</p>
             <nav class="main-nav" aria-label="Main navigation">
-                <button class="nav-item is-active" data-view="overview" data-title="Overview"><span class="nav-icon">◒</span>Overview</button>
+                <button class="nav-item is-active" data-view="overview" data-title="Overview"><span class="nav-icon">◒</span>Invoices</button>
                 <button class="nav-item" data-view="mrr" data-title="MRR tracking"><span class="nav-icon">↗</span>MRR tracking</button>
                 <button class="nav-item" data-view="retention" data-title="Retention"><span class="nav-icon">◐</span>Retention</button>
                 <button class="nav-item" data-view="targets" data-title="Targets"><span class="nav-icon">◎</span>Targets</button>
@@ -65,7 +65,7 @@ function asset(string $path): string
             <header class="topbar">
                 <div>
                     <p class="eyebrow">Finance control room</p>
-                    <h1 id="page-title">Overview</h1>
+                    <h1 id="page-title">Invoices</h1>
                 </div>
                 <div class="topbar-actions">
                     <label class="period-picker">
