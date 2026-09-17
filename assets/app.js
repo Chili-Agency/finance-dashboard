@@ -3,6 +3,15 @@ const companyLabels = { br: 'Brazil', mx: 'Mexico', pa: 'Panama', int: 'Internat
 const categoryLabels = { seo: 'SEO', ppc: 'PPC' };
 const colors = { paid: '#57745d', late: '#d49b35', open: '#55778a', authorised: '#e84d2c', voided: '#a5a6a0' };
 
+// Sessão expirada em qualquer chamada ao backend: volta para o login.
+function redirectIfSignedOut(response) {
+    if (response.status === 401) {
+        window.location.href = 'login.php?expired=1';
+        throw new Error('Your session has ended. Redirecting to sign in…');
+    }
+    return response;
+}
+
 const $ = (selector) => document.querySelector(selector);
 const money = (value) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value || 0);
 const number = (value) => new Intl.NumberFormat('en-US').format(value || 0);
@@ -204,7 +213,7 @@ async function loadInvoices() {
     $('#refresh-button').disabled = true;
     renderSyncStatus();
     try {
-        const response = await fetch('api.php?source=all', { cache: 'no-store' });
+        const response = redirectIfSignedOut(await fetch('api.php?source=all', { cache: 'no-store' }));
         const data = await response.json().catch(() => null);
         if (!response.ok || !data) {
             throw new Error(data && Array.isArray(data.errors) && data.errors.length ? data.errors.join(' · ') : `The dashboard server answered HTTP ${response.status}`);
@@ -1078,7 +1087,7 @@ function aggregateMarginEntries(entries, invoices) {
 }
 
 async function marginRequest(options = {}) {
-    const response = await fetch(MARGIN_ENDPOINT, { cache: 'no-store', ...options });
+    const response = redirectIfSignedOut(await fetch(MARGIN_ENDPOINT, { cache: 'no-store', ...options }));
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || `The server answered HTTP ${response.status}.`);
     return body;
@@ -1434,7 +1443,7 @@ function accumulatedGap(invoices, until) {
 }
 
 async function targetsRequest(options = {}) {
-    const response = await fetch(TARGETS_ENDPOINT, { cache: 'no-store', ...options });
+    const response = redirectIfSignedOut(await fetch(TARGETS_ENDPOINT, { cache: 'no-store', ...options }));
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || `The server answered HTTP ${response.status}.`);
     return body;

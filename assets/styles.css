@@ -204,3 +204,33 @@
 @media(max-width:1280px){.metric-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:700px){.metric-grid{grid-template-columns:1fr}}
 .modal-hint{margin:0 auto 0 0;color:var(--muted);font-size:10px;line-height:1.5}
+/* ---- Login & sessão ---- */
+.user-card{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #3b453f;border-top:0;padding:11px}
+.user-meta{min-width:0}
+.user-meta strong{display:block;font-size:11px;font-weight:600;color:#f4f1eb}
+.user-meta small{display:block;color:#89948b;font:400 9px 'DM Mono',monospace;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.logout-button{flex:0 0 auto;border:1px solid #4a544d;background:transparent;color:#c9cfca;padding:6px 9px;font:600 10px Manrope;cursor:pointer}
+.logout-button:hover{border-color:var(--red);color:#fff}
+.logout-button:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+.login-body{background:var(--paper)}
+.login-shell{display:grid;grid-template-columns:minmax(260px,380px) 1fr;min-height:100vh}
+.login-aside{background:#202522;color:#f4f1eb;padding:32px 30px 26px;display:flex;flex-direction:column}
+.login-aside .brand{cursor:default}
+.login-aside-copy{margin-top:auto;padding-top:40px;border-top:1px solid #3c443f}
+.login-aside .eyebrow{color:#727d74}
+.login-lede{margin:0;max-width:30ch;font-size:19px;font-weight:600;line-height:1.4;letter-spacing:-.03em;color:#e6e3dc}
+.login-aside .sidebar-note{margin-top:28px}
+.login-main{display:grid;place-items:center;padding:40px 24px}
+.login-form{width:100%;max-width:360px;display:grid;gap:18px}
+.login-form h1{margin:0;font-size:34px;letter-spacing:-.05em}
+.login-copy{margin:-10px 0 6px;color:var(--muted);font-size:12px}
+.login-notice{margin:0}
+.login-form .form-error{margin:0}
+.login-submit{width:100%;margin-top:6px;font-size:12px}
+@media(max-width:700px){
+  .login-shell{grid-template-columns:1fr;grid-template-rows:auto 1fr}
+  .login-aside{padding:18px 20px}
+  .login-aside .brand{justify-content:center}
+  .login-aside-copy,.login-aside .sidebar-note{display:none}
+  .login-main{place-items:start center;padding-top:36px}
+}

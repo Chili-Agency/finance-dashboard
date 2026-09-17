@@ -1,5 +1,9 @@
 <?php
 declare(strict_types=1);
+require __DIR__ . '/auth.php';
+$currentUser = auth_require_page();
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+
 function asset(string $path): string
 {
     $file = __DIR__ . '/' . $path;
@@ -42,6 +46,16 @@ function asset(string $path): string
                         <div><strong id="sync-status">Loading data…</strong><small id="sync-time">Contacting the n8n workflows</small></div>
                     </div>
                     <ul class="sync-sources" id="sync-sources"></ul>
+                </div>
+                <div class="user-card">
+                    <div class="user-meta">
+                        <strong><?= htmlspecialchars($currentUser['name'], ENT_QUOTES, 'UTF-8') ?></strong>
+                        <small><?= htmlspecialchars($currentUser['email'], ENT_QUOTES, 'UTF-8') ?></small>
+                    </div>
+                    <form method="post" action="logout.php">
+                        <input type="hidden" name="csrf" value="<?= htmlspecialchars(auth_csrf_token(), ENT_QUOTES, 'UTF-8') ?>">
+                        <button type="submit" class="logout-button">Sign out</button>
+                    </form>
                 </div>
                 <p class="sidebar-note">Four entities · three markets<br>USD reporting view</p>
             </div>
