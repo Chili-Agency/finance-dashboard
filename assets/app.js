@@ -219,6 +219,7 @@ async function loadInvoices() {
             throw new Error(data && Array.isArray(data.errors) && data.errors.length ? data.errors.join(' · ') : `The dashboard server answered HTTP ${response.status}`);
         }
         state.invoices = Array.isArray(data.invoices) ? data.invoices : [];
+        state.monthlyRows = null;
         state.sourceTypeCounts = data.sourceTypeCounts || {};
         state.categoryCounts = data.categoryCounts || {};
         const errors = Array.isArray(data.errors) ? data.errors : [];
@@ -358,7 +359,7 @@ function renderOverview() {
 
 function monthSeries() {
     const bounds = periodBounds();
-    const source = state.invoices.filter((invoice) => isRevenue(invoice) && inCategory(invoice) && (state.scope === 'all' || invoice.companyKey === state.scope));
+    const source = state.invoices.filter((invoice) => isBillable(invoice) && inCategory(invoice) && (state.scope === 'all' || invoice.companyKey === state.scope));
     const dates = source.map(invoiceDate).filter(Boolean).filter((date) => (!bounds.start || date >= bounds.start) && (!bounds.end || date <= bounds.end));
     if (!dates.length) return { labels: [], values: [] };
     const first = new Date(Math.min(...dates.map((date) => date.getTime()))); first.setDate(1);
@@ -368,7 +369,7 @@ function monthSeries() {
     return { labels: months.map(monthLabel), values: months.map((month) => source.filter((invoice) => { const date = invoiceDate(invoice); return date && date.getFullYear() === month.getFullYear() && date.getMonth() === month.getMonth() && (!bounds.start || date >= bounds.start) && (!bounds.end || date <= bounds.end); }).reduce((sum, invoice) => sum + amount(invoice), 0)) };
 }
 
-function renderMrr() { const series = monthSeries(); const selectedInvoices = filteredInvoices(); const selected = selectedInvoices.reduce((sum, invoice) => sum + amount(invoice), 0); $('#mrr-total').textContent = money(selected); $('#mrr-label').textContent = periodBounds().label; if (state.mrrChart) state.mrrChart.destroy(); state.mrrChart = new Chart($('#mrr-chart'), { type: 'bar', data: { labels: series.labels, datasets: [{ data: series.values, backgroundColor: series.values.map((_, index) => index === series.values.length - 1 ? colors.authorised : '#d9d8d0'), borderRadius: 2, barPercentage: .58 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => ` ${money(context.raw)}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 10 } } }, y: { beginAtZero: true, grid: { color: '#e5e3dc' }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 9 }, callback: (value) => money(value) } } } } }); $('#mrr-empty').classList.toggle('is-hidden', series.values.length > 0); $('#mrr-breakdown').innerHTML = Object.entries(companyLabels).map(([key, label]) => { const total = selectedInvoices.filter((invoice) => invoice.companyKey === key).reduce((sum, invoice) => sum + amount(invoice), 0); const dimmed = state.scope !== 'all' && state.scope !== key; return `<div class="breakdown-item${dimmed ? ' is-dimmed' : ''}"><span>${label}</span><strong>${money(total)}</strong></div>`; }).join(''); }
+function renderMrr() { const series = monthSeries(); const selectedInvoices = filteredInvoices().filter(isBillable); const selected = selectedInvoices.reduce((sum, invoice) => sum + amount(invoice), 0); $('#mrr-total').textContent = money(selected); $('#mrr-label').textContent = periodBounds().label; if (state.mrrChart) state.mrrChart.destroy(); state.mrrChart = new Chart($('#mrr-chart'), { type: 'bar', data: { labels: series.labels, datasets: [{ data: series.values, backgroundColor: series.values.map((_, index) => index === series.values.length - 1 ? colors.authorised : '#d9d8d0'), borderRadius: 2, barPercentage: .58 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => ` ${money(context.raw)}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 10 } } }, y: { beginAtZero: true, grid: { color: '#e5e3dc' }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 9 }, callback: (value) => money(value) } } } } }); $('#mrr-empty').classList.toggle('is-hidden', series.values.length > 0); $('#mrr-breakdown').innerHTML = Object.entries(companyLabels).map(([key, label]) => { const total = selectedInvoices.filter((invoice) => invoice.companyKey === key).reduce((sum, invoice) => sum + amount(invoice), 0); const dimmed = state.scope !== 'all' && state.scope !== key; return `<div class="breakdown-item${dimmed ? ' is-dimmed' : ''}"><span>${label}</span><strong>${money(total)}</strong></div>`; }).join(''); }
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[character])); }
 function renderAll() { renderOverview(); renderMrr(); renderScorecard(); syncViewToUrl(); }
@@ -582,57 +583,12 @@ function monthlyHistory(invoices, until) {
     }));
 }
 
-function buildScorecard() {
-    const manual = USE_DEMO_TARGETS ? DEMO_MANUAL_INPUTS : MANUAL_INPUTS;
-    const scorecard = {
-        retention: { initialPortfolio: null, churned: null, upsells: null, retained: null, target: manual.retentionTarget, activeClients: null },
-        newBusiness: { actual: null, target: manual.newBusinessTarget },
-        totalMrr: { actual: null, target: manual.totalMrrTarget, accumulatedGap: manual.accumulatedGap, history: [] },
-        cogs: { actual: manual.cogs, target: manual.cogsTarget },
-        margin: { current: manual.margin, target: manual.marginTarget, bonusPool: manual.bonusPool },
-    };
-    const meta = { invoiceCount: 0, markedFirstMonth: 0, markedUpsell: 0, taggedUpsell: 0, crossSells: 0, upsellOutsideBase: 0, reactivated: null, newClients: 0, lostClients: 0, detection: 'none' };
-
-    const invoices = scopedInvoices();
-    const windows = scorecardWindows(invoices);
-    state.scorecardMeta = meta;
-
-    const targetWindow = windows ? windows.current : fixedWindow();
-    const targets = targetWindow ? targetsForWindow(targetWindow) : null;
-    meta.targets = targets;
-    if (targets) {
-        if (hasValue(targets.totalMrrTarget)) scorecard.totalMrr.target = targets.totalMrrTarget;
-    }
-
-    const singleMonth = selectedSingleMonth();
-    const entry = singleMonth ? marginEntryFor(monthKey(singleMonth), invoices) : null;
-    const aggregate = singleMonth ? null : aggregateMarginEntries(marginEntriesInPeriod(invoices), invoices);
-    meta.marginEntry = entry;
-    meta.marginAggregate = aggregate;
-    meta.marginMonth = singleMonth;
-    if (entry) {
-        scorecard.cogs = { actual: entry.cogs, target: entry.cogsTarget };
-        if ('revenue' in entry) scorecard.cogs.revenue = entry.revenue;
-        scorecard.margin = { current: entry.margin, target: entry.marginTarget, bonusPool: entry.bonusPool };
-    } else if (aggregate) {
-        scorecard.cogs = { actual: aggregate.cogs, target: aggregate.cogsTarget, revenue: aggregate.revenue };
-        scorecard.margin = { current: aggregate.margin, target: aggregate.marginTarget, bonusPool: aggregate.bonusPool };
-    }
-
-    if (!windows) { state.scorecard = scorecard; return; }
-
-    meta.currentLabel = windows.current.label;
-    meta.previousLabel = windows.previous.label;
-    meta.priorLabel = windows.beforePrevious.label;
-
+// Dados pré-calculados de um recorte (mercado + serviço): usados pelo scorecard e pelas tabelas mensais.
+// Depende de state.scope / state.category, como o resto do scorecard.
+function metricContext(invoices) {
     const everyLine = inScopeBillable();
-    const current = invoices.filter((invoice) => inWindow(invoiceDate(invoice), windows.current));
-    const previous = invoices.filter((invoice) => inWindow(invoiceDate(invoice), windows.previous));
-    const currentByContact = totalsByContact(current);
-    const baseContacts = new Set(everyLine.filter((invoice) => inWindow(invoiceDate(invoice), windows.previous)).map(contactKey));
-    const currentLines = totalsByContactLine(current);
-    const previousLines = totalsByContactLine(previous);
-
+    const byMonth = groupByMonth(invoices);
+    const everyByMonth = groupByMonth(everyLine);
     const firstSeen = new Map();
     let datasetStart = null;
     everyLine.forEach((invoice) => {
@@ -643,7 +599,35 @@ function buildScorecard() {
         const known = firstSeen.get(key);
         if (!known || date < known) firstSeen.set(key, date);
     });
-    const historyAvailable = Boolean(datasetStart) && datasetStart < windows.current.start;
+    return { invoices, everyLine, byMonth, everyByMonth, firstSeen, datasetStart };
+}
+
+function groupByMonth(invoices) {
+    const map = new Map();
+    invoices.forEach((invoice) => {
+        const date = invoiceDate(invoice);
+        if (!date) return;
+        const key = monthKey(date);
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(invoice);
+    });
+    return map;
+}
+
+// Mês fechado usa o índice por mês; janelas personalizadas filtram a lista inteira.
+function invoicesInWindow(list, buckets, window) {
+    if (isCalendarMonth(window.start, window.end)) return buckets.get(monthKey(window.start)) || [];
+    return list.filter((invoice) => inWindow(invoiceDate(invoice), window));
+}
+
+function measureWindow(ctx, windows, meta) {
+    const current = invoicesInWindow(ctx.invoices, ctx.byMonth, windows.current);
+    const previous = invoicesInWindow(ctx.invoices, ctx.byMonth, windows.previous);
+    const currentByContact = totalsByContact(current);
+    const baseContacts = new Set(invoicesInWindow(ctx.everyLine, ctx.everyByMonth, windows.previous).map(contactKey));
+    const currentLines = totalsByContactLine(current);
+    const previousLines = totalsByContactLine(previous);
+    const historyAvailable = Boolean(ctx.datasetStart) && ctx.datasetStart < windows.current.start;
 
     const newContacts = new Set();
     current.forEach((invoice) => {
@@ -655,7 +639,7 @@ function buildScorecard() {
     });
     if (historyAvailable) {
         currentByContact.forEach((_, key) => {
-            const first = firstSeen.get(key);
+            const first = ctx.firstSeen.get(key);
             if (first && first >= windows.current.start) newContacts.add(key);
         });
     }
@@ -697,15 +681,79 @@ function buildScorecard() {
         if (newContacts.has(key)) { newBusiness += value; meta.newClients += 1; } else { reactivated += value; }
     });
 
-    const hasBase = baseContacts.size > 0;
-    scorecard.retention.initialPortfolio = hasBase ? initial : null;
-    scorecard.retention.churned = hasBase ? churned : null;
-    scorecard.retention.upsells = hasBase ? expansion : null;
-    scorecard.retention.retained = hasBase ? retained : null;
-    scorecard.retention.activeClients = currentByContact.size;
+    meta.invoiceCount = current.length;
+    meta.reactivated = reactivated;
 
-    scorecard.newBusiness.actual = newBusiness;
-    scorecard.totalMrr.actual = current.reduce((sum, invoice) => sum + amount(invoice), 0);
+    return {
+        hasBase: baseContacts.size > 0,
+        initial,
+        churned,
+        expansion,
+        retained,
+        activeClients: currentByContact.size,
+        newBusiness,
+        reactivated,
+        totalMrr: current.reduce((sum, invoice) => sum + amount(invoice), 0),
+        invoiceCount: current.length,
+    };
+}
+
+function emptyScorecardMeta() {
+    return { invoiceCount: 0, markedFirstMonth: 0, markedUpsell: 0, taggedUpsell: 0, crossSells: 0, upsellOutsideBase: 0, reactivated: null, newClients: 0, lostClients: 0, detection: 'none' };
+}
+
+function buildScorecard() {
+    const manual = USE_DEMO_TARGETS ? DEMO_MANUAL_INPUTS : MANUAL_INPUTS;
+    const scorecard = {
+        retention: { initialPortfolio: null, churned: null, upsells: null, retained: null, target: manual.retentionTarget, activeClients: null },
+        newBusiness: { actual: null, target: manual.newBusinessTarget },
+        totalMrr: { actual: null, target: manual.totalMrrTarget, accumulatedGap: manual.accumulatedGap, history: [] },
+        cogs: { actual: manual.cogs, target: manual.cogsTarget },
+        margin: { current: manual.margin, target: manual.marginTarget, bonusPool: manual.bonusPool },
+    };
+    const meta = emptyScorecardMeta();
+
+    const invoices = scopedInvoices();
+    const windows = scorecardWindows(invoices);
+    state.scorecardMeta = meta;
+
+    const targetWindow = windows ? windows.current : fixedWindow();
+    const targets = targetWindow ? targetsForWindow(targetWindow) : null;
+    meta.targets = targets;
+    if (targets) {
+        if (hasValue(targets.totalMrrTarget)) scorecard.totalMrr.target = targets.totalMrrTarget;
+    }
+
+    const singleMonth = selectedSingleMonth();
+    const entry = singleMonth ? marginEntryFor(monthKey(singleMonth), invoices) : null;
+    const aggregate = singleMonth ? null : aggregateMarginEntries(marginEntriesInPeriod(invoices), invoices);
+    meta.marginEntry = entry;
+    meta.marginAggregate = aggregate;
+    meta.marginMonth = singleMonth;
+    if (entry) {
+        scorecard.cogs = { actual: entry.cogs, target: entry.cogsTarget };
+        if ('revenue' in entry) scorecard.cogs.revenue = entry.revenue;
+        scorecard.margin = { current: entry.margin, target: entry.marginTarget, bonusPool: entry.bonusPool };
+    } else if (aggregate) {
+        scorecard.cogs = { actual: aggregate.cogs, target: aggregate.cogsTarget, revenue: aggregate.revenue };
+        scorecard.margin = { current: aggregate.margin, target: aggregate.marginTarget, bonusPool: aggregate.bonusPool };
+    }
+
+    if (!windows) { state.scorecard = scorecard; return; }
+
+    meta.currentLabel = windows.current.label;
+    meta.previousLabel = windows.previous.label;
+    meta.priorLabel = windows.beforePrevious.label;
+
+    const result = measureWindow(metricContext(invoices), windows, meta);
+    scorecard.retention.initialPortfolio = result.hasBase ? result.initial : null;
+    scorecard.retention.churned = result.hasBase ? result.churned : null;
+    scorecard.retention.upsells = result.hasBase ? result.expansion : null;
+    scorecard.retention.retained = result.hasBase ? result.retained : null;
+    scorecard.retention.activeClients = result.activeClients;
+
+    scorecard.newBusiness.actual = result.newBusiness;
+    scorecard.totalMrr.actual = result.totalMrr;
     if (hasValue(scorecard.totalMrr.target)) {
         scorecard.newBusiness.target = Math.max(0, Number(scorecard.totalMrr.target) - scorecard.totalMrr.actual);
     }
@@ -713,9 +761,6 @@ function buildScorecard() {
     const carried = accumulatedGap(invoices, windows.current.end);
     meta.accumulated = carried;
     if (carried) scorecard.totalMrr.accumulatedGap = carried.gap;
-
-    meta.invoiceCount = current.length;
-    meta.reactivated = reactivated;
 
     state.scorecard = scorecard;
 }
@@ -960,6 +1005,7 @@ function renderScorecard() {
     renderRetentionSection();
     renderTargetsSection();
     renderMarginSection();
+    renderMonthlyTables();
 }
 
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => {
@@ -1322,9 +1368,9 @@ function renderMarginEntriesTable() {
     empty.classList.toggle('is-hidden', !message || rows.length > 0);
 }
 
-document.querySelectorAll('.entries-tab').forEach((button) => button.addEventListener('click', () => {
+document.querySelectorAll('.entries-tab:not([data-monthly])').forEach((button) => button.addEventListener('click', () => {
     state.marginEntriesMode = button.dataset.entries;
-    document.querySelectorAll('.entries-tab').forEach((item) => item.classList.toggle('is-active', item === button));
+    document.querySelectorAll('.entries-tab:not([data-monthly])').forEach((item) => item.classList.toggle('is-active', item === button));
     renderMarginEntriesTable();
 }));
 
@@ -1451,6 +1497,7 @@ async function targetsRequest(options = {}) {
 
 function storeTargetEntry(entry) {
     state.targetInputs[marginInputKey(entry.month, entry.scope, entry.category)] = entry;
+    state.monthlyRows = null;
 }
 
 async function loadTargetInputs() {
@@ -1459,6 +1506,7 @@ async function loadTargetInputs() {
     try {
         const { entries = [] } = await targetsRequest();
         state.targetInputs = {};
+        state.monthlyRows = null;
         entries.forEach(storeTargetEntry);
         state.targetInputsStatus = 'ready';
     } catch (error) {
@@ -1514,13 +1562,13 @@ function loadTargetEntryIntoForm() {
     $('#targets-form-submit').textContent = entry ? 'Update Target MRR' : 'Save Target MRR';
 }
 
-function openTargetsModal() {
+function openTargetsModal(entry = null) {
     const targets = (state.scorecardMeta || {}).targets;
     targetsForm.reset();
     showTargetError('');
-    targetsForm.elements.month.value = targets && targets.months.length ? targets.months[targets.months.length - 1] : monthKey(new Date());
-    targetsForm.elements.scope.value = state.scope;
-    targetsForm.elements.category.value = state.category;
+    targetsForm.elements.month.value = entry ? entry.month : targets && targets.months.length ? targets.months[targets.months.length - 1] : monthKey(new Date());
+    targetsForm.elements.scope.value = entry ? entry.scope : state.scope;
+    targetsForm.elements.category.value = entry ? entry.category : state.category;
     loadTargetEntryIntoForm();
     targetsModal.showModal();
 }
@@ -1551,7 +1599,7 @@ function readTargetsForm() {
     return entry;
 }
 
-$('#open-targets-modal').addEventListener('click', openTargetsModal);
+$('#open-targets-modal').addEventListener('click', () => openTargetsModal());
 targetsModal.querySelectorAll('[data-close-modal]').forEach((button) => button.addEventListener('click', closeTargetsModal));
 targetsModal.addEventListener('click', (event) => { if (event.target === targetsModal) closeTargetsModal(); });
 ['month', 'scope', 'category'].forEach((name) => targetsForm.elements[name].addEventListener('change', loadTargetEntryIntoForm));
@@ -1583,7 +1631,216 @@ targetsForm.addEventListener('submit', async (event) => {
     }
 });
 
+// ---- Tabelas mensais (MRR, Retention, Targets) ----
+// Uma linha por mês × mercado × serviço, calculada a partir das invoices,
+// com a mesma lógica do scorecard. O resultado fica em cache até as
+// invoices ou os targets mudarem.
+
+state.monthlyRows = null;
+state.monthlyModes = { mrr: 'all', retention: 'all', targets: 'all' };
+
+const serviceName = (category) => (category === 'all' ? 'All services' : categoryLabels[category] || category);
+const toneClass = (value, lowerIsBetter = false) => (!hasValue(value) || Number(value) === 0 ? '' : (Number(value) > 0) !== lowerIsBetter ? 'value-up' : 'value-down');
+const signedPercent = (value) => (hasValue(value) ? `${Number(value) > 0 ? '+' : Number(value) < 0 ? '−' : ''}${Math.abs(Number(value) * 100).toFixed(1)}%` : DASH);
+
+function withView(scope, category, run) {
+    const saved = { scope: state.scope, category: state.category };
+    state.scope = scope;
+    state.category = category;
+    try { return run(); } finally { state.scope = saved.scope; state.category = saved.category; }
+}
+
+function reportingMonths() {
+    let first = null;
+    let last = null;
+    state.invoices.forEach((invoice) => {
+        if (!isBillable(invoice)) return;
+        const date = invoiceDate(invoice);
+        if (!date) return;
+        if (!first || date < first) first = date;
+        if (!last || date > last) last = date;
+    });
+    if (!first) return [];
+    const today = startOfToday();
+    return monthKeysBetween(first, last > today ? last : today).map(monthFromKey);
+}
+
+function buildMonthlyRows() {
+    const months = reportingMonths();
+    const retentionTarget = (USE_DEMO_TARGETS ? DEMO_MANUAL_INPUTS : MANUAL_INPUTS).retentionTarget;
+    const rows = { mrr: [], retention: [], targets: [] };
+
+    VIEW_SCOPES.forEach((scope) => VIEW_CATEGORIES.forEach((category) => withView(scope, category, () => {
+        const ctx = metricContext(scopedInvoices());
+        let previousMrr = null;
+        let yearGap = 0;
+        let yearGapMonths = 0;
+
+        months.forEach((start) => {
+            const key = monthKey(start);
+            if (start.getMonth() === 0) { yearGap = 0; yearGapMonths = 0; }
+            const current = { start, end: endOfMonth(start), label: monthLabel(start) };
+            const previous = previousWindowOf(current);
+            const meta = emptyScorecardMeta();
+            const m = measureWindow(ctx, { current, previous, beforePrevious: previousWindowOf(previous) }, meta);
+            const base = { key: marginInputKey(key, scope, category), month: key, scope, category };
+            const target = resolveTarget(key, scope, category)?.totalMrrTarget ?? null;
+
+            if (hasValue(target)) { yearGap += m.totalMrr - Number(target); yearGapMonths += 1; }
+
+            if (m.invoiceCount > 0) {
+                rows.mrr.push({
+                    ...base,
+                    mrr: m.totalMrr,
+                    change: previousMrr === null ? null : m.totalMrr - previousMrr,
+                    changeRate: previousMrr ? (m.totalMrr - previousMrr) / previousMrr : null,
+                    invoices: m.invoiceCount,
+                    clients: m.activeClients,
+                    average: m.activeClients ? m.totalMrr / m.activeClients : null,
+                });
+            }
+
+            if (m.hasBase || m.activeClients > 0) {
+                rows.retention.push({
+                    ...base,
+                    initial: m.hasBase ? m.initial : null,
+                    churned: m.hasBase ? m.churned : null,
+                    upsells: m.hasBase ? m.expansion : null,
+                    retained: m.hasBase ? m.retained : null,
+                    rate: m.hasBase ? share(m.retained, m.initial) : null,
+                    target: retentionTarget,
+                    lostClients: m.hasBase ? meta.lostClients : null,
+                });
+            }
+
+            if (m.invoiceCount > 0 || hasValue(target)) {
+                rows.targets.push({
+                    ...base,
+                    actual: m.totalMrr,
+                    target,
+                    difference: hasValue(target) ? m.totalMrr - Number(target) : null,
+                    newBusiness: m.newBusiness,
+                    newBusinessTarget: hasValue(target) ? Math.max(0, Number(target) - m.totalMrr) : null,
+                    accumulated: yearGapMonths ? yearGap : null,
+                    hasExactTarget: Boolean(exactTarget(key, scope, category)),
+                });
+            }
+
+            previousMrr = m.totalMrr;
+        });
+    })));
+
+    const order = (a, b) => b.month.localeCompare(a.month)
+        || VIEW_SCOPES.indexOf(a.scope) - VIEW_SCOPES.indexOf(b.scope)
+        || VIEW_CATEGORIES.indexOf(a.category) - VIEW_CATEGORIES.indexOf(b.category);
+    Object.values(rows).forEach((list) => list.sort(order));
+    return rows;
+}
+
+const MONTHLY_TABLES = {
+    mrr: {
+        section: '#mrr-view',
+        emptyAll: 'No billable client invoices yet.',
+        columns: [
+            (row) => `<td class="align-right mono">${moneyOr(row.mrr)}</td>`,
+            (row) => `<td class="align-right mono"><span class="${toneClass(row.change)}">${signedMoney(row.change)}</span><span class="entry-sub">${signedPercent(row.changeRate)}</span></td>`,
+            (row) => `<td class="align-right mono">${number(row.invoices)}</td>`,
+            (row) => `<td class="align-right mono">${number(row.clients)}</td>`,
+            (row) => `<td class="align-right mono">${moneyOr(row.average)}</td>`,
+        ],
+    },
+    retention: {
+        section: '#retention-view',
+        emptyAll: 'No billable client invoices yet.',
+        columns: [
+            (row) => `<td class="align-right mono">${moneyOr(row.initial)}</td>`,
+            (row) => `<td class="align-right mono">${hasValue(row.churned) ? `<span class="${row.churned > 0 ? 'value-down' : ''}">${moneyOr(row.churned)}</span>` : DASH}</td>`,
+            (row) => `<td class="align-right mono">${hasValue(row.upsells) ? `<span class="${row.upsells > 0 ? 'value-up' : ''}">${moneyOr(row.upsells)}</span>` : DASH}</td>`,
+            (row) => `<td class="align-right mono">${moneyOr(row.retained)}</td>`,
+            (row) => `<td class="align-right mono">${hasValue(row.rate) ? `<span class="${hasValue(row.target) ? (row.rate >= row.target ? 'value-up' : 'value-down') : ''}">${percentOr(row.rate)}</span>` : 'N/A'}</td>`,
+            (row) => `<td class="align-right mono">${percentOr(row.target)}</td>`,
+            (row) => `<td class="align-right mono">${hasValue(row.lostClients) ? number(row.lostClients) : DASH}</td>`,
+        ],
+    },
+    targets: {
+        section: '#targets-view',
+        editable: true,
+        emptyAll: 'No billable client invoices or Target MRR saved yet.',
+        columns: [
+            (row) => `<td class="align-right mono">${moneyOr(row.actual)}</td>`,
+            (row) => `<td class="align-right mono">${moneyOr(row.target)}</td>`,
+            (row) => `<td class="align-right mono"><span class="${toneClass(row.difference)}">${signedMoney(row.difference)}</span></td>`,
+            (row) => `<td class="align-right mono">${moneyOr(row.newBusiness)}</td>`,
+            (row) => `<td class="align-right mono">${moneyOr(row.newBusinessTarget)}</td>`,
+            (row) => `<td class="align-right mono"><span class="${toneClass(row.accumulated)}">${signedMoney(row.accumulated)}</span></td>`,
+        ],
+    },
+};
+
+function renderMonthlyTables() {
+    if (!state.monthlyRows) state.monthlyRows = buildMonthlyRows();
+    Object.keys(MONTHLY_TABLES).forEach(renderMonthlyTable);
+}
+
+function renderMonthlyTable(name) {
+    const config = MONTHLY_TABLES[name];
+    const body = $(`#${name}-entries-table`);
+    const empty = $(`#${name}-entries-empty`);
+    if (!body || !empty) return;
+    const mode = state.monthlyModes[name];
+    const all = state.monthlyRows[name] || [];
+    const rows = mode === 'view' ? all.filter(entryInView) : all;
+    const inViewCount = all.filter(entryInView).length;
+
+    const entriesLabel = (count) => `${number(count)} ${count === 1 ? 'entry' : 'entries'}`;
+    setText(`#${name}-entries-summary`, mode === 'view'
+        ? `${entriesLabel(rows.length)} of ${number(all.length)}`
+        : `${entriesLabel(all.length)} · ${number(inViewCount)} used in current view`);
+
+    body.innerHTML = rows.map((row) => {
+        const used = mode === 'all' && entryInView(row);
+        const edit = config.editable
+            ? `<button type="button" class="row-button" data-row-edit="${escapeHtml(row.key)}">${row.hasExactTarget ? 'Edit' : 'Set target'}</button>`
+            : '';
+        return `<tr class="${used ? 'is-in-view' : ''}"${used ? ' title="Used by the current view"' : ''}>
+            <td>${escapeHtml(monthLabel(monthFromKey(row.month)))}</td>
+            <td>${escapeHtml(companyLabels[row.scope] || 'Global')}</td>
+            <td>${escapeHtml(serviceName(row.category))}</td>
+            ${config.columns.map((column) => column(row)).join('')}
+            <td class="align-right entry-actions"><button type="button" class="row-button" data-row-show="${escapeHtml(row.key)}">Show</button>${edit}</td>
+        </tr>`;
+    }).join('');
+
+    let message = '';
+    if (!state.invoices.length && state.sync.phase === 'loading') message = 'Loading invoices…';
+    else if (!state.invoices.length && state.sync.phase === 'failed') message = 'Could not load invoices.';
+    else if (!all.length) message = config.emptyAll;
+    else if (!rows.length) message = 'No month matches the current market, service and period.';
+    empty.textContent = message;
+    empty.classList.toggle('is-hidden', !message || rows.length > 0);
+}
+
+Object.entries(MONTHLY_TABLES).forEach(([name, config]) => {
+    document.querySelectorAll(`.entries-tab[data-monthly="${name}"]`).forEach((button) => button.addEventListener('click', () => {
+        state.monthlyModes[name] = button.dataset.entries;
+        document.querySelectorAll(`.entries-tab[data-monthly="${name}"]`).forEach((item) => item.classList.toggle('is-active', item === button));
+        renderMonthlyTable(name);
+    }));
+
+    const body = $(`#${name}-entries-table`);
+    if (!body) return;
+    body.addEventListener('click', (event) => {
+        const button = event.target.closest('button');
+        if (!button) return;
+        const key = button.dataset.rowShow || button.dataset.rowEdit;
+        const row = (state.monthlyRows?.[name] || []).find((item) => item.key === key);
+        if (!row) return;
+        if (button.dataset.rowEdit) { openTargetsModal(row); return; }
+        showMarginEntry(row);
+        $(config.section).scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+});
+
 renderScorecard();
 loadMarginInputs();
 loadTargetInputs();
-loadMarginInputs();

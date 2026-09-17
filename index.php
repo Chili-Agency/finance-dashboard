@@ -33,7 +33,7 @@ function asset(string $path): string
             <div class="sidebar-rule"></div>
             <p class="eyebrow">Workspace</p>
             <nav class="main-nav" aria-label="Main navigation">
-                <button class="nav-item is-active" data-view="overview" data-title="Overview"><span class="nav-icon">◒</span>Invoices</button>
+                <button class="nav-item is-active" data-view="overview" data-title="Invoices"><span class="nav-icon">◒</span>Invoices</button>
                 <button class="nav-item" data-view="mrr" data-title="MRR tracking"><span class="nav-icon">↗</span>MRR tracking</button>
                 <button class="nav-item" data-view="retention" data-title="Retention"><span class="nav-icon">◐</span>Retention</button>
                 <button class="nav-item" data-view="targets" data-title="Targets"><span class="nav-icon">◎</span>Targets</button>
@@ -127,7 +127,27 @@ function asset(string $path): string
                 <article class="panel table-panel"><div class="panel-header"><div><p class="eyebrow">Ledger</p><h3>Client invoices</h3></div><span class="panel-meta" id="table-summary">0 records</span></div><div class="table-scroll"><table><thead><tr><th>Client / invoice</th><th>Market</th><th>Issued</th><th>Due</th><th>Status</th><th class="align-right">Amount (USD)</th></tr></thead><tbody id="invoice-table"></tbody></table><div class="table-empty is-hidden" id="table-empty">No client invoices match this period.</div></div></article>
             </section>
 
-            <section class="view" id="mrr-view" aria-labelledby="page-title"><div class="section-intro mrr-intro"><div><p class="eyebrow">Revenue intelligence</p><h2>Monthly recurring revenue</h2><p class="section-copy">Issued client invoices, normalized to USD. Use the period selector to compare months.</p></div><div class="mrr-side"><div class="filter-stack"><div class="scope-tabs" role="tablist" aria-label="Company scope"><button class="scope-tab is-active" data-scope="all" role="tab">Global</button><button class="scope-tab" data-scope="br" role="tab">Brazil</button><button class="scope-tab" data-scope="mx" role="tab">Mexico</button><button class="scope-tab" data-scope="pa" role="tab">Panama</button><button class="scope-tab" data-scope="int" role="tab">International</button></div><div class="category-filter"><span>Service</span><div class="category-tabs" role="tablist" aria-label="Service line"><button class="category-tab is-active" data-category="all" role="tab">All</button><button class="category-tab" data-category="seo" role="tab">SEO</button><button class="category-tab" data-category="ppc" role="tab">PPC</button></div></div></div><div class="mrr-callout"><span>Selected period</span><strong id="mrr-total">$0</strong><small id="mrr-label">Current month</small></div></div></div><article class="panel mrr-panel"><div class="panel-header"><div><p class="eyebrow">Trend</p><h3>Revenue by month</h3></div><span class="panel-meta">Issued invoices</span></div><div class="mrr-chart-wrap"><canvas id="mrr-chart"></canvas><div class="chart-empty" id="mrr-empty">No revenue data available</div></div></article><div class="mrr-breakdown" id="mrr-breakdown"></div></section>
+            <section class="view" id="mrr-view" aria-labelledby="page-title"><div class="section-intro mrr-intro"><div><p class="eyebrow">Revenue intelligence</p><h2>Monthly recurring revenue</h2><p class="section-copy">Issued client invoices, normalized to USD. Use the period selector to compare months.</p></div><div class="mrr-side"><div class="filter-stack"><div class="scope-tabs" role="tablist" aria-label="Company scope"><button class="scope-tab is-active" data-scope="all" role="tab">Global</button><button class="scope-tab" data-scope="br" role="tab">Brazil</button><button class="scope-tab" data-scope="mx" role="tab">Mexico</button><button class="scope-tab" data-scope="pa" role="tab">Panama</button><button class="scope-tab" data-scope="int" role="tab">International</button></div><div class="category-filter"><span>Service</span><div class="category-tabs" role="tablist" aria-label="Service line"><button class="category-tab is-active" data-category="all" role="tab">All</button><button class="category-tab" data-category="seo" role="tab">SEO</button><button class="category-tab" data-category="ppc" role="tab">PPC</button></div></div></div><div class="mrr-callout"><span>Selected period</span><strong id="mrr-total">$0</strong><small id="mrr-label">Current month</small></div></div></div><article class="panel mrr-panel"><div class="panel-header"><div><p class="eyebrow">Trend</p><h3>Revenue by month</h3></div><span class="panel-meta">Issued invoices</span></div><div class="mrr-chart-wrap"><canvas id="mrr-chart"></canvas><div class="chart-empty" id="mrr-empty">No revenue data available</div></div></article><div class="mrr-breakdown" id="mrr-breakdown"></div>
+                <article class="panel table-panel entries-panel monthly-panel">
+                    <div class="panel-header">
+                        <div><p class="eyebrow">Month by month</p><h3>MRR log</h3></div>
+                        <div class="entries-tools">
+                            <span class="panel-meta" id="mrr-entries-summary">0 entries</span>
+                            <div class="category-tabs entries-tabs" role="tablist" aria-label="Entries shown">
+                                <button class="entries-tab is-active" data-monthly="mrr" data-entries="all" role="tab">All entries</button>
+                                <button class="entries-tab" data-monthly="mrr" data-entries="view" role="tab">Current view</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="table-scroll monthly-scroll">
+                        <table class="entries-table">
+                            <thead><tr><th>Month</th><th>Market</th><th>Service</th><th class="align-right">MRR</th><th class="align-right">vs previous month</th><th class="align-right">Invoices</th><th class="align-right">Active clients</th><th class="align-right">Avg per client</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
+                            <tbody id="mrr-entries-table"></tbody>
+                        </table>
+                        <div class="table-empty is-hidden" id="mrr-entries-empty"></div>
+                    </div>
+                </article>
+            </section>
 
             <section class="view" id="retention-view" aria-labelledby="page-title">
                 <div class="section-intro">
@@ -194,6 +214,26 @@ function asset(string $path): string
                         <div class="target-block" id="retention-target"></div>
                     </article>
                 </div>
+
+                <article class="panel table-panel entries-panel monthly-panel">
+                    <div class="panel-header">
+                        <div><p class="eyebrow">Month by month</p><h3>Retention log</h3></div>
+                        <div class="entries-tools">
+                            <span class="panel-meta" id="retention-entries-summary">0 entries</span>
+                            <div class="category-tabs entries-tabs" role="tablist" aria-label="Entries shown">
+                                <button class="entries-tab is-active" data-monthly="retention" data-entries="all" role="tab">All entries</button>
+                                <button class="entries-tab" data-monthly="retention" data-entries="view" role="tab">Current view</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="table-scroll monthly-scroll">
+                        <table class="entries-table">
+                            <thead><tr><th>Month</th><th>Market</th><th>Service</th><th class="align-right">Initial base</th><th class="align-right">Churned</th><th class="align-right">Upsells</th><th class="align-right">Retained</th><th class="align-right">Retention</th><th class="align-right">Target</th><th class="align-right">Clients lost</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
+                            <tbody id="retention-entries-table"></tbody>
+                        </table>
+                        <div class="table-empty is-hidden" id="retention-entries-empty"></div>
+                    </div>
+                </article>
             </section>
 
             <section class="view" id="targets-view" aria-labelledby="page-title">
@@ -268,6 +308,26 @@ function asset(string $path): string
                     <div class="mrr-chart-wrap">
                         <canvas id="gap-chart"></canvas>
                         <div class="chart-empty is-hidden" id="gap-empty">Connect the targets source to plot this chart</div>
+                    </div>
+                </article>
+
+                <article class="panel table-panel entries-panel monthly-panel">
+                    <div class="panel-header">
+                        <div><p class="eyebrow">Month by month</p><h3>Targets log</h3></div>
+                        <div class="entries-tools">
+                            <span class="panel-meta" id="targets-entries-summary">0 entries</span>
+                            <div class="category-tabs entries-tabs" role="tablist" aria-label="Entries shown">
+                                <button class="entries-tab is-active" data-monthly="targets" data-entries="all" role="tab">All entries</button>
+                                <button class="entries-tab" data-monthly="targets" data-entries="view" role="tab">Current view</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="table-scroll monthly-scroll">
+                        <table class="entries-table">
+                            <thead><tr><th>Month</th><th>Market</th><th>Service</th><th class="align-right">Total MRR</th><th class="align-right">Target MRR</th><th class="align-right">Difference</th><th class="align-right">New business</th><th class="align-right">Target new business</th><th class="align-right">Accumulated gap</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
+                            <tbody id="targets-entries-table"></tbody>
+                        </table>
+                        <div class="table-empty is-hidden" id="targets-entries-empty"></div>
                     </div>
                 </article>
             </section>
