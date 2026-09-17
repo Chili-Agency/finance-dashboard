@@ -277,13 +277,16 @@ setInterval(() => { if (state.sync.phase === 'loading' || state.sync.finishedAt)
 function renderMetrics(invoices) {
     const totals = { paid: 0, late: 0, open: 0, paidCount: 0, lateCount: 0, openCount: 0 };
     invoices.forEach((invoice) => { const bucket = invoiceBucket(invoice); if (bucket === 'paid') { totals.paid += amount(invoice); totals.paidCount++; } if (bucket === 'late') { totals.late += amount(invoice); totals.lateCount++; } if (bucket === 'open') { totals.open += amount(invoice); totals.openCount++; } });
-    $('#paid-total').textContent = money(totals.paid); $('#late-total').textContent = money(totals.late); $('#open-total').textContent = money(totals.open);
+    // O card de atrasados usa a mesma regra da aba Late invoices: saldo em aberto, vencido hoje, qualquer data de emissão.
+    const overdue = lateInvoices();
+    const overdueCount = overdue.length;
+    $('#paid-total').textContent = money(totals.paid); $('#late-total').textContent = money(overdue.reduce((sum, item) => sum + item.balance, 0)); $('#open-total').textContent = money(totals.open);
     const totalCount = totals.paidCount + totals.lateCount + totals.openCount;
     const voidedCount = invoices.filter((invoice) => invoiceBucket(invoice) === 'voided').length;
     $('#all-total').textContent = money(totals.paid + totals.late + totals.open);
     $('#all-count').textContent = `${number(totalCount)} invoice${totalCount === 1 ? '' : 's'}`;
     $('#all-note').textContent = voidedCount ? `issued, ${number(voidedCount)} voided excluded` : 'issued in period';
-    $('#paid-count').textContent = `${number(totals.paidCount)} invoice${totals.paidCount === 1 ? '' : 's'}`; $('#late-count').textContent = `${number(totals.lateCount)} invoice${totals.lateCount === 1 ? '' : 's'}`; $('#open-count').textContent = `${number(totals.openCount)} invoice${totals.openCount === 1 ? '' : 's'}`;
+    $('#paid-count').textContent = `${number(totals.paidCount)} invoice${totals.paidCount === 1 ? '' : 's'}`; $('#late-count').textContent = `${number(overdueCount)} invoice${overdueCount === 1 ? '' : 's'}`; $('#open-count').textContent = `${number(totals.openCount)} invoice${totals.openCount === 1 ? '' : 's'}`;
 }
 
 function renderStatusChart(invoices) {
@@ -372,7 +375,7 @@ function monthSeries() {
 function renderMrr() { const series = monthSeries(); const selectedInvoices = filteredInvoices().filter(isBillable); const selected = selectedInvoices.reduce((sum, invoice) => sum + amount(invoice), 0); $('#mrr-total').textContent = money(selected); $('#mrr-label').textContent = periodBounds().label; if (state.mrrChart) state.mrrChart.destroy(); state.mrrChart = new Chart($('#mrr-chart'), { type: 'bar', data: { labels: series.labels, datasets: [{ data: series.values, backgroundColor: series.values.map((_, index) => index === series.values.length - 1 ? colors.authorised : '#d9d8d0'), borderRadius: 2, barPercentage: .58 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => ` ${money(context.raw)}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 10 } } }, y: { beginAtZero: true, grid: { color: '#e5e3dc' }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 9 }, callback: (value) => money(value) } } } } }); $('#mrr-empty').classList.toggle('is-hidden', series.values.length > 0); $('#mrr-breakdown').innerHTML = Object.entries(companyLabels).map(([key, label]) => { const total = selectedInvoices.filter((invoice) => invoice.companyKey === key).reduce((sum, invoice) => sum + amount(invoice), 0); const dimmed = state.scope !== 'all' && state.scope !== key; return `<div class="breakdown-item${dimmed ? ' is-dimmed' : ''}"><span>${label}</span><strong>${money(total)}</strong></div>`; }).join(''); }
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[character])); }
-function renderAll() { renderOverview(); renderMrr(); renderScorecard(); syncViewToUrl(); }
+function renderAll() { renderOverview(); renderLate(); renderMrr(); renderScorecard(); syncViewToUrl(); }
 
 $('#period-select').addEventListener('change', (event) => { state.period = event.target.value; state.periodFromUrl = true; $('#date-range').hidden = state.period !== 'custom'; renderAll(); });
 $('#date-from').addEventListener('input', (event) => { state.customStart = event.target.value; });
@@ -1841,6 +1844,271 @@ Object.entries(MONTHLY_TABLES).forEach(([name, config]) => {
     });
 });
 
+// ---- Late invoices ----
+// Encargos por atraso. Ajuste conforme os contratos de cada entidade.
+//   lateFee          multa única sobre o saldo em aberto (0.02 = 2%)
+//   monthlyInterest  juros simples ao mês, pro rata por dia, contados desde o vencimento (0.01 = 1% a.m.)
+//   graceDays        dias de carência: até aqui, nenhum encargo é cobrado
+// Um mercado sem entrada própria usa o "default".
+//   correction       índices de correção monetária; com mais de um, vale o maior acumulado no atraso
+// Ordem: o saldo é corrigido primeiro; multa e juros incidem sobre o saldo corrigido.
+const LATE_CHARGE_RULES = {
+    default: { lateFee: 0.02, monthlyInterest: 0.01, graceDays: 0, correction: [] },
+    br: { lateFee: 0.10, monthlyInterest: 0.01, graceDays: 0, correction: ['igpm', 'ipca'] },
+    // mx: { lateFee: 0, monthlyInterest: 0.015, graceDays: 5, correction: [] },
+};
+const INDEX_LABELS = { igpm: 'IGP-M', ipca: 'IPCA' };
+state.brIndices = { status: 'loading', series: {}, latest: {}, error: null, stale: [] };
+const DAY_MS = 24 * 60 * 60 * 1000;
+const AGING_BUCKETS = [
+    { label: '1–30 days', min: 1, max: 30 },
+    { label: '31–60 days', min: 31, max: 60 },
+    { label: '61–90 days', min: 61, max: 90 },
+    { label: '90+ days', min: 91, max: Infinity },
+];
+const moneyExact = (value) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value || 0);
+const shortDate = (date) => (date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : DASH);
+const ratePercent = (value) => `${Number((value * 100).toFixed(2))}%`;
+
+function lateRule(companyKey) {
+    return { ...LATE_CHARGE_RULES.default, ...(LATE_CHARGE_RULES[companyKey] || {}) };
+}
+
+function lateRuleLabel(rule) {
+    const parts = [];
+    if (rule.lateFee) parts.push(`${ratePercent(rule.lateFee)} fee`);
+    if (rule.monthlyInterest) parts.push(`${ratePercent(rule.monthlyInterest)}/month`);
+    if (rule.correction.length) parts.push(rule.correction.map((key) => INDEX_LABELS[key]).join('/'));
+    const label = parts.join(' + ') || 'No charges';
+    return rule.graceDays ? `${label} after ${plural(rule.graceDays, 'day')}` : label;
+}
+
+// Saldo em aberto em USD (já considera pagamentos parciais), na fatia do serviço selecionado.
+function outstandingUsd(invoice) {
+    const usd = invoice.amounts_usd;
+    const converted = usd && usd.AmountDue !== null && usd.AmountDue !== undefined && Number.isFinite(Number(usd.AmountDue))
+        ? Number(usd.AmountDue)
+        : Number(invoice.AmountDue || 0) * Number(invoice.usdRate || 1);
+    return converted * categoryShare(invoice);
+}
+
+function originalBalance(invoice) {
+    const currency = String(invoice.CurrencyCode || invoice.companyCurrency || '').toUpperCase();
+    if (!currency || currency === 'USD') return '';
+    const value = Number(invoice.AmountDue || 0) * categoryShare(invoice);
+    try {
+        return new Intl.NumberFormat('en-US', { style: 'currency', currency, currencyDisplay: 'code' }).format(value);
+    } catch {
+        return `${currency} ${value.toFixed(2)}`;
+    }
+}
+
+// Fator acumulado de um índice entre o vencimento e hoje, pro rata die dentro de cada mês.
+// Meses ainda sem índice publicado entram como zero e são sinalizados.
+function indexFactor(series, from, to) {
+    let factor = 1;
+    let pending = false;
+    for (let month = new Date(from.getFullYear(), from.getMonth(), 1); month < to; month = new Date(month.getFullYear(), month.getMonth() + 1, 1)) {
+        const next = new Date(month.getFullYear(), month.getMonth() + 1, 1);
+        const start = from > month ? from : month;
+        const end = to < next ? to : next;
+        const days = Math.round((end - start) / DAY_MS);
+        if (days <= 0) continue;
+        const rate = series[monthKey(month)];
+        if (rate === undefined) { pending = true; continue; }
+        factor *= (1 + Number(rate)) ** (days / Math.round((next - month) / DAY_MS));
+    }
+    return { factor, pending };
+}
+
+function correctionFor(rule, due, today) {
+    if (!rule.correction.length) return { factor: 1, index: null, pending: false, unavailable: false };
+    const options = rule.correction
+        .filter((key) => Object.keys(state.brIndices.series[key] || {}).length)
+        .map((key) => ({ key, ...indexFactor(state.brIndices.series[key], due, today) }));
+    if (!options.length) return { factor: 1, index: null, pending: false, unavailable: true };
+    const best = options.reduce((top, option) => (option.factor > top.factor ? option : top));
+    // Deflação não reduz a dívida: sem correção negativa.
+    return {
+        factor: Math.max(1, best.factor),
+        index: best.factor > 1 ? INDEX_LABELS[best.key] : null,
+        pending: best.pending,
+        unavailable: options.length < rule.correction.length,
+    };
+}
+
+function lateCharges(invoice, today) {
+    const due = dueDate(invoice);
+    const days = Math.max(0, Math.round((today - due) / DAY_MS));
+    const rule = lateRule(invoice.companyKey);
+    const balance = outstandingUsd(invoice);
+    const chargeable = days > rule.graceDays;
+    const correction = chargeable ? correctionFor(rule, due, today) : { factor: 1, index: null, pending: false, unavailable: false };
+    const corrected = balance * correction.factor;
+    const fee = chargeable ? corrected * rule.lateFee : 0;
+    const interest = chargeable ? corrected * rule.monthlyInterest * (days / 30) : 0;
+    return {
+        invoice, due, days, balance, fee, interest,
+        correction: corrected - balance,
+        correctionIndex: correction.index,
+        correctionPending: correction.pending,
+        correctionUnavailable: correction.unavailable,
+        hasCorrection: chargeable && rule.correction.length > 0,
+        total: corrected + fee + interest,
+    };
+}
+
+async function loadBrIndices() {
+    try {
+        const response = redirectIfSignedOut(await fetch('br-indices.php', { cache: 'no-store' }));
+        const body = await response.json().catch(() => null);
+        if (!body || !body.series) throw new Error(`The dashboard server answered HTTP ${response.status}.`);
+        const errors = Array.isArray(body.errors) ? body.errors : [];
+        state.brIndices = {
+            status: errors.length ? 'partial' : 'ready',
+            series: body.series,
+            latest: body.latest || {},
+            stale: body.stale || [],
+            error: errors.join(' · ') || null,
+        };
+    } catch (error) {
+        state.brIndices = { status: 'error', series: {}, latest: {}, stale: [], error: error.message };
+    }
+    renderLate();
+}
+
+function renderIndexNote() {
+    const node = $('#late-index-note');
+    if (!node) return;
+    const info = state.brIndices;
+    let text = '';
+    let tone = 'muted';
+    if (info.status === 'loading') text = 'Loading IGP-M and IPCA from the Central Bank…';
+    else if (info.status === 'error') { text = `Brazil inflation correction is not applied: ${info.error}`; tone = 'error'; }
+    else {
+        const published = Object.keys(INDEX_LABELS)
+            .map((key) => (info.latest[key] ? `${INDEX_LABELS[key]} through ${monthLabel(monthFromKey(info.latest[key]))}` : null))
+            .filter(Boolean);
+        text = `Brazil correction uses the higher of IGP-M and IPCA (Central Bank). Published: ${published.join(', ')}. Months not yet published count as zero.`;
+        if (info.stale.length) { text += ` Could not refresh ${info.stale.map((key) => INDEX_LABELS[key]).join(' and ')}, showing the last saved values.`; tone = 'sample'; }
+        if (info.error) { text += ` ${info.error}`; tone = 'error'; }
+    }
+    node.textContent = text;
+    node.dataset.tone = tone;
+}
+
+function lateInvoices() {
+    const today = startOfToday();
+    return state.invoices
+        .filter((invoice) => isBillable(invoice)
+            && invoiceBucket(invoice) === 'late'
+            && (state.scope === 'all' || invoice.companyKey === state.scope)
+            && inCategory(invoice))
+        .map((invoice) => lateCharges(invoice, today))
+        .filter((item) => item.balance > 0)
+        .sort((a, b) => b.days - a.days || b.total - a.total);
+}
+
+function correctionCell(item) {
+    if (!item.hasCorrection) return DASH;
+    if (item.correctionUnavailable && !item.correctionIndex) return `${DASH}<div class="client-sub">index unavailable</div>`;
+    const notes = [item.correctionIndex || 'no inflation'];
+    if (item.correctionPending) notes.push('partial');
+    return `${moneyExact(item.correction)}<div class="client-sub">${escapeHtml(notes.join(' · '))}</div>`;
+}
+
+function barRows(rows) {
+    const max = Math.max(...rows.map((row) => row.total), 1);
+    return rows.map((row) => `<div class="market-row${row.dimmed ? ' is-dimmed' : ''}">
+        <span class="market-name">${escapeHtml(row.label)}<small class="market-sub">${plural(row.count, 'invoice')}</small></span>
+        <div class="market-bar"><span style="width:${(row.total / max) * 100}%"></span></div>
+        <span class="market-value">${money(row.total)}</span>
+    </div>`).join('');
+}
+
+function renderLate() {
+    if (!$('#late-view')) return;
+    const items = lateInvoices();
+    const sum = (list, field) => list.reduce((total, item) => total + item[field], 0);
+    const principal = sum(items, 'balance');
+    const fees = sum(items, 'fee');
+    const interest = sum(items, 'interest');
+    const correction = sum(items, 'correction');
+    const clients = new Set(items.map((item) => contactKey(item.invoice))).size;
+
+    setText('#late-principal', money(principal));
+    setText('#late-invoice-count', plural(items.length, 'invoice'));
+    setText('#late-client-count', `from ${plural(clients, 'client')}`);
+    setText('#late-charges', money(fees + interest + correction));
+    setText('#late-fees', `${money(fees)} fees + ${money(interest)} interest`);
+    setText('#late-correction', `+ ${money(correction)} correction`);
+    setText('#late-total-due', money(principal + fees + interest + correction));
+    renderIndexNote();
+
+    const markets = state.scope === 'all' ? Object.keys(companyLabels) : [state.scope];
+    const labels = [...new Set(markets.map((key) => lateRuleLabel(lateRule(key))))];
+    setText('#late-rate-label', labels.length === 1 ? labels[0] : 'Per-market rates');
+
+    const averageDays = principal > 0 ? Math.round(items.reduce((total, item) => total + item.days * item.balance, 0) / principal) : 0;
+    setText('#late-average-days', items.length ? plural(averageDays, 'day') : DASH);
+    setText('#late-oldest', items.length ? plural(items[0].days, 'day') : DASH);
+
+    $('#late-aging').innerHTML = barRows(AGING_BUCKETS.map((bucket) => {
+        const rows = items.filter((item) => item.days >= bucket.min && item.days <= bucket.max);
+        return { label: bucket.label, count: rows.length, total: sum(rows, 'total') };
+    }));
+
+    const allMarkets = lateInvoicesByMarket(items);
+    $('#late-markets').innerHTML = barRows(Object.entries(companyLabels).map(([key, label]) => ({
+        label,
+        count: allMarkets[key]?.count || 0,
+        total: allMarkets[key]?.total || 0,
+        dimmed: state.scope !== 'all' && state.scope !== key,
+    })));
+
+    setText('#late-table-summary', `${number(items.length)} record${items.length === 1 ? '' : 's'}`);
+    $('#late-table').innerHTML = items.map((item) => {
+        const { invoice } = item;
+        const severity = item.days > 90 ? 'is-critical' : item.days > 30 ? 'is-warning' : '';
+        const original = originalBalance(invoice);
+        const rule = lateRule(invoice.companyKey);
+        const graceNote = item.days <= rule.graceDays ? `<div class="client-sub">in grace period</div>` : '';
+        return `<tr>
+            <td>${escapeHtml(invoice.Contact?.Name || 'Unknown client')}<div class="client-sub">${escapeHtml(invoice.InvoiceNumber || invoice.InvoiceID || 'Unnumbered')}${categoryTag(invoice) ? ` · <span class="category-tag">${escapeHtml(categoryTag(invoice))}</span>` : ''}</div></td>
+            <td>${escapeHtml(companyLabels[invoice.companyKey] || invoice.company || DASH)}</td>
+            <td>${shortDate(invoiceDate(invoice))}</td>
+            <td>${shortDate(item.due)}</td>
+            <td class="align-right"><span class="days-pill ${severity}">${number(item.days)}</span></td>
+            <td class="align-right mono">${moneyExact(item.balance)}${original ? `<div class="client-sub">${escapeHtml(original)}</div>` : ''}</td>
+            <td class="align-right mono">${correctionCell(item)}</td>
+            <td class="align-right mono">${moneyExact(item.fee)}${graceNote}</td>
+            <td class="align-right mono">${moneyExact(item.interest)}</td>
+            <td class="align-right mono late-total">${moneyExact(item.total)}</td>
+        </tr>`;
+    }).join('');
+
+    const empty = $('#late-table-empty');
+    empty.textContent = !state.invoices.length && state.sync.phase === 'loading'
+        ? 'Loading invoices…'
+        : !state.invoices.length && state.sync.phase === 'failed'
+            ? 'Could not load invoices.'
+            : 'No overdue invoices for this market and service.';
+    empty.classList.toggle('is-hidden', items.length > 0);
+}
+
+function lateInvoicesByMarket(itemsInView) {
+    if (state.scope === 'all') {
+        return itemsInView.reduce((map, item) => {
+            const entry = map[item.invoice.companyKey] || (map[item.invoice.companyKey] = { count: 0, total: 0 });
+            entry.count += 1;
+            entry.total += item.total;
+            return map;
+        }, {});
+    }
+    return withView('all', state.category, () => lateInvoicesByMarket(lateInvoices()));
+}
+
 renderScorecard();
 loadMarginInputs();
 loadTargetInputs();
+loadBrIndices();

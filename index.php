@@ -34,6 +34,7 @@ function asset(string $path): string
             <p class="eyebrow">Workspace</p>
             <nav class="main-nav" aria-label="Main navigation">
                 <button class="nav-item is-active" data-view="overview" data-title="Invoices"><span class="nav-icon">◒</span>Invoices</button>
+                <button class="nav-item" data-view="late" data-title="Late invoices"><span class="nav-icon">◔</span>Late invoices</button>
                 <button class="nav-item" data-view="mrr" data-title="MRR tracking"><span class="nav-icon">↗</span>MRR tracking</button>
                 <button class="nav-item" data-view="retention" data-title="Retention"><span class="nav-icon">◐</span>Retention</button>
                 <button class="nav-item" data-view="targets" data-title="Targets"><span class="nav-icon">◎</span>Targets</button>
@@ -114,7 +115,7 @@ function asset(string $path): string
 
                 <div class="metric-grid">
                     <article class="metric-card metric-paid"><div class="metric-heading"><span class="metric-label">Paid invoices</span><span class="metric-badge">01</span></div><strong id="paid-total">$0</strong><p><span id="paid-count">0 invoices</span> collected in period</p></article>
-                    <article class="metric-card metric-late"><div class="metric-heading"><span class="metric-label">Late invoices</span><span class="metric-badge">02</span></div><strong id="late-total">$0</strong><p><span id="late-count">0 invoices</span> past their due date</p></article>
+                    <article class="metric-card metric-late"><div class="metric-heading"><span class="metric-label">Late invoices</span><span class="metric-badge">02</span></div><strong id="late-total">$0</strong><p><span id="late-count">0 invoices</span> overdue today, any issue date</p></article>
                     <article class="metric-card metric-open"><div class="metric-heading"><span class="metric-label">Open invoices</span><span class="metric-badge">03</span></div><strong id="open-total">$0</strong><p><span id="open-count">0 invoices</span> still outstanding</p></article>
                     <article class="metric-card metric-total"><div class="metric-heading"><span class="metric-label">Total invoiced</span><span class="metric-badge">04</span></div><strong id="all-total">$0</strong><p><span id="all-count">0 invoices</span> <span class="metric-muted" id="all-note">issued in period</span></p></article>
                 </div>
@@ -125,6 +126,48 @@ function asset(string $path): string
                 </div>
 
                 <article class="panel table-panel"><div class="panel-header"><div><p class="eyebrow">Ledger</p><h3>Client invoices</h3></div><span class="panel-meta" id="table-summary">0 records</span></div><div class="table-scroll"><table><thead><tr><th>Client / invoice</th><th>Market</th><th>Issued</th><th>Due</th><th>Status</th><th class="align-right">Amount (USD)</th></tr></thead><tbody id="invoice-table"></tbody></table><div class="table-empty is-hidden" id="table-empty">No client invoices match this period.</div></div></article>
+            </section>
+
+            <section class="view" id="late-view" aria-labelledby="page-title">
+                <div class="section-intro">
+                    <div>
+                        <p class="eyebrow">Collections</p>
+                        <h2>What is overdue?</h2>
+                        <p class="section-copy">Every unpaid client invoice past its due date, as of today. The reporting period does not apply here.</p>
+                        <p class="manual-input-status late-index-note" id="late-index-note" data-tone="muted" aria-live="polite"></p>
+                    </div>
+                    <div class="filter-stack">
+                        <div class="scope-tabs" role="tablist" aria-label="Company scope">
+                            <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
+                            <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
+                            <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
+                            <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
+                            <button class="scope-tab" data-scope="int" role="tab">International</button>
+                        </div>
+                        <div class="category-filter">
+                            <span>Service</span>
+                            <div class="category-tabs" role="tablist" aria-label="Service line">
+                                <button class="category-tab is-active" data-category="all" role="tab">All</button>
+                                <button class="category-tab" data-category="seo" role="tab">SEO</button>
+                                <button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="metric-grid">
+                    <article class="metric-card metric-late"><div class="metric-heading"><span class="metric-label">Overdue balance</span><span class="metric-badge">01</span></div><strong id="late-principal">$0</strong><p><span id="late-invoice-count">0 invoices</span> <span class="metric-muted" id="late-client-count">from 0 clients</span></p></article>
+                    <article class="metric-card metric-interest"><div class="metric-heading"><span class="metric-label">Late charges</span><span class="metric-badge">02</span></div><strong id="late-charges">$0</strong><p><span id="late-fees">$0 fees + $0 interest</span> <span class="metric-muted" id="late-correction">+ $0 correction</span></p></article>
+                    <article class="metric-card metric-total"><div class="metric-heading"><span class="metric-label">Total to collect</span><span class="metric-badge">03</span></div><strong id="late-total-due">$0</strong><p><span id="late-rate-label">—</span> <span class="metric-muted">applied</span></p></article>
+                    <article class="metric-card metric-open"><div class="metric-heading"><span class="metric-label">Average delay</span><span class="metric-badge">04</span></div><strong id="late-average-days">0 days</strong><p><span id="late-oldest">—</span> <span class="metric-muted">oldest · weighted by balance</span></p></article>
+                </div>
+
+                <div class="dashboard-grid">
+                    <article class="panel"><div class="panel-header"><div><p class="eyebrow">Aging</p><h3>Days past due</h3></div><span class="panel-meta">Balance + charges</span></div><div class="market-list aging-list" id="late-aging"></div></article>
+                    <article class="panel market-panel"><div class="panel-header"><div><p class="eyebrow">Portfolio</p><h3>By market</h3></div><span class="panel-meta">USD view</span></div><div class="market-list" id="late-markets"></div></article>
+                </div>
+
+                <article class="panel table-panel"><div class="panel-header"><div><p class="eyebrow">Ledger</p><h3>Overdue invoices</h3></div><span class="panel-meta" id="late-table-summary">0 records</span></div><div class="table-scroll"><table class="late-table"><thead><tr><th>Client / invoice</th><th>Market</th><th>Issued</th><th>Due</th><th class="align-right">Days late</th><th class="align-right">Balance (USD)</th><th class="align-right">Correction</th><th class="align-right">Late fee</th><th class="align-right">Interest</th><th class="align-right">Total due</th></tr></thead><tbody id="late-table"></tbody></table><div class="table-empty is-hidden" id="late-table-empty">No overdue invoices.</div></div></article>
             </section>
 
             <section class="view" id="mrr-view" aria-labelledby="page-title"><div class="section-intro mrr-intro"><div><p class="eyebrow">Revenue intelligence</p><h2>Monthly recurring revenue</h2><p class="section-copy">Issued client invoices, normalized to USD. Use the period selector to compare months.</p></div><div class="mrr-side"><div class="filter-stack"><div class="scope-tabs" role="tablist" aria-label="Company scope"><button class="scope-tab is-active" data-scope="all" role="tab">Global</button><button class="scope-tab" data-scope="br" role="tab">Brazil</button><button class="scope-tab" data-scope="mx" role="tab">Mexico</button><button class="scope-tab" data-scope="pa" role="tab">Panama</button><button class="scope-tab" data-scope="int" role="tab">International</button></div><div class="category-filter"><span>Service</span><div class="category-tabs" role="tablist" aria-label="Service line"><button class="category-tab is-active" data-category="all" role="tab">All</button><button class="category-tab" data-category="seo" role="tab">SEO</button><button class="category-tab" data-category="ppc" role="tab">PPC</button></div></div></div><div class="mrr-callout"><span>Selected period</span><strong id="mrr-total">$0</strong><small id="mrr-label">Current month</small></div></div></div><article class="panel mrr-panel"><div class="panel-header"><div><p class="eyebrow">Trend</p><h3>Revenue by month</h3></div><span class="panel-meta">Issued invoices</span></div><div class="mrr-chart-wrap"><canvas id="mrr-chart"></canvas><div class="chart-empty" id="mrr-empty">No revenue data available</div></div></article><div class="mrr-breakdown" id="mrr-breakdown"></div>
