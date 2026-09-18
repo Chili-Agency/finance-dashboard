@@ -1,6 +1,14 @@
 <?php
 declare(strict_types=1);
 
+/*
+ * Autenticação do dashboard.
+ *
+ * Os usuários vivem na tabela `dashboard_users` (ver sql/001_dashboard_users.sql).
+ * A senha nunca é guardada em texto: só o hash gerado por password_hash().
+ * Para gerar um hash: php bin/hash-password.php
+ */
+
 const AUTH_SESSION_NAME = 'chili_finance_session';
 const AUTH_IDLE_SECONDS = 8 * 60 * 60;
 const AUTH_MAX_ATTEMPTS = 5;
@@ -133,7 +141,7 @@ function auth_attempt(string $email, string $password): ?string
         return 'That email and password don’t match.';
     }
 
-    session_regenerate_id(true);
+    session_regenerate_id(true); // evita session fixation
     unset($_SESSION['auth_attempts'], $_SESSION['auth_locked_until']);
     $_SESSION['auth_user'] = ['id' => $user['id'], 'email' => $user['email'], 'name' => $user['name']];
     $_SESSION['auth_last_seen'] = time();

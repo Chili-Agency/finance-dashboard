@@ -93,6 +93,7 @@ function fetchSeries(int $code): array
 
     $values = [];
     foreach ($rows as $row) {
+        // data: "01/08/2026", valor: "0.16" (em %)
         if (!is_array($row) || preg_match('#^\d{2}/(\d{2})/(\d{4})$#', (string) ($row['data'] ?? ''), $match) !== 1) {
             continue;
         }

@@ -33,7 +33,8 @@ function asset(string $path): string
             <div class="sidebar-rule"></div>
             <p class="eyebrow">Workspace</p>
             <nav class="main-nav" aria-label="Main navigation">
-                <button class="nav-item is-active" data-view="overview" data-title="Invoices"><span class="nav-icon">◒</span>Invoices</button>
+                <button class="nav-item is-active" data-view="overview" data-title="Overview"><span class="nav-icon">◍</span>Overview</button>
+                <button class="nav-item" data-view="invoices" data-title="Invoices"><span class="nav-icon">◒</span>Invoices</button>
                 <button class="nav-item" data-view="late" data-title="Late invoices"><span class="nav-icon">◔</span>Late invoices</button>
                 <button class="nav-item" data-view="mrr" data-title="MRR tracking"><span class="nav-icon">↗</span>MRR tracking</button>
                 <button class="nav-item" data-view="retention" data-title="Retention"><span class="nav-icon">◐</span>Retention</button>
@@ -66,7 +67,7 @@ function asset(string $path): string
             <header class="topbar">
                 <div>
                     <p class="eyebrow">Finance control room</p>
-                    <h1 id="page-title">Invoices</h1>
+                    <h1 id="page-title">Overview</h1>
                 </div>
                 <div class="topbar-actions">
                     <label class="period-picker">
@@ -91,7 +92,64 @@ function asset(string $path): string
 
             <div class="notice is-hidden" id="error-notice" role="status"></div>
 
+
             <section class="view is-visible" id="overview-view" aria-labelledby="page-title">
+                <div class="section-intro">
+                    <div>
+                        <p class="eyebrow">Plan vs actual</p>
+                        <h2>Where the year stands</h2>
+                        <p class="section-copy" id="summary-scope-note">Plan versus actual for the selected year, in one screen.</p>
+                    </div>
+                    <div class="filter-stack">
+                        <div class="scope-tabs" role="tablist" aria-label="Company scope">
+                            <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
+                            <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
+                            <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
+                            <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
+                            <button class="scope-tab" data-scope="int" role="tab">International</button>
+                        </div>
+                        <div class="category-filter">
+                            <span>Service</span>
+                            <div class="category-tabs" role="tablist" aria-label="Service line">
+                                <button class="category-tab is-active" data-category="all" role="tab">All</button>
+                                <button class="category-tab" data-category="seo" role="tab">SEO</button>
+                                <button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="metric-grid">
+                    <article class="metric-card summary-card" id="sum-revenue-card"><div class="metric-heading"><span class="metric-label">Revenue vs target</span><span class="metric-badge">01</span></div><strong id="sum-revenue-value">—</strong><div class="summary-bar"><span id="sum-revenue-bar"></span></div><p id="sum-revenue-note">—</p><p class="summary-foot" id="sum-revenue-foot">—</p></article><article class="metric-card summary-card" id="sum-retention-card"><div class="metric-heading"><span class="metric-label">Retention vs target</span><span class="metric-badge">02</span></div><strong id="sum-retention-value">—</strong><div class="summary-bar"><span id="sum-retention-bar"></span></div><p id="sum-retention-note">—</p><p class="summary-foot" id="sum-retention-foot">—</p></article><article class="metric-card summary-card" id="sum-margin-card"><div class="metric-heading"><span class="metric-label">Margin vs target</span><span class="metric-badge">03</span></div><strong id="sum-margin-value">—</strong><div class="summary-bar"><span id="sum-margin-bar"></span></div><p id="sum-margin-note">—</p><p class="summary-foot" id="sum-margin-foot">—</p></article><article class="metric-card summary-card" id="sum-cogs-card"><div class="metric-heading"><span class="metric-label">COGS vs budget</span><span class="metric-badge">04</span></div><strong id="sum-cogs-value">—</strong><div class="summary-bar"><span id="sum-cogs-bar"></span></div><p id="sum-cogs-note">—</p><p class="summary-foot" id="sum-cogs-foot">—</p></article>
+                </div>
+
+                <article class="panel table-panel summary-matrix-panel">
+                    <div class="panel-header"><div><p class="eyebrow">Every indicator, month by month</p><h3 id="summary-matrix-title">Year to date</h3></div><span class="panel-meta">Green above target · red below</span></div>
+                    <div class="table-scroll"><table class="summary-matrix"><thead><tr id="summary-matrix-head"></tr></thead><tbody id="summary-matrix"></tbody></table></div>
+                    <p class="manual-input-status summary-foot-note" id="summary-matrix-note" data-tone="muted"></p>
+                </article>
+
+                <div class="dashboard-grid summary-grid">
+                    <article class="panel chart-panel">
+                        <div class="panel-header"><div><p class="eyebrow">Plan</p><h3>Actual against plan</h3></div><button type="button" class="link-button" data-goto-view="targets">Open Targets →</button></div>
+                        <p class="section-copy summary-chart-copy">Monthly MRR in USD · bars are actual, the line is the target.</p>
+                        <div class="summary-chart-wrap"><canvas id="summary-plan-chart"></canvas><div class="chart-empty is-hidden" id="summary-plan-empty">No data for this year</div></div>
+                    </article>
+                    <article class="panel">
+                        <div class="panel-header"><div><p class="eyebrow">Portfolio</p><h3>Health</h3></div><button type="button" class="link-button" data-goto-view="retention">Open →</button></div>
+                        <div class="health-list" id="summary-health"></div>
+                        <p class="manual-input-status" id="summary-bonus-note" data-tone="muted"></p>
+                    </article>
+                </div>
+
+                <article class="panel">
+                    <div class="panel-header"><div><p class="eyebrow">Bridge</p><h3 id="summary-bridge-title">Portfolio bridge</h3></div><span class="panel-meta">USD</span></div>
+                    <p class="section-copy summary-chart-copy">What came into and left the recurring base this year.</p>
+                    <div class="summary-chart-wrap"><canvas id="summary-bridge-chart"></canvas><div class="chart-empty is-hidden" id="summary-bridge-empty">No data for this year</div></div>
+                </article>
+            </section>
+
+            <section class="view" id="invoices-view" aria-labelledby="page-title">
                 <div class="section-intro">
                     <div><p class="eyebrow">Invoice pulse</p><h2>What is happening now?</h2></div>
                     <div class="filter-stack">

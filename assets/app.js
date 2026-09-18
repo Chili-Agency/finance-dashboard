@@ -329,7 +329,7 @@ function clearDynamicNotice() {
     notice.classList.remove('is-info');
 }
 
-function renderOverview() {
+function renderInvoices() {
     const invoices = filteredInvoices();
     clearDynamicNotice();
     renderMetrics(invoices);
@@ -375,7 +375,7 @@ function monthSeries() {
 function renderMrr() { const series = monthSeries(); const selectedInvoices = filteredInvoices().filter(isBillable); const selected = selectedInvoices.reduce((sum, invoice) => sum + amount(invoice), 0); $('#mrr-total').textContent = money(selected); $('#mrr-label').textContent = periodBounds().label; if (state.mrrChart) state.mrrChart.destroy(); state.mrrChart = new Chart($('#mrr-chart'), { type: 'bar', data: { labels: series.labels, datasets: [{ data: series.values, backgroundColor: series.values.map((_, index) => index === series.values.length - 1 ? colors.authorised : '#d9d8d0'), borderRadius: 2, barPercentage: .58 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => ` ${money(context.raw)}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 10 } } }, y: { beginAtZero: true, grid: { color: '#e5e3dc' }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 9 }, callback: (value) => money(value) } } } } }); $('#mrr-empty').classList.toggle('is-hidden', series.values.length > 0); $('#mrr-breakdown').innerHTML = Object.entries(companyLabels).map(([key, label]) => { const total = selectedInvoices.filter((invoice) => invoice.companyKey === key).reduce((sum, invoice) => sum + amount(invoice), 0); const dimmed = state.scope !== 'all' && state.scope !== key; return `<div class="breakdown-item${dimmed ? ' is-dimmed' : ''}"><span>${label}</span><strong>${money(total)}</strong></div>`; }).join(''); }
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[character])); }
-function renderAll() { renderOverview(); renderLate(); renderMrr(); renderScorecard(); syncViewToUrl(); }
+function renderAll() { renderInvoices(); renderLate(); renderMrr(); renderScorecard(); syncViewToUrl(); }
 
 $('#period-select').addEventListener('change', (event) => { state.period = event.target.value; state.periodFromUrl = true; $('#date-range').hidden = state.period !== 'custom'; renderAll(); });
 $('#date-from').addEventListener('input', (event) => { state.customStart = event.target.value; });
@@ -1009,10 +1009,11 @@ function renderScorecard() {
     renderTargetsSection();
     renderMarginSection();
     renderMonthlyTables();
+    renderOverview();
 }
 
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => {
-    requestAnimationFrame(() => { [state.statusChart, state.mrrChart, state.gapChart].forEach((chart) => chart && chart.resize()); });
+    requestAnimationFrame(() => { [state.statusChart, state.mrrChart, state.gapChart, state.summaryPlanChart, state.summaryBridgeChart].forEach((chart) => chart && chart.resize()); });
 }));
 
 state.marginInputs = {};
@@ -2096,6 +2097,7 @@ function renderLate() {
     empty.classList.toggle('is-hidden', items.length > 0);
 }
 
+// Por mercado sempre mostra os quatro, mesmo com um mercado selecionado (os outros ficam apagados).
 function lateInvoicesByMarket(itemsInView) {
     if (state.scope === 'all') {
         return itemsInView.reduce((map, item) => {
@@ -2107,6 +2109,312 @@ function lateInvoicesByMarket(itemsInView) {
     }
     return withView('all', state.category, () => lateInvoicesByMarket(lateInvoices()));
 }
+
+// ---- Overview ----
+// Plano contra realizado do ano selecionado, numa tela só.
+// Tudo vem das linhas mensais (buildMonthlyRows) e dos inputs manuais de COGS/margem,
+// então os números batem com as abas de origem.
+
+state.summaryPlanChart = null;
+state.summaryBridgeChart = null;
+
+const SUMMARY_ROWS = [
+    { key: 'actual', label: 'MRR actual', format: moneyOr },
+    { key: 'target', label: 'MRR target', format: moneyOr },
+    { key: 'attainment', label: 'Attainment', format: (value) => percentOr(value, 0), tone: 'ratio' },
+    { key: 'retention', label: 'Retention', format: percentOr, tone: 'retention' },
+    { key: 'retentionTarget', label: 'Retention target', format: percentOr },
+    { key: 'clients', label: 'Active clients', format: (value) => (hasValue(value) ? number(value) : DASH) },
+    { key: 'cogs', label: 'COGS', format: moneyOr, tone: 'cogs' },
+    { key: 'cogsTarget', label: 'COGS budget', format: moneyOr },
+    { key: 'margin', label: 'Margin', format: percentOr, tone: 'margin' },
+    { key: 'marginTarget', label: 'Margin target', format: percentOr },
+    { key: 'bonusPool', label: 'Bonus provisioned', format: moneyOr },
+];
+
+function summaryYear() {
+    const { end } = periodBounds();
+    if (end) return end.getFullYear();
+    const years = state.invoices.filter(isBillable).map((invoice) => invoiceDate(invoice)).filter(Boolean).map((date) => date.getFullYear());
+    return years.length ? Math.max(...years) : new Date().getFullYear();
+}
+
+function summaryData() {
+    if (!state.monthlyRows) state.monthlyRows = buildMonthlyRows();
+    const year = summaryYear();
+    const invoices = scopedInvoices();
+    const manual = USE_DEMO_TARGETS ? DEMO_MANUAL_INPUTS : MANUAL_INPUTS;
+    const pick = (name, month) => (state.monthlyRows[name] || [])
+        .find((row) => row.month === month && row.scope === state.scope && row.category === state.category) || null;
+
+    const months = Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`).map((month) => {
+        const targets = pick('targets', month);
+        const retention = pick('retention', month);
+        const mrr = pick('mrr', month);
+        const margin = marginEntryFor(month, invoices);
+        return {
+            month,
+            label: new Intl.DateTimeFormat('en-US', { month: 'short' }).format(monthFromKey(month)),
+            actual: targets ? targets.actual : null,
+            target: targets ? targets.target : null,
+            attainment: targets ? share(targets.actual, targets.target) : null,
+            newBusiness: targets ? targets.newBusiness : null,
+            retention: retention ? retention.rate : null,
+            retentionTarget: retention ? retention.target : manual.retentionTarget,
+            churned: retention ? retention.churned : null,
+            upsells: retention ? retention.upsells : null,
+            initial: retention ? retention.initial : null,
+            clients: mrr ? mrr.clients : null,
+            cogs: margin ? margin.cogs : null,
+            cogsTarget: margin ? margin.cogsTarget : null,
+            margin: margin ? margin.margin : null,
+            marginTarget: margin ? margin.marginTarget : null,
+            bonusPool: margin ? margin.bonusPool : null,
+        };
+    });
+
+    // O ano "até agora": vai até o último mês com receita registrada.
+    let lastIndex = -1;
+    months.forEach((entry, index) => { if (hasValue(entry.actual) && entry.actual > 0) lastIndex = index; });
+    const elapsed = lastIndex >= 0 ? months.slice(0, lastIndex + 1) : [];
+    const totalOf = (field) => {
+        const rows = elapsed.filter((entry) => hasValue(entry[field]));
+        return rows.length ? rows.reduce((total, entry) => total + Number(entry[field]), 0) : null;
+    };
+
+    const latest = lastIndex >= 0 ? months[lastIndex] : null;
+    const firstWithClients = elapsed.find((entry) => hasValue(entry.clients)) || null;
+    const revenue = totalOf('actual');
+    const cogs = totalOf('cogs');
+
+    return {
+        year,
+        months,
+        elapsed,
+        latest,
+        firstWithClients,
+        totals: {
+            revenue,
+            target: totalOf('target'),
+            newBusiness: totalOf('newBusiness'),
+            churned: totalOf('churned'),
+            upsells: totalOf('upsells'),
+            cogs,
+            cogsTarget: totalOf('cogsTarget'),
+            bonusPool: totalOf('bonusPool'),
+            // Margem do ano pela receita e pelo COGS acumulados, não pela média das margens mensais.
+            margin: hasValue(revenue) && hasValue(cogs) && revenue !== 0 ? (revenue - cogs) / revenue : null,
+        },
+    };
+}
+
+function summaryCard(key, { value, ratio, note, foot, invert = false }) {
+    setText(`#sum-${key}-value`, value);
+    setText(`#sum-${key}-note`, note);
+    setText(`#sum-${key}-foot`, foot);
+    const bar = $(`#sum-${key}-bar`);
+    const card = $(`#sum-${key}-card`);
+    if (!bar || !card) return;
+    bar.style.width = `${hasValue(ratio) ? clampPercent(Number(ratio) * 100) : 0}%`;
+    const good = hasValue(ratio) ? (invert ? Number(ratio) <= 1 : Number(ratio) >= 1) : null;
+    card.dataset.state = good === null ? 'empty' : good ? 'good' : 'behind';
+}
+
+function renderOverview() {
+    if (!$('#overview-view')) return;
+    const data = summaryData();
+    const { totals, latest } = data;
+    const monthOf = (entry) => (entry ? monthLabel(monthFromKey(entry.month)) : DASH);
+
+    setText('#summary-scope-note', `${companyLabels[state.scope] || 'All markets'} · ${state.category === 'all' ? 'all services' : categoryLabels[state.category]} · ${data.year}`);
+    setText('#summary-matrix-title', `${data.year}${latest ? `, through ${monthOf(latest)}` : ''}`);
+    setText('#summary-bridge-title', `Recurring base bridge · ${data.year}`);
+
+    summaryCard('revenue', {
+        value: percentOr(share(totals.revenue, totals.target), 0),
+        ratio: share(totals.revenue, totals.target),
+        note: `${moneyOr(totals.revenue)} of ${moneyOr(totals.target)} in the year`,
+        foot: latest ? `${percentOr(latest.attainment, 0)} in ${monthOf(latest)} · accumulated gap ${signedMoney(hasValue(totals.revenue) && hasValue(totals.target) ? totals.revenue - totals.target : null)}` : 'No revenue yet',
+    });
+    summaryCard('retention', {
+        value: percentOr(latest ? latest.retention : null, 0),
+        ratio: latest ? share(latest.retention, latest.retentionTarget) : null,
+        note: latest ? `${percentOr(latest.retention)} in ${monthOf(latest)} against a ${percentOr(latest.retentionTarget, 0)} target` : 'No retention data yet',
+        foot: latest && hasValue(latest.clients)
+            ? `${plural(latest.clients, 'client')} active${data.firstWithClients && data.firstWithClients !== latest ? `, from ${number(data.firstWithClients.clients)} in ${monthOf(data.firstWithClients)}` : ''}`
+            : DASH,
+    });
+    summaryCard('margin', {
+        value: percentOr(latest ? latest.margin : null, 0),
+        ratio: latest ? share(latest.margin, latest.marginTarget) : null,
+        note: latest && hasValue(latest.margin) ? `${percentOr(latest.margin)} in ${monthOf(latest)} against a ${percentOr(latest.marginTarget)} target` : 'No margin entered yet',
+        foot: hasValue(totals.margin) ? `${percentOr(totals.margin)} accumulated in the year` : 'Enter COGS in Margin & COGS',
+    });
+    const cogsRatio = share(totals.cogs, totals.cogsTarget);
+    summaryCard('cogs', {
+        value: hasValue(cogsRatio) ? percentOr(1 - cogsRatio, 0) : DASH,
+        ratio: cogsRatio,
+        invert: true,
+        note: `${moneyOr(totals.cogs)} spent of ${moneyOr(totals.cogsTarget)} budgeted`,
+        foot: hasValue(totals.cogs) && hasValue(totals.cogsTarget)
+            ? `${signedMoney(totals.cogsTarget - totals.cogs)} against budget in the year`
+            : 'No COGS budget entered yet',
+    });
+
+    renderSummaryMatrix(data);
+    renderSummaryHealth(data);
+    renderSummaryPlanChart(data);
+    renderSummaryBridgeChart(data);
+}
+
+function renderSummaryMatrix(data) {
+    $('#summary-matrix-head').innerHTML = `<th>Indicator</th>${data.months.map((entry) => `<th class="align-right">${escapeHtml(entry.label)}</th>`).join('')}`;
+    $('#summary-matrix').innerHTML = SUMMARY_ROWS.map((row) => {
+        const cells = data.months.map((entry) => {
+            const value = entry[row.key];
+            return `<td class="align-right mono ${summaryTone(row, entry)}">${row.format(value)}</td>`;
+        }).join('');
+        return `<tr><th scope="row">${escapeHtml(row.label)}</th>${cells}</tr>`;
+    }).join('');
+
+    const note = $('#summary-matrix-note');
+    if (!note) return;
+    const missing = [];
+    if (!data.elapsed.some((entry) => hasValue(entry.target))) missing.push('Target MRR');
+    if (!data.elapsed.some((entry) => hasValue(entry.cogs))) missing.push('COGS');
+    note.textContent = data.elapsed.length === 0
+        ? `No billable invoices in ${data.year} for this market and service.`
+        : missing.length
+            ? `${missing.join(' and ')} not entered for this view yet — those rows stay empty.`
+            : `Manual figures come from Targets and Margin & COGS; the rest is calculated from invoices.`;
+    note.dataset.tone = missing.length ? 'sample' : 'muted';
+}
+
+// Verde acima da meta, vermelho abaixo; para COGS a lógica se inverte.
+function summaryTone(row, entry) {
+    if (!row.tone) return '';
+    const pairs = { ratio: [entry.attainment, 1], retention: [entry.retention, entry.retentionTarget], margin: [entry.margin, entry.marginTarget], cogs: [entry.cogsTarget, entry.cogs] };
+    const [value, reference] = pairs[row.tone] || [];
+    if (!hasValue(value) || !hasValue(reference)) return '';
+    return Number(value) >= Number(reference) ? 'cell-up' : 'cell-down';
+}
+
+function renderSummaryHealth(data) {
+    const { totals, latest } = data;
+    const rows = [
+        { label: 'Active clients', value: latest && hasValue(latest.clients) ? number(latest.clients) : DASH, sub: data.firstWithClients ? `of ${number(data.firstWithClients.clients)} in ${new Intl.DateTimeFormat('en-US', { month: 'long' }).format(monthFromKey(data.firstWithClients.month))}` : '' },
+        { label: 'Churn in the year', value: hasValue(totals.churned) ? signedMoney(-totals.churned) : DASH, tone: totals.churned > 0 ? 'down' : '' },
+        { label: 'New business in the year', value: hasValue(totals.newBusiness) ? signedMoney(totals.newBusiness) : DASH, tone: totals.newBusiness > 0 ? 'up' : '' },
+        { label: 'Upsells in the year', value: hasValue(totals.upsells) ? signedMoney(totals.upsells) : DASH, tone: totals.upsells > 0 ? 'up' : '' },
+        { label: 'Net change', value: signedMoney(summaryNet(totals)), tone: summaryNet(totals) > 0 ? 'up' : summaryNet(totals) < 0 ? 'down' : '' },
+    ];
+    $('#summary-health').innerHTML = rows.map((row) => `<div class="health-row">
+        <span class="health-label">${escapeHtml(row.label)}${row.sub ? `<small>${escapeHtml(row.sub)}</small>` : ''}</span>
+        <span class="health-value ${row.tone ? `value-${row.tone}` : ''}">${row.value}</span>
+    </div>`).join('');
+
+    const note = $('#summary-bonus-note');
+    if (!note) return;
+    const bonusMonths = data.elapsed.filter((entry) => hasValue(entry.bonusPool)).length;
+    note.textContent = hasValue(data.totals.bonusPool)
+        ? `Bonus provisioned in the year: ${money(data.totals.bonusPool)} — entered for ${plural(bonusMonths, 'month')}.`
+        : 'No bonus pool entered for this view yet.';
+}
+
+function summaryNet(totals) {
+    const parts = [totals.newBusiness, totals.upsells, hasValue(totals.churned) ? -totals.churned : null].filter(hasValue);
+    return parts.length ? parts.reduce((total, value) => total + Number(value), 0) : null;
+}
+
+function renderSummaryPlanChart(data) {
+    const canvas = $('#summary-plan-chart');
+    const empty = $('#summary-plan-empty');
+    if (!canvas || typeof Chart === 'undefined') return;
+    const hasData = data.elapsed.length > 0;
+    empty.classList.toggle('is-hidden', hasData);
+    canvas.classList.toggle('is-hidden', !hasData);
+    if (state.summaryPlanChart) { state.summaryPlanChart.destroy(); state.summaryPlanChart = null; }
+    if (!hasData) return;
+
+    state.summaryPlanChart = new Chart(canvas, {
+        data: {
+            labels: data.months.map((entry) => entry.label),
+            datasets: [
+                { type: 'bar', label: 'Actual', data: data.months.map((entry) => (hasValue(entry.actual) && entry.actual > 0 ? entry.actual : null)), backgroundColor: colors.authorised, borderWidth: 0, maxBarThickness: 28 },
+                { type: 'line', label: 'Target', data: data.months.map((entry) => (hasValue(entry.target) ? entry.target : null)), borderColor: '#4a544d', borderWidth: 1.5, borderDash: [5, 4], pointRadius: 2, pointBackgroundColor: '#4a544d', spanGaps: true, tension: 0 },
+            ],
+        },
+        options: summaryChartOptions(),
+    });
+}
+
+function renderSummaryBridgeChart(data) {
+    const canvas = $('#summary-bridge-chart');
+    const empty = $('#summary-bridge-empty');
+    if (!canvas || typeof Chart === 'undefined') return;
+    const first = data.elapsed[0];
+    const net = summaryNet(data.totals);
+    const hasData = Boolean(first) && hasValue(net);
+    empty.classList.toggle('is-hidden', hasData);
+    canvas.classList.toggle('is-hidden', !hasData);
+    if (state.summaryBridgeChart) { state.summaryBridgeChart.destroy(); state.summaryBridgeChart = null; }
+    if (!hasData) return;
+
+    // Barras flutuantes [início, fim]: base de janeiro, o que entrou, o que saiu e onde parou.
+    const steps = [];
+    let cursor = Number(first.actual) || 0;
+    steps.push({ label: `${first.label} base`, range: [0, cursor], color: '#3f4944' });
+    [
+        { label: 'New business', value: data.totals.newBusiness, color: '#57745d' },
+        { label: 'Upsells', value: data.totals.upsells, color: '#7fa487' },
+        { label: 'Churn', value: hasValue(data.totals.churned) ? -data.totals.churned : null, color: colors.authorised },
+    ].forEach((step) => {
+        if (!hasValue(step.value)) return;
+        const next = cursor + Number(step.value);
+        steps.push({ label: step.label, range: [cursor, next], color: step.color, delta: Number(step.value) });
+        cursor = next;
+    });
+    steps.push({ label: `${data.latest.label} base`, range: [0, cursor], color: '#3f4944' });
+
+    state.summaryBridgeChart = new Chart(canvas, {
+        type: 'bar',
+        data: {
+            labels: steps.map((step) => step.label),
+            datasets: [{ label: 'USD', data: steps.map((step) => step.range), backgroundColor: steps.map((step) => step.color), borderWidth: 0, maxBarThickness: 64 }],
+        },
+        options: {
+            ...summaryChartOptions(),
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: (item) => {
+                    const step = steps[item.dataIndex];
+                    return hasValue(step.delta) ? signedMoney(step.delta) : money(step.range[1]);
+                } } },
+            },
+        },
+    });
+}
+
+function summaryChartOptions() {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: {
+            legend: { display: true, position: 'bottom', labels: { boxWidth: 10, boxHeight: 10, font: { family: 'Manrope', size: 10 }, color: '#6d6f68' } },
+            tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${money(item.parsed.y)}` } },
+        },
+        scales: {
+            x: { grid: { display: false }, ticks: { font: { family: 'DM Mono', size: 10 }, color: '#8a8c84' } },
+            y: { grid: { color: '#ece9e2' }, ticks: { font: { family: 'DM Mono', size: 10 }, color: '#8a8c84', callback: (value) => money(value) } },
+        },
+    };
+}
+
+document.querySelectorAll('[data-goto-view]').forEach((button) => button.addEventListener('click', () => {
+    const target = document.querySelector(`.nav-item[data-view="${button.dataset.gotoView}"]`);
+    if (target) target.click();
+}));
 
 renderScorecard();
 loadMarginInputs();
