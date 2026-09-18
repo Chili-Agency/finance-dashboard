@@ -291,3 +291,15 @@
 .panel-header .link-button{padding:0;border:0;background:none;font:600 10px Manrope;color:var(--muted);cursor:pointer}
 .panel-header .link-button:hover{color:var(--red-deep)}
 @media(max-width:1100px){.summary-grid{grid-template-columns:1fr}}
+
+/* ---- Unit economics ---- */
+.unit-grid{grid-template-columns:repeat(4,1fr)}
+.unit-card{min-height:146px;border-top-color:var(--line)}
+.unit-card[data-state="good"]{border-top-color:var(--green)}
+.unit-card[data-state="behind"]{border-top-color:var(--red)}
+.unit-card strong{margin:15px 0 7px}
+.unit-card .summary-foot{margin-top:5px;color:var(--muted)}
+.manual-panel{margin-bottom:18px}
+.manual-panel .manual-input-status{margin-top:12px;max-width:none}
+@media(max-width:1100px){.unit-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:700px){.unit-grid{grid-template-columns:1fr}}

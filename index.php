@@ -36,6 +36,7 @@ function asset(string $path): string
                 <button class="nav-item is-active" data-view="overview" data-title="Overview"><span class="nav-icon">◍</span>Overview</button>
                 <button class="nav-item" data-view="invoices" data-title="Invoices"><span class="nav-icon">◒</span>Invoices</button>
                 <button class="nav-item" data-view="late" data-title="Late invoices"><span class="nav-icon">◔</span>Late invoices</button>
+                <button class="nav-item" data-view="unit" data-title="Unit economics"><span class="nav-icon">◈</span>Unit economics</button>
                 <button class="nav-item" data-view="mrr" data-title="MRR tracking"><span class="nav-icon">↗</span>MRR tracking</button>
                 <button class="nav-item" data-view="retention" data-title="Retention"><span class="nav-icon">◐</span>Retention</button>
                 <button class="nav-item" data-view="targets" data-title="Targets"><span class="nav-icon">◎</span>Targets</button>
@@ -226,6 +227,80 @@ function asset(string $path): string
                 </div>
 
                 <article class="panel table-panel"><div class="panel-header"><div><p class="eyebrow">Ledger</p><h3>Overdue invoices</h3></div><span class="panel-meta" id="late-table-summary">0 records</span></div><div class="table-scroll"><table class="late-table"><thead><tr><th>Client / invoice</th><th>Market</th><th>Issued</th><th>Due</th><th class="align-right">Days late</th><th class="align-right">Balance (USD)</th><th class="align-right">Correction</th><th class="align-right">Late fee</th><th class="align-right">Interest</th><th class="align-right">Total due</th></tr></thead><tbody id="late-table"></tbody></table><div class="table-empty is-hidden" id="late-table-empty">No overdue invoices.</div></div></article>
+            </section>
+
+
+            <section class="view" id="unit-view" aria-labelledby="page-title">
+                <div class="section-intro">
+                    <div>
+                        <p class="eyebrow">Unit economics</p>
+                        <h2>What a client costs and returns</h2>
+                        <p class="section-copy">ATV, LTV and ALT come from the Xero invoices. CAC and CPL use the costs and leads entered below.</p>
+                    </div>
+                    <div class="filter-stack">
+                        <div class="scope-tabs" role="tablist" aria-label="Company scope">
+                            <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
+                            <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
+                            <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
+                            <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
+                            <button class="scope-tab" data-scope="int" role="tab">International</button>
+                        </div>
+                        <div class="category-filter">
+                            <span>Service</span>
+                            <div class="category-tabs" role="tablist" aria-label="Service line">
+                                <button class="category-tab is-active" data-category="all" role="tab">All</button>
+                                <button class="category-tab" data-category="seo" role="tab">SEO</button>
+                                <button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="metric-grid unit-grid">
+                    <article class="metric-card unit-card" id="unit-atv-card"><div class="metric-heading"><span class="metric-label">ATV</span><span class="metric-badge">01</span></div><strong id="unit-atv-value">—</strong><p id="unit-atv-note">—</p><p class="summary-foot" id="unit-atv-foot">—</p></article><article class="metric-card unit-card" id="unit-arpa-card"><div class="metric-heading"><span class="metric-label">ARPA / month</span><span class="metric-badge">02</span></div><strong id="unit-arpa-value">—</strong><p id="unit-arpa-note">—</p><p class="summary-foot" id="unit-arpa-foot">—</p></article><article class="metric-card unit-card" id="unit-alt-card"><div class="metric-heading"><span class="metric-label">ALT</span><span class="metric-badge">03</span></div><strong id="unit-alt-value">—</strong><p id="unit-alt-note">—</p><p class="summary-foot" id="unit-alt-foot">—</p></article><article class="metric-card unit-card" id="unit-ltv-card"><div class="metric-heading"><span class="metric-label">LTV</span><span class="metric-badge">04</span></div><strong id="unit-ltv-value">—</strong><p id="unit-ltv-note">—</p><p class="summary-foot" id="unit-ltv-foot">—</p></article><article class="metric-card unit-card" id="unit-cac-card"><div class="metric-heading"><span class="metric-label">CAC</span><span class="metric-badge">05</span></div><strong id="unit-cac-value">—</strong><p id="unit-cac-note">—</p><p class="summary-foot" id="unit-cac-foot">—</p></article><article class="metric-card unit-card" id="unit-cpl-card"><div class="metric-heading"><span class="metric-label">CPL</span><span class="metric-badge">06</span></div><strong id="unit-cpl-value">—</strong><p id="unit-cpl-note">—</p><p class="summary-foot" id="unit-cpl-foot">—</p></article><article class="metric-card unit-card" id="unit-ratio-card"><div class="metric-heading"><span class="metric-label">LTV / CAC</span><span class="metric-badge">07</span></div><strong id="unit-ratio-value">—</strong><p id="unit-ratio-note">—</p><p class="summary-foot" id="unit-ratio-foot">—</p></article><article class="metric-card unit-card" id="unit-clients-card"><div class="metric-heading"><span class="metric-label">New clients</span><span class="metric-badge">08</span></div><strong id="unit-clients-value">—</strong><p id="unit-clients-note">—</p><p class="summary-foot" id="unit-clients-foot">—</p></article>
+                </div>
+
+                <article class="panel manual-panel">
+                    <div class="panel-header">
+                        <div><p class="eyebrow">Manual input</p><h3>Acquisition costs and leads</h3></div>
+                        <button type="button" class="button-secondary" id="open-unit-modal">Enter figures</button>
+                    </div>
+                    <p class="manual-input-status" id="unit-input-status" data-tone="muted" aria-live="polite"></p>
+                </article>
+
+                <article class="panel table-panel entries-panel monthly-panel">
+                    <div class="panel-header">
+                        <div><p class="eyebrow">Month by month</p><h3>Metrics by month</h3></div>
+                        <div class="entries-tools">
+                            <span class="panel-meta" id="unit-entries-summary">0 entries</span>
+                            <div class="category-tabs entries-tabs" role="tablist" aria-label="Entries shown">
+                                <button class="entries-tab is-active" data-unit-table="unit" data-entries="all" role="tab">All entries</button>
+                                <button class="entries-tab" data-unit-table="unit" data-entries="view" role="tab">Current view</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="table-scroll monthly-scroll">
+                        <table class="entries-table"><thead><tr><th>Month</th><th>Market</th><th>Service</th><th class="align-right">Revenue</th><th class="align-right">Invoices</th><th class="align-right">ATV</th><th class="align-right">Active clients</th><th class="align-right">ARPA</th><th class="align-right">New clients</th><th class="align-right">S&amp;M cost</th><th class="align-right">CAC</th><th class="align-right">Marketing cost</th><th class="align-right">Leads</th><th class="align-right">CPL</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody id="unit-entries-table"></tbody></table>
+                        <div class="table-empty is-hidden" id="unit-entries-empty"></div>
+                    </div>
+                </article>
+
+                <article class="panel table-panel entries-panel monthly-panel">
+                    <div class="panel-header">
+                        <div><p class="eyebrow">Client by client</p><h3>Lifetime by client</h3></div>
+                        <div class="entries-tools">
+                            <span class="panel-meta" id="client-entries-summary">0 entries</span>
+                            <div class="category-tabs entries-tabs" role="tablist" aria-label="Entries shown">
+                                <button class="entries-tab is-active" data-unit-table="client" data-entries="all" role="tab">All clients</button>
+                                <button class="entries-tab" data-unit-table="client" data-entries="view" role="tab">Churned only</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="table-scroll monthly-scroll">
+                        <table class="entries-table"><thead><tr><th>Client</th><th>Market</th><th class="align-right">First invoice</th><th class="align-right">Last invoice</th><th class="align-right">Months</th><th class="align-right">Revenue</th><th class="align-right">ARPA</th><th class="align-right">Status</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody id="client-entries-table"></tbody></table>
+                        <div class="table-empty is-hidden" id="client-entries-empty"></div>
+                    </div>
+                </article>
             </section>
 
             <section class="view" id="mrr-view" aria-labelledby="page-title"><div class="section-intro mrr-intro"><div><p class="eyebrow">Revenue intelligence</p><h2>Monthly recurring revenue</h2><p class="section-copy">Issued client invoices, normalized to USD. Use the period selector to compare months.</p></div><div class="mrr-side"><div class="filter-stack"><div class="scope-tabs" role="tablist" aria-label="Company scope"><button class="scope-tab is-active" data-scope="all" role="tab">Global</button><button class="scope-tab" data-scope="br" role="tab">Brazil</button><button class="scope-tab" data-scope="mx" role="tab">Mexico</button><button class="scope-tab" data-scope="pa" role="tab">Panama</button><button class="scope-tab" data-scope="int" role="tab">International</button></div><div class="category-filter"><span>Service</span><div class="category-tabs" role="tablist" aria-label="Service line"><button class="category-tab is-active" data-category="all" role="tab">All</button><button class="category-tab" data-category="seo" role="tab">SEO</button><button class="category-tab" data-category="ppc" role="tab">PPC</button></div></div></div><div class="mrr-callout"><span>Selected period</span><strong id="mrr-total">$0</strong><small id="mrr-label">Current month</small></div></div></div><article class="panel mrr-panel"><div class="panel-header"><div><p class="eyebrow">Trend</p><h3>Revenue by month</h3></div><span class="panel-meta">Issued invoices</span></div><div class="mrr-chart-wrap"><canvas id="mrr-chart"></canvas><div class="chart-empty" id="mrr-empty">No revenue data available</div></div></article><div class="mrr-breakdown" id="mrr-breakdown"></div>
@@ -585,6 +660,66 @@ function asset(string $path): string
                 <div class="modal-actions">
                     <button type="button" class="button-secondary" data-close-modal>Cancel</button>
                     <button type="submit" class="button-primary" id="margin-form-submit">Save figures</button>
+                </div>
+            </footer>
+        </form>
+    </dialog>
+    <dialog class="modal" id="unit-modal" aria-labelledby="unit-modal-title">
+        <form class="modal-form" id="unit-form" novalidate>
+            <header class="modal-header">
+                <div>
+                    <p class="eyebrow">Manual input</p>
+                    <h2 id="unit-modal-title">Acquisition costs and leads</h2>
+                </div>
+                <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+            </header>
+            <p class="modal-copy">Figures for one month, market and service line. Money in USD.</p>
+
+            <fieldset class="form-group">
+                <legend>Applies to</legend>
+                <div class="form-grid is-three">
+                    <label class="field"><span>Month</span><input type="month" name="month" id="unit-month" autofocus></label>
+                    <label class="field"><span>Market</span>
+                        <select name="scope">
+                            <option value="all">Global</option>
+                            <option value="br">Brazil</option>
+                            <option value="mx">Mexico</option>
+                            <option value="pa">Panama</option>
+                            <option value="int">International</option>
+                        </select>
+                    </label>
+                    <label class="field"><span>Service</span>
+                        <select name="category">
+                            <option value="all">All</option>
+                            <option value="seo">SEO</option>
+                            <option value="ppc">PPC</option>
+                        </select>
+                    </label>
+                </div>
+            </fieldset>
+
+            <fieldset class="form-group">
+                <legend>Acquisition (CAC)</legend>
+                <div class="form-grid">
+                    <label class="field"><span>Sales &amp; Marketing cost</span><div class="input-affix"><i>$</i><input type="number" name="salesMarketingCost" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div></label>
+                    <label class="field"><span>New clients</span><input type="number" name="newClients" min="0" step="1" inputmode="numeric" placeholder="from invoices"></label>
+                </div>
+            </fieldset>
+
+            <fieldset class="form-group">
+                <legend>Demand generation (CPL)</legend>
+                <div class="form-grid">
+                    <label class="field"><span>Marketing cost</span><div class="input-affix"><i>$</i><input type="number" name="marketingCost" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div></label>
+                    <label class="field"><span>Leads</span><input type="number" name="leads" min="0" step="1" inputmode="numeric" placeholder="0"></label>
+                </div>
+            </fieldset>
+
+            <p class="form-error" id="unit-form-error" role="alert" hidden></p>
+
+            <footer class="modal-footer">
+                <div class="modal-actions">
+                    <button type="button" class="button-secondary" data-close-modal>Cancel</button>
+                    <button type="submit" class="button-primary" id="unit-form-submit">Save figures</button>
                 </div>
             </footer>
         </form>

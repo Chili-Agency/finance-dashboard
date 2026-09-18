@@ -492,7 +492,7 @@ const percentOr = (value, digits = 1) => (hasValue(value) ? `${(Number(value) * 
 const signedPoints = (value, digits = 1) => (hasValue(value) ? `${Number(value) > 0 ? '+' : Number(value) < 0 ? '−' : ''}${Math.abs(Number(value) * 100).toFixed(digits)} pts` : DASH);
 const share = (part, whole) => (hasValue(part) && hasValue(whole) && Number(whole) !== 0 ? Number(part) / Number(whole) : null);
 const clampPercent = (value) => Math.max(0, Math.min(100, value));
-const plural = (count, word) => `${number(count)} ${word}${count === 1 ? '' : 's'}`;
+const plural = (count, word) => `${number(count)} ${count === 1 ? word : /[^aeiou]y$/.test(word) ? `${word.slice(0, -1)}ies` : `${word}s`}`;
 
 function setText(selector, value) { const node = $(selector); if (node) node.textContent = value; }
 
@@ -1010,6 +1010,7 @@ function renderScorecard() {
     renderMarginSection();
     renderMonthlyTables();
     renderOverview();
+    renderUnitSection();
 }
 
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => {
@@ -1700,6 +1701,8 @@ function buildMonthlyRows() {
                     changeRate: previousMrr ? (m.totalMrr - previousMrr) / previousMrr : null,
                     invoices: m.invoiceCount,
                     clients: m.activeClients,
+                    newClients: meta.newClients,
+                    newBusiness: m.newBusiness,
                     average: m.activeClients ? m.totalMrr / m.activeClients : null,
                 });
             }
@@ -2416,7 +2419,458 @@ document.querySelectorAll('[data-goto-view]').forEach((button) => button.addEven
     if (target) target.click();
 }));
 
+// ---- Unit economics ----
+// ATV, ARPA, ALT e LTV saem das invoices do Xero; CAC e CPL usam os custos lançados à mão.
+// Definições:
+//   ATV  = receita / número de invoices no período
+//   ARPA = receita do mês / clientes ativos no mês
+//   ALT  = tempo médio, em meses, entre a primeira e a última invoice dos clientes já perdidos
+//   LTV  = ARPA × ALT (receita; a margem entra na nota do card)
+//   CAC  = custo de Sales & Marketing / novos clientes
+//   CPL  = custo de Marketing / leads
+// Um cliente é considerado perdido após CHURN_GRACE_MONTHS meses sem invoice.
+const CHURN_GRACE_MONTHS = 2;
+
+state.unitInputs = {};
+state.unitInputsStatus = 'loading';
+state.unitInputsError = '';
+state.unitEntriesMode = 'all';
+state.clientEntriesMode = 'all';
+const UNIT_ENDPOINT = 'unit-inputs.php';
+const UNIT_FIELDS = {
+    salesMarketingCost: { kind: 'money' },
+    newClients: { kind: 'count' },
+    marketingCost: { kind: 'money' },
+    leads: { kind: 'count' },
+};
+
+const unitForm = $('#unit-form');
+const unitModal = $('#unit-modal');
+
+async function unitRequest(options = {}) {
+    const response = redirectIfSignedOut(await fetch(UNIT_ENDPOINT, { cache: 'no-store', ...options }));
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `The server answered HTTP ${response.status}.`);
+    return body;
+}
+
+function storeUnitEntry(entry) {
+    state.unitInputs[marginInputKey(entry.month, entry.scope, entry.category)] = entry;
+}
+
+async function loadUnitInputs() {
+    state.unitInputsStatus = 'loading';
+    try {
+        const { entries = [] } = await unitRequest();
+        state.unitInputs = {};
+        entries.forEach(storeUnitEntry);
+        state.unitInputsStatus = 'ready';
+    } catch (error) {
+        state.unitInputsStatus = 'error';
+        state.unitInputsError = error.message;
+    }
+    renderUnitSection();
+}
+
+async function saveUnitInput(entry) {
+    const { entry: saved } = await unitRequest({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry),
+    });
+    storeUnitEntry(saved);
+    return saved;
+}
+
+function exactUnit(month, scope, category) {
+    return state.unitInputs[marginInputKey(month, scope, category)] || null;
+}
+
+// Combina somando: custos, leads e novos clientes são aditivos entre serviços e mercados.
+function combineUnit(entries) {
+    const parts = entries.filter(Boolean);
+    if (!parts.length) return null;
+    const sum = (field) => {
+        const rows = parts.filter((part) => hasValue(part[field]));
+        return rows.length ? rows.reduce((total, part) => total + Number(part[field]), 0) : null;
+    };
+    return {
+        salesMarketingCost: sum('salesMarketingCost'),
+        newClients: sum('newClients'),
+        marketingCost: sum('marketingCost'),
+        leads: sum('leads'),
+        entryCount: parts.reduce((total, part) => total + (part.entryCount || 1), 0),
+    };
+}
+
+function resolveUnit(month, scope, category) {
+    const exact = exactUnit(month, scope, category);
+    if (exact) return exact;
+    if (category === 'all') {
+        const lines = combineUnit(Object.keys(categoryLabels).map((key) => exactUnit(month, scope, key)));
+        if (lines) return lines;
+    }
+    if (scope === 'all') return combineUnit(Object.keys(companyLabels).map((key) => resolveUnit(month, key, category)));
+    return null;
+}
+
+// ---- Ciclo de vida por cliente ----
+// Esquerda censurada: o n8n só traz invoices a partir de jan/2025, então quem já era
+// cliente antes disso tem a data de início truncada e fica fora da média do ALT.
+function clientLifetimes() {
+    const invoices = scopedInvoices();
+    const today = startOfToday();
+    const currentMonth = monthKey(today);
+    const datasetStart = invoices.reduce((first, invoice) => {
+        const date = invoiceDate(invoice);
+        return date && (!first || date < first) ? date : first;
+    }, null);
+
+    const clients = new Map();
+    invoices.forEach((invoice) => {
+        const date = invoiceDate(invoice);
+        if (!date) return;
+        const key = contactKey(invoice);
+        const entry = clients.get(key) || { key, name: invoice.Contact?.Name || 'Unknown client', scope: invoice.companyKey, first: date, last: date, revenue: 0, months: new Set(), invoices: 0 };
+        if (date < entry.first) entry.first = date;
+        if (date > entry.last) entry.last = date;
+        entry.revenue += amount(invoice);
+        entry.months.add(monthKey(date));
+        entry.invoices += 1;
+        clients.set(key, entry);
+    });
+
+    const cutoff = new Date(today.getFullYear(), today.getMonth() - CHURN_GRACE_MONTHS, 1);
+    return [...clients.values()].map((entry) => {
+        const lifetime = monthKeysBetween(entry.first, entry.last).length; // meses de calendário, ponta a ponta
+        const active = monthKey(entry.last) === currentMonth || entry.last >= cutoff;
+        return {
+            ...entry,
+            lifetime,
+            active,
+            leftCensored: Boolean(datasetStart) && monthKey(entry.first) === monthKey(datasetStart),
+            arpa: lifetime > 0 ? entry.revenue / lifetime : null,
+        };
+    }).sort((a, b) => b.revenue - a.revenue);
+}
+
+function unitMetrics() {
+    const { start, end } = periodBounds();
+    const window = { start: start || new Date(1970, 0, 1), end: end || new Date(9999, 11, 31) };
+    const invoices = scopedInvoices().filter((invoice) => inWindow(invoiceDate(invoice), window));
+    const revenue = invoices.reduce((total, invoice) => total + amount(invoice), 0);
+    const months = monthKeysBetween(window.start < new Date(1990, 0, 1) ? (invoices.length ? invoiceDate(invoices[0]) : startOfToday()) : window.start, window.end > new Date(9000, 0, 1) ? startOfToday() : window.end);
+
+    const inputs = combineUnit(months.map((month) => resolveUnit(month, state.scope, state.category))) || {};
+    const meta = state.scorecardMeta || {};
+    const scorecard = state.scorecard || {};
+    const newClients = hasValue(inputs.newClients) ? inputs.newClients : (hasValue(meta.newClients) ? meta.newClients : null);
+
+    const clients = clientLifetimes();
+    const churned = clients.filter((client) => !client.active && !client.leftCensored);
+    const alt = churned.length ? churned.reduce((total, client) => total + client.lifetime, 0) / churned.length : null;
+
+    const activeClients = scorecard.retention ? scorecard.retention.activeClients : null;
+    const monthsInWindow = Math.max(1, months.length);
+    const arpa = hasValue(activeClients) && activeClients > 0 ? revenue / activeClients / monthsInWindow : null;
+    const margin = meta.marginEntry?.margin ?? meta.marginAggregate?.margin ?? null;
+
+    return {
+        months,
+        revenue,
+        invoiceCount: invoices.length,
+        atv: invoices.length ? revenue / invoices.length : null,
+        arpa,
+        alt,
+        ltv: hasValue(arpa) && hasValue(alt) ? arpa * alt : null,
+        margin,
+        newClients,
+        newClientsFromInvoices: !hasValue(inputs.newClients),
+        salesMarketingCost: inputs.salesMarketingCost ?? null,
+        marketingCost: inputs.marketingCost ?? null,
+        leads: inputs.leads ?? null,
+        cac: hasValue(inputs.salesMarketingCost) && hasValue(newClients) && newClients > 0 ? inputs.salesMarketingCost / newClients : null,
+        cpl: hasValue(inputs.marketingCost) && hasValue(inputs.leads) && inputs.leads > 0 ? inputs.marketingCost / inputs.leads : null,
+        clients,
+        churnedCount: churned.length,
+        censoredCount: clients.filter((client) => client.leftCensored).length,
+        activeCount: clients.filter((client) => client.active).length,
+    };
+}
+
+function unitCard(key, { value, note, foot, state: tone = 'empty' }) {
+    setText(`#unit-${key}-value`, value);
+    setText(`#unit-${key}-note`, note);
+    setText(`#unit-${key}-foot`, foot);
+    const card = $(`#unit-${key}-card`);
+    if (card) card.dataset.state = tone;
+}
+
+function renderUnitSection() {
+    if (!$('#unit-view')) return;
+    const metrics = unitMetrics();
+    const periodLabel = periodBounds().label;
+
+    unitCard('atv', {
+        value: moneyOr(metrics.atv),
+        note: `${moneyOr(metrics.revenue)} over ${plural(metrics.invoiceCount, 'invoice')}`,
+        foot: periodLabel,
+        state: hasValue(metrics.atv) ? 'good' : 'empty',
+    });
+    unitCard('arpa', {
+        value: moneyOr(metrics.arpa),
+        note: 'Revenue per active client per month',
+        foot: `${plural(metrics.activeCount, 'client')} with invoices in this view`,
+        state: hasValue(metrics.arpa) ? 'good' : 'empty',
+    });
+    unitCard('alt', {
+        value: hasValue(metrics.alt) ? `${metrics.alt.toFixed(1)} mo` : DASH,
+        note: metrics.churnedCount ? `Average across ${plural(metrics.churnedCount, 'lost client')}` : 'No lost clients with a known start date',
+        foot: metrics.censoredCount ? `${plural(metrics.censoredCount, 'client')} left out: they started before the invoice history` : 'All clients have a known start date',
+        state: hasValue(metrics.alt) ? 'good' : 'empty',
+    });
+    unitCard('ltv', {
+        value: moneyOr(metrics.ltv),
+        note: 'ARPA × ALT, in revenue',
+        foot: hasValue(metrics.ltv) && hasValue(metrics.margin) ? `${moneyOr(metrics.ltv * metrics.margin)} at the ${percentOr(metrics.margin)} margin entered` : 'Enter a margin to see it net of COGS',
+        state: hasValue(metrics.ltv) ? 'good' : 'empty',
+    });
+    unitCard('cac', {
+        value: moneyOr(metrics.cac),
+        note: hasValue(metrics.salesMarketingCost) ? `${moneyOr(metrics.salesMarketingCost)} over ${hasValue(metrics.newClients) ? plural(metrics.newClients, 'new client') : 'no new clients'}` : 'No Sales & Marketing cost entered',
+        foot: metrics.newClientsFromInvoices ? 'New clients counted from the invoices' : 'New clients entered by hand',
+        state: hasValue(metrics.cac) ? 'good' : 'empty',
+    });
+    unitCard('cpl', {
+        value: moneyOr(metrics.cpl),
+        note: hasValue(metrics.marketingCost) ? `${moneyOr(metrics.marketingCost)} over ${hasValue(metrics.leads) ? plural(metrics.leads, 'lead') : 'no leads'}` : 'No marketing cost entered',
+        foot: periodLabel,
+        state: hasValue(metrics.cpl) ? 'good' : 'empty',
+    });
+    const ratio = hasValue(metrics.ltv) && hasValue(metrics.cac) && metrics.cac > 0 ? metrics.ltv / metrics.cac : null;
+    unitCard('ratio', {
+        value: hasValue(ratio) ? `${ratio.toFixed(1)}×` : DASH,
+        note: 'How much a client returns for each dollar spent to win them',
+        foot: hasValue(ratio) ? (ratio >= 3 ? 'At or above the usual 3× benchmark' : 'Below the usual 3× benchmark') : 'Needs LTV and CAC',
+        state: hasValue(ratio) ? (ratio >= 3 ? 'good' : 'behind') : 'empty',
+    });
+    unitCard('clients', {
+        value: hasValue(metrics.newClients) ? number(metrics.newClients) : DASH,
+        note: `Won in ${periodLabel.toLowerCase()}`,
+        foot: `${plural(metrics.churnedCount, 'client')} lost with a known start date`,
+        state: hasValue(metrics.newClients) ? 'good' : 'empty',
+    });
+
+    renderUnitInputStatus();
+    renderUnitMonthlyTable();
+    renderClientTable(metrics.clients);
+}
+
+function renderUnitInputStatus() {
+    const node = $('#unit-input-status');
+    if (!node) return;
+    if (state.unitInputsStatus === 'loading') { node.textContent = 'Loading saved figures…'; node.dataset.tone = 'muted'; return; }
+    if (state.unitInputsStatus === 'error') { node.textContent = `Could not load saved figures: ${state.unitInputsError}`; node.dataset.tone = 'error'; return; }
+    const count = Object.keys(state.unitInputs).length;
+    node.textContent = count
+        ? `${plural(count, 'entry')} saved. CAC and CPL only appear for months with costs entered; leave New clients empty to use the count from the invoices.`
+        : 'Nothing entered yet. Add the Sales & Marketing cost, the marketing cost and the leads of a month to see CAC and CPL.';
+    node.dataset.tone = count ? 'manual' : 'muted';
+}
+
+function unitMonthlyRows() {
+    if (!state.monthlyRows) state.monthlyRows = buildMonthlyRows();
+    return (state.monthlyRows.mrr || []).map((row) => {
+        const input = resolveUnit(row.month, row.scope, row.category);
+        const newClients = hasValue(input?.newClients) ? input.newClients : row.newClients;
+        return {
+            ...row,
+            atv: row.invoices ? row.mrr / row.invoices : null,
+            arpa: row.clients ? row.mrr / row.clients : null,
+            newClients,
+            salesMarketingCost: input?.salesMarketingCost ?? null,
+            marketingCost: input?.marketingCost ?? null,
+            leads: input?.leads ?? null,
+            cac: hasValue(input?.salesMarketingCost) && hasValue(newClients) && newClients > 0 ? input.salesMarketingCost / newClients : null,
+            cpl: hasValue(input?.marketingCost) && hasValue(input?.leads) && input.leads > 0 ? input.marketingCost / input.leads : null,
+            hasExactInput: Boolean(exactUnit(row.month, row.scope, row.category)),
+        };
+    });
+}
+
+function renderUnitMonthlyTable() {
+    const body = $('#unit-entries-table');
+    if (!body) return;
+    const all = unitMonthlyRows();
+    const mode = state.unitEntriesMode;
+    const rows = mode === 'view' ? all.filter(entryInView) : all;
+    const inViewCount = all.filter(entryInView).length;
+    setText('#unit-entries-summary', mode === 'view'
+        ? `${plural(rows.length, 'entry')} of ${number(all.length)}`
+        : `${plural(all.length, 'entry')} · ${number(inViewCount)} used in current view`);
+
+    body.innerHTML = rows.map((row) => {
+        const used = mode === 'all' && entryInView(row);
+        return `<tr class="${used ? 'is-in-view' : ''}"${used ? ' title="Used by the current view"' : ''}>
+            <td>${escapeHtml(monthLabel(monthFromKey(row.month)))}</td>
+            <td>${escapeHtml(companyLabels[row.scope] || 'Global')}</td>
+            <td>${escapeHtml(serviceName(row.category))}</td>
+            <td class="align-right mono">${moneyOr(row.mrr)}</td>
+            <td class="align-right mono">${number(row.invoices)}</td>
+            <td class="align-right mono">${moneyOr(row.atv)}</td>
+            <td class="align-right mono">${number(row.clients)}</td>
+            <td class="align-right mono">${moneyOr(row.arpa)}</td>
+            <td class="align-right mono">${hasValue(row.newClients) ? number(row.newClients) : DASH}</td>
+            <td class="align-right mono">${moneyOr(row.salesMarketingCost)}</td>
+            <td class="align-right mono">${moneyOr(row.cac)}</td>
+            <td class="align-right mono">${moneyOr(row.marketingCost)}</td>
+            <td class="align-right mono">${hasValue(row.leads) ? number(row.leads) : DASH}</td>
+            <td class="align-right mono">${moneyOr(row.cpl)}</td>
+            <td class="align-right entry-actions"><button type="button" class="row-button" data-unit-show="${escapeHtml(row.key)}">Show</button><button type="button" class="row-button" data-unit-edit="${escapeHtml(row.key)}">${row.hasExactInput ? 'Edit' : 'Add costs'}</button></td>
+        </tr>`;
+    }).join('');
+
+    const empty = $('#unit-entries-empty');
+    empty.textContent = !state.invoices.length && state.sync.phase === 'loading'
+        ? 'Loading invoices…'
+        : !all.length ? 'No billable client invoices yet.'
+            : !rows.length ? 'No month matches the current market, service and period.' : '';
+    empty.classList.toggle('is-hidden', rows.length > 0);
+}
+
+function renderClientTable(clients) {
+    const body = $('#client-entries-table');
+    if (!body) return;
+    const rows = state.clientEntriesMode === 'view' ? clients.filter((client) => !client.active) : clients;
+    setText('#client-entries-summary', `${plural(rows.length, 'client')} · ${number(clients.filter((client) => !client.active).length)} lost`);
+
+    body.innerHTML = rows.map((client) => `<tr>
+        <td>${escapeHtml(client.name)}${client.leftCensored ? '<div class="client-sub">started before the invoice history</div>' : ''}</td>
+        <td>${escapeHtml(companyLabels[client.scope] || DASH)}</td>
+        <td>${escapeHtml(monthLabel(client.first))}</td>
+        <td>${escapeHtml(monthLabel(client.last))}</td>
+        <td class="align-right mono">${number(client.lifetime)}</td>
+        <td class="align-right mono">${moneyOr(client.revenue)}</td>
+        <td class="align-right mono">${moneyOr(client.arpa)}</td>
+        <td class="align-right"><span class="status-pill ${client.active ? 'paid' : 'late'}">${client.active ? 'Active' : 'Lost'}</span></td>
+    </tr>`).join('');
+
+    const empty = $('#client-entries-empty');
+    empty.textContent = rows.length ? '' : state.invoices.length ? 'No client matches this market and service.' : 'Loading invoices…';
+    empty.classList.toggle('is-hidden', rows.length > 0);
+}
+
+// ---- Formulário ----
+function fillUnitValues(entry) {
+    Object.keys(UNIT_FIELDS).forEach((name) => {
+        const value = entry ? entry[name] : null;
+        unitForm.elements[name].value = hasValue(value) ? String(value) : '';
+    });
+}
+
+function loadUnitEntryIntoForm() {
+    const { month, scope, category } = unitForm.elements;
+    const entry = month.value ? exactUnit(month.value, scope.value, category.value) : null;
+    fillUnitValues(entry);
+    $('#unit-form-submit').textContent = entry ? 'Update figures' : 'Save figures';
+}
+
+function showUnitError(message, field) {
+    const node = $('#unit-form-error');
+    unitForm.querySelectorAll('[aria-invalid]').forEach((input) => input.removeAttribute('aria-invalid'));
+    node.hidden = !message;
+    node.textContent = message || '';
+    if (field) { field.setAttribute('aria-invalid', 'true'); field.focus(); }
+}
+
+function openUnitModal(entry = null) {
+    unitForm.reset();
+    showUnitError('');
+    unitForm.elements.month.value = entry ? entry.month : monthKey(selectedSingleMonth() || new Date());
+    unitForm.elements.scope.value = entry ? entry.scope : state.scope;
+    unitForm.elements.category.value = entry ? entry.category : state.category;
+    loadUnitEntryIntoForm();
+    unitModal.showModal();
+}
+
+function closeUnitModal() { unitModal.close(); $('#open-unit-modal').focus(); }
+
+function readUnitForm() {
+    const { elements } = unitForm;
+    if (!/^\d{4}-\d{2}$/.test(elements.month.value)) { showUnitError('Choose the month these figures belong to.', elements.month); return null; }
+    const entry = { month: elements.month.value, scope: elements.scope.value, category: elements.category.value };
+    for (const [name, field] of Object.entries(UNIT_FIELDS)) {
+        const input = elements[name];
+        const label = input.closest('.field').querySelector('span').textContent;
+        if (input.value.trim() === '') {
+            if (input.validity.badInput) { showUnitError(`${label} is not a valid number.`, input); return null; }
+            entry[name] = null;
+            continue;
+        }
+        const value = Number(input.value);
+        if (!Number.isFinite(value)) { showUnitError(`${label} is not a valid number.`, input); return null; }
+        if (value < 0) { showUnitError(`${label} cannot be negative.`, input); return null; }
+        entry[name] = field.kind === 'count' ? Math.round(value) : value;
+    }
+    if (Object.keys(UNIT_FIELDS).every((name) => entry[name] === null)) {
+        showUnitError('Fill in at least one figure.', elements.salesMarketingCost);
+        return null;
+    }
+    entry.enteredAt = new Date().toISOString();
+    return entry;
+}
+
+if (unitForm) {
+    $('#open-unit-modal').addEventListener('click', () => openUnitModal());
+    unitModal.querySelectorAll('[data-close-modal]').forEach((button) => button.addEventListener('click', closeUnitModal));
+    unitModal.addEventListener('click', (event) => { if (event.target === unitModal) closeUnitModal(); });
+    ['month', 'scope', 'category'].forEach((name) => unitForm.elements[name].addEventListener('change', loadUnitEntryIntoForm));
+    unitForm.addEventListener('input', () => { if (!$('#unit-form-error').hidden) showUnitError(''); });
+
+    unitForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const entry = readUnitForm();
+        if (!entry) return;
+        const submit = $('#unit-form-submit');
+        const label = submit.textContent;
+        submit.disabled = true;
+        submit.textContent = 'Saving…';
+        try {
+            const saved = await saveUnitInput(entry);
+            closeUnitModal();
+            showMarginEntry(saved);
+        } catch (error) {
+            showUnitError(error.message || 'Could not save the figures.');
+        } finally {
+            submit.disabled = false;
+            submit.textContent = label;
+        }
+    });
+
+    document.querySelectorAll('.entries-tab[data-unit-table="unit"]').forEach((button) => button.addEventListener('click', () => {
+        state.unitEntriesMode = button.dataset.entries;
+        document.querySelectorAll('.entries-tab[data-unit-table="unit"]').forEach((item) => item.classList.toggle('is-active', item === button));
+        renderUnitMonthlyTable();
+    }));
+    document.querySelectorAll('.entries-tab[data-unit-table="client"]').forEach((button) => button.addEventListener('click', () => {
+        state.clientEntriesMode = button.dataset.entries;
+        document.querySelectorAll('.entries-tab[data-unit-table="client"]').forEach((item) => item.classList.toggle('is-active', item === button));
+        renderClientTable(clientLifetimes());
+    }));
+
+    $('#unit-entries-table').addEventListener('click', (event) => {
+        const button = event.target.closest('button');
+        if (!button) return;
+        const key = button.dataset.unitShow || button.dataset.unitEdit;
+        const [month, scope, category] = String(key).split('|');
+        if (button.dataset.unitEdit) { openUnitModal({ month, scope, category, ...(exactUnit(month, scope, category) || {}) }); return; }
+        showMarginEntry({ month, scope, category });
+        $('#unit-view').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+}
+
 renderScorecard();
 loadMarginInputs();
 loadTargetInputs();
 loadBrIndices();
+loadUnitInputs();
