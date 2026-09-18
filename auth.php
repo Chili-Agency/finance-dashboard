@@ -4,17 +4,10 @@ declare(strict_types=1);
 /*
  * Autenticação do dashboard.
  *
- * TEMPORÁRIO: as credenciais abaixo são mockadas em código. Quando houver
- * uma fonte real (tabela de usuários, SSO etc.), troque apenas
- * auth_find_user() — o resto (sessão, guardas, CSRF) continua valendo.
+ * Os usuários vivem na tabela `dashboard_users` (ver sql/001_dashboard_users.sql).
+ * A senha nunca é guardada em texto: só o hash gerado por password_hash().
+ * Para gerar um hash: php bin/hash-password.php
  */
-
-const AUTH_MOCK_USERS = [
-    'admin@chili.pa' => [
-        'password' => 'Chili@2026',
-        'name' => 'Finance Admin',
-    ],
-];
 
 const AUTH_SESSION_NAME = 'chili_finance_session';
 const AUTH_IDLE_SECONDS = 8 * 60 * 60;
@@ -41,10 +34,68 @@ function auth_start(): void
     session_start();
 }
 
+function auth_db(): PDO
+{
+    static $pdo = null;
+    if ($pdo instanceof PDO) {
+        return $pdo;
+    }
+    $config = require __DIR__ . '/config.php';
+    $db = $config['db'];
+    $dsn = sprintf('mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4', $db['host'], $db['port'] ?? 3306, $db['name']);
+
+    $pdo = new PDO($dsn, $db['user'], $db['pass'], [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_EMULATE_PREPARES => false,
+    ]);
+    return $pdo;
+}
+
+/** @return array{id:int,email:string,name:string,password_hash:string}|null */
 function auth_find_user(string $email): ?array
 {
     $email = strtolower(trim($email));
-    return AUTH_MOCK_USERS[$email] ?? null;
+    if ($email === '') {
+        return null;
+    }
+    $select = auth_db()->prepare(
+        'SELECT id, email, name, password_hash
+           FROM dashboard_users
+          WHERE email = ? AND is_active = 1
+          LIMIT 1'
+    );
+    $select->execute([$email]);
+    $row = $select->fetch();
+    if (!is_array($row)) {
+        return null;
+    }
+    $row['id'] = (int) $row['id'];
+    return $row;
+}
+
+function auth_verify_password(?array $user, string $password): bool
+{
+    if ($user === null) {
+        password_hash($password, PASSWORD_DEFAULT);
+        return false;
+    }
+    return password_verify($password, $user['password_hash']);
+}
+
+function auth_after_login(array $user, string $password): void
+{
+    try {
+        $pdo = auth_db();
+        if (password_needs_rehash($user['password_hash'], PASSWORD_DEFAULT)) {
+            $pdo->prepare('UPDATE dashboard_users SET password_hash = ? WHERE id = ?')
+                ->execute([password_hash($password, PASSWORD_DEFAULT), $user['id']]);
+        }
+        $pdo->prepare('UPDATE dashboard_users SET last_login_at = UTC_TIMESTAMP() WHERE id = ?')
+            ->execute([$user['id']]);
+    } catch (Throwable $error) {
+        error_log('[auth] post-login update: ' . $error->getMessage());
+    }
 }
 
 function auth_user(): ?array
@@ -72,9 +123,13 @@ function auth_attempt(string $email, string $password): ?string
         return "Too many attempts. Try again in {$minutes} minute" . ($minutes === 1 ? '' : 's') . '.';
     }
 
-    $user = auth_find_user($email);
-    $expected = $user['password'] ?? bin2hex(random_bytes(16));
-    $valid = $user !== null && hash_equals($expected, $password);
+    try {
+        $user = auth_find_user($email);
+    } catch (Throwable $error) {
+        error_log('[auth] ' . $error->getMessage());
+        return 'We couldn’t check your account right now. Try again in a moment.';
+    }
+    $valid = auth_verify_password($user, $password);
 
     if (!$valid) {
         $attempts = (int) ($_SESSION['auth_attempts'] ?? 0) + 1;
@@ -88,9 +143,10 @@ function auth_attempt(string $email, string $password): ?string
 
     session_regenerate_id(true); // evita session fixation
     unset($_SESSION['auth_attempts'], $_SESSION['auth_locked_until']);
-    $_SESSION['auth_user'] = ['email' => strtolower(trim($email)), 'name' => $user['name']];
+    $_SESSION['auth_user'] = ['id' => $user['id'], 'email' => $user['email'], 'name' => $user['name']];
     $_SESSION['auth_last_seen'] = time();
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    auth_after_login($user, $password);
     return null;
 }
 

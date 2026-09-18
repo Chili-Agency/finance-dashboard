@@ -219,6 +219,7 @@ async function loadInvoices() {
             throw new Error(data && Array.isArray(data.errors) && data.errors.length ? data.errors.join(' · ') : `The dashboard server answered HTTP ${response.status}`);
         }
         state.invoices = Array.isArray(data.invoices) ? data.invoices : [];
+        state.monthlyRows = null;
         state.sourceTypeCounts = data.sourceTypeCounts || {};
         state.categoryCounts = data.categoryCounts || {};
         const errors = Array.isArray(data.errors) ? data.errors : [];
@@ -276,13 +277,16 @@ setInterval(() => { if (state.sync.phase === 'loading' || state.sync.finishedAt)
 function renderMetrics(invoices) {
     const totals = { paid: 0, late: 0, open: 0, paidCount: 0, lateCount: 0, openCount: 0 };
     invoices.forEach((invoice) => { const bucket = invoiceBucket(invoice); if (bucket === 'paid') { totals.paid += amount(invoice); totals.paidCount++; } if (bucket === 'late') { totals.late += amount(invoice); totals.lateCount++; } if (bucket === 'open') { totals.open += amount(invoice); totals.openCount++; } });
-    $('#paid-total').textContent = money(totals.paid); $('#late-total').textContent = money(totals.late); $('#open-total').textContent = money(totals.open);
+    // O card de atrasados usa a mesma regra da aba Late invoices: saldo em aberto, vencido hoje, qualquer data de emissão.
+    const overdue = lateInvoices();
+    const overdueCount = overdue.length;
+    $('#paid-total').textContent = money(totals.paid); $('#late-total').textContent = money(overdue.reduce((sum, item) => sum + item.balance, 0)); $('#open-total').textContent = money(totals.open);
     const totalCount = totals.paidCount + totals.lateCount + totals.openCount;
     const voidedCount = invoices.filter((invoice) => invoiceBucket(invoice) === 'voided').length;
     $('#all-total').textContent = money(totals.paid + totals.late + totals.open);
     $('#all-count').textContent = `${number(totalCount)} invoice${totalCount === 1 ? '' : 's'}`;
     $('#all-note').textContent = voidedCount ? `issued, ${number(voidedCount)} voided excluded` : 'issued in period';
-    $('#paid-count').textContent = `${number(totals.paidCount)} invoice${totals.paidCount === 1 ? '' : 's'}`; $('#late-count').textContent = `${number(totals.lateCount)} invoice${totals.lateCount === 1 ? '' : 's'}`; $('#open-count').textContent = `${number(totals.openCount)} invoice${totals.openCount === 1 ? '' : 's'}`;
+    $('#paid-count').textContent = `${number(totals.paidCount)} invoice${totals.paidCount === 1 ? '' : 's'}`; $('#late-count').textContent = `${number(overdueCount)} invoice${overdueCount === 1 ? '' : 's'}`; $('#open-count').textContent = `${number(totals.openCount)} invoice${totals.openCount === 1 ? '' : 's'}`;
 }
 
 function renderStatusChart(invoices) {
@@ -325,7 +329,7 @@ function clearDynamicNotice() {
     notice.classList.remove('is-info');
 }
 
-function renderOverview() {
+function renderInvoices() {
     const invoices = filteredInvoices();
     clearDynamicNotice();
     renderMetrics(invoices);
@@ -358,7 +362,7 @@ function renderOverview() {
 
 function monthSeries() {
     const bounds = periodBounds();
-    const source = state.invoices.filter((invoice) => isRevenue(invoice) && inCategory(invoice) && (state.scope === 'all' || invoice.companyKey === state.scope));
+    const source = state.invoices.filter((invoice) => isBillable(invoice) && inCategory(invoice) && (state.scope === 'all' || invoice.companyKey === state.scope));
     const dates = source.map(invoiceDate).filter(Boolean).filter((date) => (!bounds.start || date >= bounds.start) && (!bounds.end || date <= bounds.end));
     if (!dates.length) return { labels: [], values: [] };
     const first = new Date(Math.min(...dates.map((date) => date.getTime()))); first.setDate(1);
@@ -368,10 +372,10 @@ function monthSeries() {
     return { labels: months.map(monthLabel), values: months.map((month) => source.filter((invoice) => { const date = invoiceDate(invoice); return date && date.getFullYear() === month.getFullYear() && date.getMonth() === month.getMonth() && (!bounds.start || date >= bounds.start) && (!bounds.end || date <= bounds.end); }).reduce((sum, invoice) => sum + amount(invoice), 0)) };
 }
 
-function renderMrr() { const series = monthSeries(); const selectedInvoices = filteredInvoices(); const selected = selectedInvoices.reduce((sum, invoice) => sum + amount(invoice), 0); $('#mrr-total').textContent = money(selected); $('#mrr-label').textContent = periodBounds().label; if (state.mrrChart) state.mrrChart.destroy(); state.mrrChart = new Chart($('#mrr-chart'), { type: 'bar', data: { labels: series.labels, datasets: [{ data: series.values, backgroundColor: series.values.map((_, index) => index === series.values.length - 1 ? colors.authorised : '#d9d8d0'), borderRadius: 2, barPercentage: .58 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => ` ${money(context.raw)}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 10 } } }, y: { beginAtZero: true, grid: { color: '#e5e3dc' }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 9 }, callback: (value) => money(value) } } } } }); $('#mrr-empty').classList.toggle('is-hidden', series.values.length > 0); $('#mrr-breakdown').innerHTML = Object.entries(companyLabels).map(([key, label]) => { const total = selectedInvoices.filter((invoice) => invoice.companyKey === key).reduce((sum, invoice) => sum + amount(invoice), 0); const dimmed = state.scope !== 'all' && state.scope !== key; return `<div class="breakdown-item${dimmed ? ' is-dimmed' : ''}"><span>${label}</span><strong>${money(total)}</strong></div>`; }).join(''); }
+function renderMrr() { const series = monthSeries(); const selectedInvoices = filteredInvoices().filter(isBillable); const selected = selectedInvoices.reduce((sum, invoice) => sum + amount(invoice), 0); $('#mrr-total').textContent = money(selected); $('#mrr-label').textContent = periodBounds().label; if (state.mrrChart) state.mrrChart.destroy(); state.mrrChart = new Chart($('#mrr-chart'), { type: 'bar', data: { labels: series.labels, datasets: [{ data: series.values, backgroundColor: series.values.map((_, index) => index === series.values.length - 1 ? colors.authorised : '#d9d8d0'), borderRadius: 2, barPercentage: .58 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => ` ${money(context.raw)}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 10 } } }, y: { beginAtZero: true, grid: { color: '#e5e3dc' }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 9 }, callback: (value) => money(value) } } } } }); $('#mrr-empty').classList.toggle('is-hidden', series.values.length > 0); $('#mrr-breakdown').innerHTML = Object.entries(companyLabels).map(([key, label]) => { const total = selectedInvoices.filter((invoice) => invoice.companyKey === key).reduce((sum, invoice) => sum + amount(invoice), 0); const dimmed = state.scope !== 'all' && state.scope !== key; return `<div class="breakdown-item${dimmed ? ' is-dimmed' : ''}"><span>${label}</span><strong>${money(total)}</strong></div>`; }).join(''); }
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[character])); }
-function renderAll() { renderOverview(); renderMrr(); renderScorecard(); syncViewToUrl(); }
+function renderAll() { renderInvoices(); renderLate(); renderMrr(); renderScorecard(); syncViewToUrl(); }
 
 $('#period-select').addEventListener('change', (event) => { state.period = event.target.value; state.periodFromUrl = true; $('#date-range').hidden = state.period !== 'custom'; renderAll(); });
 $('#date-from').addEventListener('input', (event) => { state.customStart = event.target.value; });
@@ -488,7 +492,7 @@ const percentOr = (value, digits = 1) => (hasValue(value) ? `${(Number(value) * 
 const signedPoints = (value, digits = 1) => (hasValue(value) ? `${Number(value) > 0 ? '+' : Number(value) < 0 ? '−' : ''}${Math.abs(Number(value) * 100).toFixed(digits)} pts` : DASH);
 const share = (part, whole) => (hasValue(part) && hasValue(whole) && Number(whole) !== 0 ? Number(part) / Number(whole) : null);
 const clampPercent = (value) => Math.max(0, Math.min(100, value));
-const plural = (count, word) => `${number(count)} ${word}${count === 1 ? '' : 's'}`;
+const plural = (count, word) => `${number(count)} ${count === 1 ? word : /[^aeiou]y$/.test(word) ? `${word.slice(0, -1)}ies` : `${word}s`}`;
 
 function setText(selector, value) { const node = $(selector); if (node) node.textContent = value; }
 
@@ -582,57 +586,12 @@ function monthlyHistory(invoices, until) {
     }));
 }
 
-function buildScorecard() {
-    const manual = USE_DEMO_TARGETS ? DEMO_MANUAL_INPUTS : MANUAL_INPUTS;
-    const scorecard = {
-        retention: { initialPortfolio: null, churned: null, upsells: null, retained: null, target: manual.retentionTarget, activeClients: null },
-        newBusiness: { actual: null, target: manual.newBusinessTarget },
-        totalMrr: { actual: null, target: manual.totalMrrTarget, accumulatedGap: manual.accumulatedGap, history: [] },
-        cogs: { actual: manual.cogs, target: manual.cogsTarget },
-        margin: { current: manual.margin, target: manual.marginTarget, bonusPool: manual.bonusPool },
-    };
-    const meta = { invoiceCount: 0, markedFirstMonth: 0, markedUpsell: 0, taggedUpsell: 0, crossSells: 0, upsellOutsideBase: 0, reactivated: null, newClients: 0, lostClients: 0, detection: 'none' };
-
-    const invoices = scopedInvoices();
-    const windows = scorecardWindows(invoices);
-    state.scorecardMeta = meta;
-
-    const targetWindow = windows ? windows.current : fixedWindow();
-    const targets = targetWindow ? targetsForWindow(targetWindow) : null;
-    meta.targets = targets;
-    if (targets) {
-        if (hasValue(targets.totalMrrTarget)) scorecard.totalMrr.target = targets.totalMrrTarget;
-    }
-
-    const singleMonth = selectedSingleMonth();
-    const entry = singleMonth ? marginEntryFor(monthKey(singleMonth), invoices) : null;
-    const aggregate = singleMonth ? null : aggregateMarginEntries(marginEntriesInPeriod(invoices), invoices);
-    meta.marginEntry = entry;
-    meta.marginAggregate = aggregate;
-    meta.marginMonth = singleMonth;
-    if (entry) {
-        scorecard.cogs = { actual: entry.cogs, target: entry.cogsTarget };
-        if ('revenue' in entry) scorecard.cogs.revenue = entry.revenue;
-        scorecard.margin = { current: entry.margin, target: entry.marginTarget, bonusPool: entry.bonusPool };
-    } else if (aggregate) {
-        scorecard.cogs = { actual: aggregate.cogs, target: aggregate.cogsTarget, revenue: aggregate.revenue };
-        scorecard.margin = { current: aggregate.margin, target: aggregate.marginTarget, bonusPool: aggregate.bonusPool };
-    }
-
-    if (!windows) { state.scorecard = scorecard; return; }
-
-    meta.currentLabel = windows.current.label;
-    meta.previousLabel = windows.previous.label;
-    meta.priorLabel = windows.beforePrevious.label;
-
+// Dados pré-calculados de um recorte (mercado + serviço): usados pelo scorecard e pelas tabelas mensais.
+// Depende de state.scope / state.category, como o resto do scorecard.
+function metricContext(invoices) {
     const everyLine = inScopeBillable();
-    const current = invoices.filter((invoice) => inWindow(invoiceDate(invoice), windows.current));
-    const previous = invoices.filter((invoice) => inWindow(invoiceDate(invoice), windows.previous));
-    const currentByContact = totalsByContact(current);
-    const baseContacts = new Set(everyLine.filter((invoice) => inWindow(invoiceDate(invoice), windows.previous)).map(contactKey));
-    const currentLines = totalsByContactLine(current);
-    const previousLines = totalsByContactLine(previous);
-
+    const byMonth = groupByMonth(invoices);
+    const everyByMonth = groupByMonth(everyLine);
     const firstSeen = new Map();
     let datasetStart = null;
     everyLine.forEach((invoice) => {
@@ -643,7 +602,35 @@ function buildScorecard() {
         const known = firstSeen.get(key);
         if (!known || date < known) firstSeen.set(key, date);
     });
-    const historyAvailable = Boolean(datasetStart) && datasetStart < windows.current.start;
+    return { invoices, everyLine, byMonth, everyByMonth, firstSeen, datasetStart };
+}
+
+function groupByMonth(invoices) {
+    const map = new Map();
+    invoices.forEach((invoice) => {
+        const date = invoiceDate(invoice);
+        if (!date) return;
+        const key = monthKey(date);
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(invoice);
+    });
+    return map;
+}
+
+// Mês fechado usa o índice por mês; janelas personalizadas filtram a lista inteira.
+function invoicesInWindow(list, buckets, window) {
+    if (isCalendarMonth(window.start, window.end)) return buckets.get(monthKey(window.start)) || [];
+    return list.filter((invoice) => inWindow(invoiceDate(invoice), window));
+}
+
+function measureWindow(ctx, windows, meta) {
+    const current = invoicesInWindow(ctx.invoices, ctx.byMonth, windows.current);
+    const previous = invoicesInWindow(ctx.invoices, ctx.byMonth, windows.previous);
+    const currentByContact = totalsByContact(current);
+    const baseContacts = new Set(invoicesInWindow(ctx.everyLine, ctx.everyByMonth, windows.previous).map(contactKey));
+    const currentLines = totalsByContactLine(current);
+    const previousLines = totalsByContactLine(previous);
+    const historyAvailable = Boolean(ctx.datasetStart) && ctx.datasetStart < windows.current.start;
 
     const newContacts = new Set();
     current.forEach((invoice) => {
@@ -655,7 +642,7 @@ function buildScorecard() {
     });
     if (historyAvailable) {
         currentByContact.forEach((_, key) => {
-            const first = firstSeen.get(key);
+            const first = ctx.firstSeen.get(key);
             if (first && first >= windows.current.start) newContacts.add(key);
         });
     }
@@ -697,15 +684,79 @@ function buildScorecard() {
         if (newContacts.has(key)) { newBusiness += value; meta.newClients += 1; } else { reactivated += value; }
     });
 
-    const hasBase = baseContacts.size > 0;
-    scorecard.retention.initialPortfolio = hasBase ? initial : null;
-    scorecard.retention.churned = hasBase ? churned : null;
-    scorecard.retention.upsells = hasBase ? expansion : null;
-    scorecard.retention.retained = hasBase ? retained : null;
-    scorecard.retention.activeClients = currentByContact.size;
+    meta.invoiceCount = current.length;
+    meta.reactivated = reactivated;
 
-    scorecard.newBusiness.actual = newBusiness;
-    scorecard.totalMrr.actual = current.reduce((sum, invoice) => sum + amount(invoice), 0);
+    return {
+        hasBase: baseContacts.size > 0,
+        initial,
+        churned,
+        expansion,
+        retained,
+        activeClients: currentByContact.size,
+        newBusiness,
+        reactivated,
+        totalMrr: current.reduce((sum, invoice) => sum + amount(invoice), 0),
+        invoiceCount: current.length,
+    };
+}
+
+function emptyScorecardMeta() {
+    return { invoiceCount: 0, markedFirstMonth: 0, markedUpsell: 0, taggedUpsell: 0, crossSells: 0, upsellOutsideBase: 0, reactivated: null, newClients: 0, lostClients: 0, detection: 'none' };
+}
+
+function buildScorecard() {
+    const manual = USE_DEMO_TARGETS ? DEMO_MANUAL_INPUTS : MANUAL_INPUTS;
+    const scorecard = {
+        retention: { initialPortfolio: null, churned: null, upsells: null, retained: null, target: manual.retentionTarget, activeClients: null },
+        newBusiness: { actual: null, target: manual.newBusinessTarget },
+        totalMrr: { actual: null, target: manual.totalMrrTarget, accumulatedGap: manual.accumulatedGap, history: [] },
+        cogs: { actual: manual.cogs, target: manual.cogsTarget },
+        margin: { current: manual.margin, target: manual.marginTarget, bonusPool: manual.bonusPool },
+    };
+    const meta = emptyScorecardMeta();
+
+    const invoices = scopedInvoices();
+    const windows = scorecardWindows(invoices);
+    state.scorecardMeta = meta;
+
+    const targetWindow = windows ? windows.current : fixedWindow();
+    const targets = targetWindow ? targetsForWindow(targetWindow) : null;
+    meta.targets = targets;
+    if (targets) {
+        if (hasValue(targets.totalMrrTarget)) scorecard.totalMrr.target = targets.totalMrrTarget;
+    }
+
+    const singleMonth = selectedSingleMonth();
+    const entry = singleMonth ? marginEntryFor(monthKey(singleMonth), invoices) : null;
+    const aggregate = singleMonth ? null : aggregateMarginEntries(marginEntriesInPeriod(invoices), invoices);
+    meta.marginEntry = entry;
+    meta.marginAggregate = aggregate;
+    meta.marginMonth = singleMonth;
+    if (entry) {
+        scorecard.cogs = { actual: entry.cogs, target: entry.cogsTarget };
+        if ('revenue' in entry) scorecard.cogs.revenue = entry.revenue;
+        scorecard.margin = { current: entry.margin, target: entry.marginTarget, bonusPool: entry.bonusPool };
+    } else if (aggregate) {
+        scorecard.cogs = { actual: aggregate.cogs, target: aggregate.cogsTarget, revenue: aggregate.revenue };
+        scorecard.margin = { current: aggregate.margin, target: aggregate.marginTarget, bonusPool: aggregate.bonusPool };
+    }
+
+    if (!windows) { state.scorecard = scorecard; return; }
+
+    meta.currentLabel = windows.current.label;
+    meta.previousLabel = windows.previous.label;
+    meta.priorLabel = windows.beforePrevious.label;
+
+    const result = measureWindow(metricContext(invoices), windows, meta);
+    scorecard.retention.initialPortfolio = result.hasBase ? result.initial : null;
+    scorecard.retention.churned = result.hasBase ? result.churned : null;
+    scorecard.retention.upsells = result.hasBase ? result.expansion : null;
+    scorecard.retention.retained = result.hasBase ? result.retained : null;
+    scorecard.retention.activeClients = result.activeClients;
+
+    scorecard.newBusiness.actual = result.newBusiness;
+    scorecard.totalMrr.actual = result.totalMrr;
     if (hasValue(scorecard.totalMrr.target)) {
         scorecard.newBusiness.target = Math.max(0, Number(scorecard.totalMrr.target) - scorecard.totalMrr.actual);
     }
@@ -713,9 +764,6 @@ function buildScorecard() {
     const carried = accumulatedGap(invoices, windows.current.end);
     meta.accumulated = carried;
     if (carried) scorecard.totalMrr.accumulatedGap = carried.gap;
-
-    meta.invoiceCount = current.length;
-    meta.reactivated = reactivated;
 
     state.scorecard = scorecard;
 }
@@ -960,10 +1008,13 @@ function renderScorecard() {
     renderRetentionSection();
     renderTargetsSection();
     renderMarginSection();
+    renderMonthlyTables();
+    renderOverview();
+    renderUnitSection();
 }
 
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => {
-    requestAnimationFrame(() => { [state.statusChart, state.mrrChart, state.gapChart].forEach((chart) => chart && chart.resize()); });
+    requestAnimationFrame(() => { [state.statusChart, state.mrrChart, state.gapChart, state.summaryPlanChart, state.summaryBridgeChart].forEach((chart) => chart && chart.resize()); });
 }));
 
 state.marginInputs = {};
@@ -1322,9 +1373,9 @@ function renderMarginEntriesTable() {
     empty.classList.toggle('is-hidden', !message || rows.length > 0);
 }
 
-document.querySelectorAll('.entries-tab').forEach((button) => button.addEventListener('click', () => {
+document.querySelectorAll('.entries-tab:not([data-monthly])').forEach((button) => button.addEventListener('click', () => {
     state.marginEntriesMode = button.dataset.entries;
-    document.querySelectorAll('.entries-tab').forEach((item) => item.classList.toggle('is-active', item === button));
+    document.querySelectorAll('.entries-tab:not([data-monthly])').forEach((item) => item.classList.toggle('is-active', item === button));
     renderMarginEntriesTable();
 }));
 
@@ -1451,6 +1502,7 @@ async function targetsRequest(options = {}) {
 
 function storeTargetEntry(entry) {
     state.targetInputs[marginInputKey(entry.month, entry.scope, entry.category)] = entry;
+    state.monthlyRows = null;
 }
 
 async function loadTargetInputs() {
@@ -1459,6 +1511,7 @@ async function loadTargetInputs() {
     try {
         const { entries = [] } = await targetsRequest();
         state.targetInputs = {};
+        state.monthlyRows = null;
         entries.forEach(storeTargetEntry);
         state.targetInputsStatus = 'ready';
     } catch (error) {
@@ -1514,13 +1567,13 @@ function loadTargetEntryIntoForm() {
     $('#targets-form-submit').textContent = entry ? 'Update Target MRR' : 'Save Target MRR';
 }
 
-function openTargetsModal() {
+function openTargetsModal(entry = null) {
     const targets = (state.scorecardMeta || {}).targets;
     targetsForm.reset();
     showTargetError('');
-    targetsForm.elements.month.value = targets && targets.months.length ? targets.months[targets.months.length - 1] : monthKey(new Date());
-    targetsForm.elements.scope.value = state.scope;
-    targetsForm.elements.category.value = state.category;
+    targetsForm.elements.month.value = entry ? entry.month : targets && targets.months.length ? targets.months[targets.months.length - 1] : monthKey(new Date());
+    targetsForm.elements.scope.value = entry ? entry.scope : state.scope;
+    targetsForm.elements.category.value = entry ? entry.category : state.category;
     loadTargetEntryIntoForm();
     targetsModal.showModal();
 }
@@ -1551,7 +1604,7 @@ function readTargetsForm() {
     return entry;
 }
 
-$('#open-targets-modal').addEventListener('click', openTargetsModal);
+$('#open-targets-modal').addEventListener('click', () => openTargetsModal());
 targetsModal.querySelectorAll('[data-close-modal]').forEach((button) => button.addEventListener('click', closeTargetsModal));
 targetsModal.addEventListener('click', (event) => { if (event.target === targetsModal) closeTargetsModal(); });
 ['month', 'scope', 'category'].forEach((name) => targetsForm.elements[name].addEventListener('change', loadTargetEntryIntoForm));
@@ -1583,7 +1636,1241 @@ targetsForm.addEventListener('submit', async (event) => {
     }
 });
 
+// ---- Tabelas mensais (MRR, Retention, Targets) ----
+// Uma linha por mês × mercado × serviço, calculada a partir das invoices,
+// com a mesma lógica do scorecard. O resultado fica em cache até as
+// invoices ou os targets mudarem.
+
+state.monthlyRows = null;
+state.monthlyModes = { mrr: 'all', retention: 'all', targets: 'all' };
+
+const serviceName = (category) => (category === 'all' ? 'All services' : categoryLabels[category] || category);
+const toneClass = (value, lowerIsBetter = false) => (!hasValue(value) || Number(value) === 0 ? '' : (Number(value) > 0) !== lowerIsBetter ? 'value-up' : 'value-down');
+const signedPercent = (value) => (hasValue(value) ? `${Number(value) > 0 ? '+' : Number(value) < 0 ? '−' : ''}${Math.abs(Number(value) * 100).toFixed(1)}%` : DASH);
+
+function withView(scope, category, run) {
+    const saved = { scope: state.scope, category: state.category };
+    state.scope = scope;
+    state.category = category;
+    try { return run(); } finally { state.scope = saved.scope; state.category = saved.category; }
+}
+
+function reportingMonths() {
+    let first = null;
+    let last = null;
+    state.invoices.forEach((invoice) => {
+        if (!isBillable(invoice)) return;
+        const date = invoiceDate(invoice);
+        if (!date) return;
+        if (!first || date < first) first = date;
+        if (!last || date > last) last = date;
+    });
+    if (!first) return [];
+    const today = startOfToday();
+    return monthKeysBetween(first, last > today ? last : today).map(monthFromKey);
+}
+
+function buildMonthlyRows() {
+    const months = reportingMonths();
+    const retentionTarget = (USE_DEMO_TARGETS ? DEMO_MANUAL_INPUTS : MANUAL_INPUTS).retentionTarget;
+    const rows = { mrr: [], retention: [], targets: [] };
+
+    VIEW_SCOPES.forEach((scope) => VIEW_CATEGORIES.forEach((category) => withView(scope, category, () => {
+        const ctx = metricContext(scopedInvoices());
+        let previousMrr = null;
+        let yearGap = 0;
+        let yearGapMonths = 0;
+
+        months.forEach((start) => {
+            const key = monthKey(start);
+            if (start.getMonth() === 0) { yearGap = 0; yearGapMonths = 0; }
+            const current = { start, end: endOfMonth(start), label: monthLabel(start) };
+            const previous = previousWindowOf(current);
+            const meta = emptyScorecardMeta();
+            const m = measureWindow(ctx, { current, previous, beforePrevious: previousWindowOf(previous) }, meta);
+            const base = { key: marginInputKey(key, scope, category), month: key, scope, category };
+            const target = resolveTarget(key, scope, category)?.totalMrrTarget ?? null;
+
+            if (hasValue(target)) { yearGap += m.totalMrr - Number(target); yearGapMonths += 1; }
+
+            if (m.invoiceCount > 0) {
+                rows.mrr.push({
+                    ...base,
+                    mrr: m.totalMrr,
+                    change: previousMrr === null ? null : m.totalMrr - previousMrr,
+                    changeRate: previousMrr ? (m.totalMrr - previousMrr) / previousMrr : null,
+                    invoices: m.invoiceCount,
+                    clients: m.activeClients,
+                    newClients: meta.newClients,
+                    newBusiness: m.newBusiness,
+                    average: m.activeClients ? m.totalMrr / m.activeClients : null,
+                });
+            }
+
+            if (m.hasBase || m.activeClients > 0) {
+                rows.retention.push({
+                    ...base,
+                    initial: m.hasBase ? m.initial : null,
+                    churned: m.hasBase ? m.churned : null,
+                    upsells: m.hasBase ? m.expansion : null,
+                    retained: m.hasBase ? m.retained : null,
+                    rate: m.hasBase ? share(m.retained, m.initial) : null,
+                    target: retentionTarget,
+                    lostClients: m.hasBase ? meta.lostClients : null,
+                });
+            }
+
+            if (m.invoiceCount > 0 || hasValue(target)) {
+                rows.targets.push({
+                    ...base,
+                    actual: m.totalMrr,
+                    target,
+                    difference: hasValue(target) ? m.totalMrr - Number(target) : null,
+                    newBusiness: m.newBusiness,
+                    newBusinessTarget: hasValue(target) ? Math.max(0, Number(target) - m.totalMrr) : null,
+                    accumulated: yearGapMonths ? yearGap : null,
+                    hasExactTarget: Boolean(exactTarget(key, scope, category)),
+                });
+            }
+
+            previousMrr = m.totalMrr;
+        });
+    })));
+
+    const order = (a, b) => b.month.localeCompare(a.month)
+        || VIEW_SCOPES.indexOf(a.scope) - VIEW_SCOPES.indexOf(b.scope)
+        || VIEW_CATEGORIES.indexOf(a.category) - VIEW_CATEGORIES.indexOf(b.category);
+    Object.values(rows).forEach((list) => list.sort(order));
+    return rows;
+}
+
+const MONTHLY_TABLES = {
+    mrr: {
+        section: '#mrr-view',
+        emptyAll: 'No billable client invoices yet.',
+        columns: [
+            (row) => `<td class="align-right mono">${moneyOr(row.mrr)}</td>`,
+            (row) => `<td class="align-right mono"><span class="${toneClass(row.change)}">${signedMoney(row.change)}</span><span class="entry-sub">${signedPercent(row.changeRate)}</span></td>`,
+            (row) => `<td class="align-right mono">${number(row.invoices)}</td>`,
+            (row) => `<td class="align-right mono">${number(row.clients)}</td>`,
+            (row) => `<td class="align-right mono">${moneyOr(row.average)}</td>`,
+        ],
+    },
+    retention: {
+        section: '#retention-view',
+        emptyAll: 'No billable client invoices yet.',
+        columns: [
+            (row) => `<td class="align-right mono">${moneyOr(row.initial)}</td>`,
+            (row) => `<td class="align-right mono">${hasValue(row.churned) ? `<span class="${row.churned > 0 ? 'value-down' : ''}">${moneyOr(row.churned)}</span>` : DASH}</td>`,
+            (row) => `<td class="align-right mono">${hasValue(row.upsells) ? `<span class="${row.upsells > 0 ? 'value-up' : ''}">${moneyOr(row.upsells)}</span>` : DASH}</td>`,
+            (row) => `<td class="align-right mono">${moneyOr(row.retained)}</td>`,
+            (row) => `<td class="align-right mono">${hasValue(row.rate) ? `<span class="${hasValue(row.target) ? (row.rate >= row.target ? 'value-up' : 'value-down') : ''}">${percentOr(row.rate)}</span>` : 'N/A'}</td>`,
+            (row) => `<td class="align-right mono">${percentOr(row.target)}</td>`,
+            (row) => `<td class="align-right mono">${hasValue(row.lostClients) ? number(row.lostClients) : DASH}</td>`,
+        ],
+    },
+    targets: {
+        section: '#targets-view',
+        editable: true,
+        emptyAll: 'No billable client invoices or Target MRR saved yet.',
+        columns: [
+            (row) => `<td class="align-right mono">${moneyOr(row.actual)}</td>`,
+            (row) => `<td class="align-right mono">${moneyOr(row.target)}</td>`,
+            (row) => `<td class="align-right mono"><span class="${toneClass(row.difference)}">${signedMoney(row.difference)}</span></td>`,
+            (row) => `<td class="align-right mono">${moneyOr(row.newBusiness)}</td>`,
+            (row) => `<td class="align-right mono">${moneyOr(row.newBusinessTarget)}</td>`,
+            (row) => `<td class="align-right mono"><span class="${toneClass(row.accumulated)}">${signedMoney(row.accumulated)}</span></td>`,
+        ],
+    },
+};
+
+function renderMonthlyTables() {
+    if (!state.monthlyRows) state.monthlyRows = buildMonthlyRows();
+    Object.keys(MONTHLY_TABLES).forEach(renderMonthlyTable);
+}
+
+function renderMonthlyTable(name) {
+    const config = MONTHLY_TABLES[name];
+    const body = $(`#${name}-entries-table`);
+    const empty = $(`#${name}-entries-empty`);
+    if (!body || !empty) return;
+    const mode = state.monthlyModes[name];
+    const all = state.monthlyRows[name] || [];
+    const rows = mode === 'view' ? all.filter(entryInView) : all;
+    const inViewCount = all.filter(entryInView).length;
+
+    const entriesLabel = (count) => `${number(count)} ${count === 1 ? 'entry' : 'entries'}`;
+    setText(`#${name}-entries-summary`, mode === 'view'
+        ? `${entriesLabel(rows.length)} of ${number(all.length)}`
+        : `${entriesLabel(all.length)} · ${number(inViewCount)} used in current view`);
+
+    body.innerHTML = rows.map((row) => {
+        const used = mode === 'all' && entryInView(row);
+        const edit = config.editable
+            ? `<button type="button" class="row-button" data-row-edit="${escapeHtml(row.key)}">${row.hasExactTarget ? 'Edit' : 'Set target'}</button>`
+            : '';
+        return `<tr class="${used ? 'is-in-view' : ''}"${used ? ' title="Used by the current view"' : ''}>
+            <td>${escapeHtml(monthLabel(monthFromKey(row.month)))}</td>
+            <td>${escapeHtml(companyLabels[row.scope] || 'Global')}</td>
+            <td>${escapeHtml(serviceName(row.category))}</td>
+            ${config.columns.map((column) => column(row)).join('')}
+            <td class="align-right entry-actions"><button type="button" class="row-button" data-row-show="${escapeHtml(row.key)}">Show</button>${edit}</td>
+        </tr>`;
+    }).join('');
+
+    let message = '';
+    if (!state.invoices.length && state.sync.phase === 'loading') message = 'Loading invoices…';
+    else if (!state.invoices.length && state.sync.phase === 'failed') message = 'Could not load invoices.';
+    else if (!all.length) message = config.emptyAll;
+    else if (!rows.length) message = 'No month matches the current market, service and period.';
+    empty.textContent = message;
+    empty.classList.toggle('is-hidden', !message || rows.length > 0);
+}
+
+Object.entries(MONTHLY_TABLES).forEach(([name, config]) => {
+    document.querySelectorAll(`.entries-tab[data-monthly="${name}"]`).forEach((button) => button.addEventListener('click', () => {
+        state.monthlyModes[name] = button.dataset.entries;
+        document.querySelectorAll(`.entries-tab[data-monthly="${name}"]`).forEach((item) => item.classList.toggle('is-active', item === button));
+        renderMonthlyTable(name);
+    }));
+
+    const body = $(`#${name}-entries-table`);
+    if (!body) return;
+    body.addEventListener('click', (event) => {
+        const button = event.target.closest('button');
+        if (!button) return;
+        const key = button.dataset.rowShow || button.dataset.rowEdit;
+        const row = (state.monthlyRows?.[name] || []).find((item) => item.key === key);
+        if (!row) return;
+        if (button.dataset.rowEdit) { openTargetsModal(row); return; }
+        showMarginEntry(row);
+        $(config.section).scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+});
+
+// ---- Late invoices ----
+// Encargos por atraso. Ajuste conforme os contratos de cada entidade.
+//   lateFee          multa única sobre o saldo em aberto (0.02 = 2%)
+//   monthlyInterest  juros simples ao mês, pro rata por dia, contados desde o vencimento (0.01 = 1% a.m.)
+//   graceDays        dias de carência: até aqui, nenhum encargo é cobrado
+// Um mercado sem entrada própria usa o "default".
+//   correction       índices de correção monetária; com mais de um, vale o maior acumulado no atraso
+// Ordem: o saldo é corrigido primeiro; multa e juros incidem sobre o saldo corrigido.
+const LATE_CHARGE_RULES = {
+    default: { lateFee: 0.02, monthlyInterest: 0.01, graceDays: 0, correction: [] },
+    br: { lateFee: 0.10, monthlyInterest: 0.01, graceDays: 0, correction: ['igpm', 'ipca'] },
+    // mx: { lateFee: 0, monthlyInterest: 0.015, graceDays: 5, correction: [] },
+};
+const INDEX_LABELS = { igpm: 'IGP-M', ipca: 'IPCA' };
+state.brIndices = { status: 'loading', series: {}, latest: {}, error: null, stale: [] };
+const DAY_MS = 24 * 60 * 60 * 1000;
+const AGING_BUCKETS = [
+    { label: '1–30 days', min: 1, max: 30 },
+    { label: '31–60 days', min: 31, max: 60 },
+    { label: '61–90 days', min: 61, max: 90 },
+    { label: '90+ days', min: 91, max: Infinity },
+];
+const moneyExact = (value) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value || 0);
+const shortDate = (date) => (date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : DASH);
+const ratePercent = (value) => `${Number((value * 100).toFixed(2))}%`;
+
+function lateRule(companyKey) {
+    return { ...LATE_CHARGE_RULES.default, ...(LATE_CHARGE_RULES[companyKey] || {}) };
+}
+
+function lateRuleLabel(rule) {
+    const parts = [];
+    if (rule.lateFee) parts.push(`${ratePercent(rule.lateFee)} fee`);
+    if (rule.monthlyInterest) parts.push(`${ratePercent(rule.monthlyInterest)}/month`);
+    if (rule.correction.length) parts.push(rule.correction.map((key) => INDEX_LABELS[key]).join('/'));
+    const label = parts.join(' + ') || 'No charges';
+    return rule.graceDays ? `${label} after ${plural(rule.graceDays, 'day')}` : label;
+}
+
+// Saldo em aberto em USD (já considera pagamentos parciais), na fatia do serviço selecionado.
+function outstandingUsd(invoice) {
+    const usd = invoice.amounts_usd;
+    const converted = usd && usd.AmountDue !== null && usd.AmountDue !== undefined && Number.isFinite(Number(usd.AmountDue))
+        ? Number(usd.AmountDue)
+        : Number(invoice.AmountDue || 0) * Number(invoice.usdRate || 1);
+    return converted * categoryShare(invoice);
+}
+
+function originalBalance(invoice) {
+    const currency = String(invoice.CurrencyCode || invoice.companyCurrency || '').toUpperCase();
+    if (!currency || currency === 'USD') return '';
+    const value = Number(invoice.AmountDue || 0) * categoryShare(invoice);
+    try {
+        return new Intl.NumberFormat('en-US', { style: 'currency', currency, currencyDisplay: 'code' }).format(value);
+    } catch {
+        return `${currency} ${value.toFixed(2)}`;
+    }
+}
+
+// Fator acumulado de um índice entre o vencimento e hoje, pro rata die dentro de cada mês.
+// Meses ainda sem índice publicado entram como zero e são sinalizados.
+function indexFactor(series, from, to) {
+    let factor = 1;
+    let pending = false;
+    for (let month = new Date(from.getFullYear(), from.getMonth(), 1); month < to; month = new Date(month.getFullYear(), month.getMonth() + 1, 1)) {
+        const next = new Date(month.getFullYear(), month.getMonth() + 1, 1);
+        const start = from > month ? from : month;
+        const end = to < next ? to : next;
+        const days = Math.round((end - start) / DAY_MS);
+        if (days <= 0) continue;
+        const rate = series[monthKey(month)];
+        if (rate === undefined) { pending = true; continue; }
+        factor *= (1 + Number(rate)) ** (days / Math.round((next - month) / DAY_MS));
+    }
+    return { factor, pending };
+}
+
+function correctionFor(rule, due, today) {
+    if (!rule.correction.length) return { factor: 1, index: null, pending: false, unavailable: false };
+    const options = rule.correction
+        .filter((key) => Object.keys(state.brIndices.series[key] || {}).length)
+        .map((key) => ({ key, ...indexFactor(state.brIndices.series[key], due, today) }));
+    if (!options.length) return { factor: 1, index: null, pending: false, unavailable: true };
+    const best = options.reduce((top, option) => (option.factor > top.factor ? option : top));
+    // Deflação não reduz a dívida: sem correção negativa.
+    return {
+        factor: Math.max(1, best.factor),
+        index: best.factor > 1 ? INDEX_LABELS[best.key] : null,
+        pending: best.pending,
+        unavailable: options.length < rule.correction.length,
+    };
+}
+
+function lateCharges(invoice, today) {
+    const due = dueDate(invoice);
+    const days = Math.max(0, Math.round((today - due) / DAY_MS));
+    const rule = lateRule(invoice.companyKey);
+    const balance = outstandingUsd(invoice);
+    const chargeable = days > rule.graceDays;
+    const correction = chargeable ? correctionFor(rule, due, today) : { factor: 1, index: null, pending: false, unavailable: false };
+    const corrected = balance * correction.factor;
+    const fee = chargeable ? corrected * rule.lateFee : 0;
+    const interest = chargeable ? corrected * rule.monthlyInterest * (days / 30) : 0;
+    return {
+        invoice, due, days, balance, fee, interest,
+        correction: corrected - balance,
+        correctionIndex: correction.index,
+        correctionPending: correction.pending,
+        correctionUnavailable: correction.unavailable,
+        hasCorrection: chargeable && rule.correction.length > 0,
+        total: corrected + fee + interest,
+    };
+}
+
+async function loadBrIndices() {
+    try {
+        const response = redirectIfSignedOut(await fetch('br-indices.php', { cache: 'no-store' }));
+        const body = await response.json().catch(() => null);
+        if (!body || !body.series) throw new Error(`The dashboard server answered HTTP ${response.status}.`);
+        const errors = Array.isArray(body.errors) ? body.errors : [];
+        state.brIndices = {
+            status: errors.length ? 'partial' : 'ready',
+            series: body.series,
+            latest: body.latest || {},
+            stale: body.stale || [],
+            error: errors.join(' · ') || null,
+        };
+    } catch (error) {
+        state.brIndices = { status: 'error', series: {}, latest: {}, stale: [], error: error.message };
+    }
+    renderLate();
+}
+
+function renderIndexNote() {
+    const node = $('#late-index-note');
+    if (!node) return;
+    const info = state.brIndices;
+    let text = '';
+    let tone = 'muted';
+    if (info.status === 'loading') text = 'Loading IGP-M and IPCA from the Central Bank…';
+    else if (info.status === 'error') { text = `Brazil inflation correction is not applied: ${info.error}`; tone = 'error'; }
+    else {
+        const published = Object.keys(INDEX_LABELS)
+            .map((key) => (info.latest[key] ? `${INDEX_LABELS[key]} through ${monthLabel(monthFromKey(info.latest[key]))}` : null))
+            .filter(Boolean);
+        text = `Brazil correction uses the higher of IGP-M and IPCA (Central Bank). Published: ${published.join(', ')}. Months not yet published count as zero.`;
+        if (info.stale.length) { text += ` Could not refresh ${info.stale.map((key) => INDEX_LABELS[key]).join(' and ')}, showing the last saved values.`; tone = 'sample'; }
+        if (info.error) { text += ` ${info.error}`; tone = 'error'; }
+    }
+    node.textContent = text;
+    node.dataset.tone = tone;
+}
+
+function lateInvoices() {
+    const today = startOfToday();
+    return state.invoices
+        .filter((invoice) => isBillable(invoice)
+            && invoiceBucket(invoice) === 'late'
+            && (state.scope === 'all' || invoice.companyKey === state.scope)
+            && inCategory(invoice))
+        .map((invoice) => lateCharges(invoice, today))
+        .filter((item) => item.balance > 0)
+        .sort((a, b) => b.days - a.days || b.total - a.total);
+}
+
+function correctionCell(item) {
+    if (!item.hasCorrection) return DASH;
+    if (item.correctionUnavailable && !item.correctionIndex) return `${DASH}<div class="client-sub">index unavailable</div>`;
+    const notes = [item.correctionIndex || 'no inflation'];
+    if (item.correctionPending) notes.push('partial');
+    return `${moneyExact(item.correction)}<div class="client-sub">${escapeHtml(notes.join(' · '))}</div>`;
+}
+
+function barRows(rows) {
+    const max = Math.max(...rows.map((row) => row.total), 1);
+    return rows.map((row) => `<div class="market-row${row.dimmed ? ' is-dimmed' : ''}">
+        <span class="market-name">${escapeHtml(row.label)}<small class="market-sub">${plural(row.count, 'invoice')}</small></span>
+        <div class="market-bar"><span style="width:${(row.total / max) * 100}%"></span></div>
+        <span class="market-value">${money(row.total)}</span>
+    </div>`).join('');
+}
+
+function renderLate() {
+    if (!$('#late-view')) return;
+    const items = lateInvoices();
+    const sum = (list, field) => list.reduce((total, item) => total + item[field], 0);
+    const principal = sum(items, 'balance');
+    const fees = sum(items, 'fee');
+    const interest = sum(items, 'interest');
+    const correction = sum(items, 'correction');
+    const clients = new Set(items.map((item) => contactKey(item.invoice))).size;
+
+    setText('#late-principal', money(principal));
+    setText('#late-invoice-count', plural(items.length, 'invoice'));
+    setText('#late-client-count', `from ${plural(clients, 'client')}`);
+    setText('#late-charges', money(fees + interest + correction));
+    setText('#late-fees', `${money(fees)} fees + ${money(interest)} interest`);
+    setText('#late-correction', `+ ${money(correction)} correction`);
+    setText('#late-total-due', money(principal + fees + interest + correction));
+    renderIndexNote();
+
+    const markets = state.scope === 'all' ? Object.keys(companyLabels) : [state.scope];
+    const labels = [...new Set(markets.map((key) => lateRuleLabel(lateRule(key))))];
+    setText('#late-rate-label', labels.length === 1 ? labels[0] : 'Per-market rates');
+
+    const averageDays = principal > 0 ? Math.round(items.reduce((total, item) => total + item.days * item.balance, 0) / principal) : 0;
+    setText('#late-average-days', items.length ? plural(averageDays, 'day') : DASH);
+    setText('#late-oldest', items.length ? plural(items[0].days, 'day') : DASH);
+
+    $('#late-aging').innerHTML = barRows(AGING_BUCKETS.map((bucket) => {
+        const rows = items.filter((item) => item.days >= bucket.min && item.days <= bucket.max);
+        return { label: bucket.label, count: rows.length, total: sum(rows, 'total') };
+    }));
+
+    const allMarkets = lateInvoicesByMarket(items);
+    $('#late-markets').innerHTML = barRows(Object.entries(companyLabels).map(([key, label]) => ({
+        label,
+        count: allMarkets[key]?.count || 0,
+        total: allMarkets[key]?.total || 0,
+        dimmed: state.scope !== 'all' && state.scope !== key,
+    })));
+
+    setText('#late-table-summary', `${number(items.length)} record${items.length === 1 ? '' : 's'}`);
+    $('#late-table').innerHTML = items.map((item) => {
+        const { invoice } = item;
+        const severity = item.days > 90 ? 'is-critical' : item.days > 30 ? 'is-warning' : '';
+        const original = originalBalance(invoice);
+        const rule = lateRule(invoice.companyKey);
+        const graceNote = item.days <= rule.graceDays ? `<div class="client-sub">in grace period</div>` : '';
+        return `<tr>
+            <td>${escapeHtml(invoice.Contact?.Name || 'Unknown client')}<div class="client-sub">${escapeHtml(invoice.InvoiceNumber || invoice.InvoiceID || 'Unnumbered')}${categoryTag(invoice) ? ` · <span class="category-tag">${escapeHtml(categoryTag(invoice))}</span>` : ''}</div></td>
+            <td>${escapeHtml(companyLabels[invoice.companyKey] || invoice.company || DASH)}</td>
+            <td>${shortDate(invoiceDate(invoice))}</td>
+            <td>${shortDate(item.due)}</td>
+            <td class="align-right"><span class="days-pill ${severity}">${number(item.days)}</span></td>
+            <td class="align-right mono">${moneyExact(item.balance)}${original ? `<div class="client-sub">${escapeHtml(original)}</div>` : ''}</td>
+            <td class="align-right mono">${correctionCell(item)}</td>
+            <td class="align-right mono">${moneyExact(item.fee)}${graceNote}</td>
+            <td class="align-right mono">${moneyExact(item.interest)}</td>
+            <td class="align-right mono late-total">${moneyExact(item.total)}</td>
+        </tr>`;
+    }).join('');
+
+    const empty = $('#late-table-empty');
+    empty.textContent = !state.invoices.length && state.sync.phase === 'loading'
+        ? 'Loading invoices…'
+        : !state.invoices.length && state.sync.phase === 'failed'
+            ? 'Could not load invoices.'
+            : 'No overdue invoices for this market and service.';
+    empty.classList.toggle('is-hidden', items.length > 0);
+}
+
+// Por mercado sempre mostra os quatro, mesmo com um mercado selecionado (os outros ficam apagados).
+function lateInvoicesByMarket(itemsInView) {
+    if (state.scope === 'all') {
+        return itemsInView.reduce((map, item) => {
+            const entry = map[item.invoice.companyKey] || (map[item.invoice.companyKey] = { count: 0, total: 0 });
+            entry.count += 1;
+            entry.total += item.total;
+            return map;
+        }, {});
+    }
+    return withView('all', state.category, () => lateInvoicesByMarket(lateInvoices()));
+}
+
+// ---- Overview ----
+// Plano contra realizado do ano selecionado, numa tela só.
+// Tudo vem das linhas mensais (buildMonthlyRows) e dos inputs manuais de COGS/margem,
+// então os números batem com as abas de origem.
+
+state.summaryPlanChart = null;
+state.summaryBridgeChart = null;
+
+const SUMMARY_ROWS = [
+    { key: 'actual', label: 'MRR actual', format: moneyOr },
+    { key: 'target', label: 'MRR target', format: moneyOr },
+    { key: 'attainment', label: 'Attainment', format: (value) => percentOr(value, 0), tone: 'ratio' },
+    { key: 'retention', label: 'Retention', format: percentOr, tone: 'retention' },
+    { key: 'retentionTarget', label: 'Retention target', format: percentOr },
+    { key: 'clients', label: 'Active clients', format: (value) => (hasValue(value) ? number(value) : DASH) },
+    { key: 'cogs', label: 'COGS', format: moneyOr, tone: 'cogs' },
+    { key: 'cogsTarget', label: 'COGS budget', format: moneyOr },
+    { key: 'margin', label: 'Margin', format: percentOr, tone: 'margin' },
+    { key: 'marginTarget', label: 'Margin target', format: percentOr },
+    { key: 'bonusPool', label: 'Bonus provisioned', format: moneyOr },
+];
+
+function summaryYear() {
+    const { end } = periodBounds();
+    if (end) return end.getFullYear();
+    const years = state.invoices.filter(isBillable).map((invoice) => invoiceDate(invoice)).filter(Boolean).map((date) => date.getFullYear());
+    return years.length ? Math.max(...years) : new Date().getFullYear();
+}
+
+function summaryData() {
+    if (!state.monthlyRows) state.monthlyRows = buildMonthlyRows();
+    const year = summaryYear();
+    const invoices = scopedInvoices();
+    const manual = USE_DEMO_TARGETS ? DEMO_MANUAL_INPUTS : MANUAL_INPUTS;
+    const pick = (name, month) => (state.monthlyRows[name] || [])
+        .find((row) => row.month === month && row.scope === state.scope && row.category === state.category) || null;
+
+    const months = Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`).map((month) => {
+        const targets = pick('targets', month);
+        const retention = pick('retention', month);
+        const mrr = pick('mrr', month);
+        const margin = marginEntryFor(month, invoices);
+        return {
+            month,
+            label: new Intl.DateTimeFormat('en-US', { month: 'short' }).format(monthFromKey(month)),
+            actual: targets ? targets.actual : null,
+            target: targets ? targets.target : null,
+            attainment: targets ? share(targets.actual, targets.target) : null,
+            newBusiness: targets ? targets.newBusiness : null,
+            retention: retention ? retention.rate : null,
+            retentionTarget: retention ? retention.target : manual.retentionTarget,
+            churned: retention ? retention.churned : null,
+            upsells: retention ? retention.upsells : null,
+            initial: retention ? retention.initial : null,
+            clients: mrr ? mrr.clients : null,
+            cogs: margin ? margin.cogs : null,
+            cogsTarget: margin ? margin.cogsTarget : null,
+            margin: margin ? margin.margin : null,
+            marginTarget: margin ? margin.marginTarget : null,
+            bonusPool: margin ? margin.bonusPool : null,
+        };
+    });
+
+    // O ano "até agora": vai até o último mês com receita registrada.
+    let lastIndex = -1;
+    months.forEach((entry, index) => { if (hasValue(entry.actual) && entry.actual > 0) lastIndex = index; });
+    const elapsed = lastIndex >= 0 ? months.slice(0, lastIndex + 1) : [];
+    const totalOf = (field) => {
+        const rows = elapsed.filter((entry) => hasValue(entry[field]));
+        return rows.length ? rows.reduce((total, entry) => total + Number(entry[field]), 0) : null;
+    };
+
+    const latest = lastIndex >= 0 ? months[lastIndex] : null;
+    const firstWithClients = elapsed.find((entry) => hasValue(entry.clients)) || null;
+    const revenue = totalOf('actual');
+    const cogs = totalOf('cogs');
+
+    return {
+        year,
+        months,
+        elapsed,
+        latest,
+        firstWithClients,
+        totals: {
+            revenue,
+            target: totalOf('target'),
+            newBusiness: totalOf('newBusiness'),
+            churned: totalOf('churned'),
+            upsells: totalOf('upsells'),
+            cogs,
+            cogsTarget: totalOf('cogsTarget'),
+            bonusPool: totalOf('bonusPool'),
+            // Margem do ano pela receita e pelo COGS acumulados, não pela média das margens mensais.
+            margin: hasValue(revenue) && hasValue(cogs) && revenue !== 0 ? (revenue - cogs) / revenue : null,
+        },
+    };
+}
+
+function summaryCard(key, { value, ratio, note, foot, invert = false }) {
+    setText(`#sum-${key}-value`, value);
+    setText(`#sum-${key}-note`, note);
+    setText(`#sum-${key}-foot`, foot);
+    const bar = $(`#sum-${key}-bar`);
+    const card = $(`#sum-${key}-card`);
+    if (!bar || !card) return;
+    bar.style.width = `${hasValue(ratio) ? clampPercent(Number(ratio) * 100) : 0}%`;
+    const good = hasValue(ratio) ? (invert ? Number(ratio) <= 1 : Number(ratio) >= 1) : null;
+    card.dataset.state = good === null ? 'empty' : good ? 'good' : 'behind';
+}
+
+function renderOverview() {
+    if (!$('#overview-view')) return;
+    const data = summaryData();
+    const { totals, latest } = data;
+    const monthOf = (entry) => (entry ? monthLabel(monthFromKey(entry.month)) : DASH);
+
+    setText('#summary-scope-note', `${companyLabels[state.scope] || 'All markets'} · ${state.category === 'all' ? 'all services' : categoryLabels[state.category]} · ${data.year}`);
+    setText('#summary-matrix-title', `${data.year}${latest ? `, through ${monthOf(latest)}` : ''}`);
+    setText('#summary-bridge-title', `Recurring base bridge · ${data.year}`);
+
+    summaryCard('revenue', {
+        value: percentOr(share(totals.revenue, totals.target), 0),
+        ratio: share(totals.revenue, totals.target),
+        note: `${moneyOr(totals.revenue)} of ${moneyOr(totals.target)} in the year`,
+        foot: latest ? `${percentOr(latest.attainment, 0)} in ${monthOf(latest)} · accumulated gap ${signedMoney(hasValue(totals.revenue) && hasValue(totals.target) ? totals.revenue - totals.target : null)}` : 'No revenue yet',
+    });
+    summaryCard('retention', {
+        value: percentOr(latest ? latest.retention : null, 0),
+        ratio: latest ? share(latest.retention, latest.retentionTarget) : null,
+        note: latest ? `${percentOr(latest.retention)} in ${monthOf(latest)} against a ${percentOr(latest.retentionTarget, 0)} target` : 'No retention data yet',
+        foot: latest && hasValue(latest.clients)
+            ? `${plural(latest.clients, 'client')} active${data.firstWithClients && data.firstWithClients !== latest ? `, from ${number(data.firstWithClients.clients)} in ${monthOf(data.firstWithClients)}` : ''}`
+            : DASH,
+    });
+    summaryCard('margin', {
+        value: percentOr(latest ? latest.margin : null, 0),
+        ratio: latest ? share(latest.margin, latest.marginTarget) : null,
+        note: latest && hasValue(latest.margin) ? `${percentOr(latest.margin)} in ${monthOf(latest)} against a ${percentOr(latest.marginTarget)} target` : 'No margin entered yet',
+        foot: hasValue(totals.margin) ? `${percentOr(totals.margin)} accumulated in the year` : 'Enter COGS in Margin & COGS',
+    });
+    const cogsRatio = share(totals.cogs, totals.cogsTarget);
+    summaryCard('cogs', {
+        value: hasValue(cogsRatio) ? percentOr(1 - cogsRatio, 0) : DASH,
+        ratio: cogsRatio,
+        invert: true,
+        note: `${moneyOr(totals.cogs)} spent of ${moneyOr(totals.cogsTarget)} budgeted`,
+        foot: hasValue(totals.cogs) && hasValue(totals.cogsTarget)
+            ? `${signedMoney(totals.cogsTarget - totals.cogs)} against budget in the year`
+            : 'No COGS budget entered yet',
+    });
+
+    renderSummaryMatrix(data);
+    renderSummaryHealth(data);
+    renderSummaryPlanChart(data);
+    renderSummaryBridgeChart(data);
+}
+
+function renderSummaryMatrix(data) {
+    $('#summary-matrix-head').innerHTML = `<th>Indicator</th>${data.months.map((entry) => `<th class="align-right">${escapeHtml(entry.label)}</th>`).join('')}`;
+    $('#summary-matrix').innerHTML = SUMMARY_ROWS.map((row) => {
+        const cells = data.months.map((entry) => {
+            const value = entry[row.key];
+            return `<td class="align-right mono ${summaryTone(row, entry)}">${row.format(value)}</td>`;
+        }).join('');
+        return `<tr><th scope="row">${escapeHtml(row.label)}</th>${cells}</tr>`;
+    }).join('');
+
+    const note = $('#summary-matrix-note');
+    if (!note) return;
+    const missing = [];
+    if (!data.elapsed.some((entry) => hasValue(entry.target))) missing.push('Target MRR');
+    if (!data.elapsed.some((entry) => hasValue(entry.cogs))) missing.push('COGS');
+    note.textContent = data.elapsed.length === 0
+        ? `No billable invoices in ${data.year} for this market and service.`
+        : missing.length
+            ? `${missing.join(' and ')} not entered for this view yet — those rows stay empty.`
+            : `Manual figures come from Targets and Margin & COGS; the rest is calculated from invoices.`;
+    note.dataset.tone = missing.length ? 'sample' : 'muted';
+}
+
+// Verde acima da meta, vermelho abaixo; para COGS a lógica se inverte.
+function summaryTone(row, entry) {
+    if (!row.tone) return '';
+    const pairs = { ratio: [entry.attainment, 1], retention: [entry.retention, entry.retentionTarget], margin: [entry.margin, entry.marginTarget], cogs: [entry.cogsTarget, entry.cogs] };
+    const [value, reference] = pairs[row.tone] || [];
+    if (!hasValue(value) || !hasValue(reference)) return '';
+    return Number(value) >= Number(reference) ? 'cell-up' : 'cell-down';
+}
+
+function renderSummaryHealth(data) {
+    const { totals, latest } = data;
+    const rows = [
+        { label: 'Active clients', value: latest && hasValue(latest.clients) ? number(latest.clients) : DASH, sub: data.firstWithClients ? `of ${number(data.firstWithClients.clients)} in ${new Intl.DateTimeFormat('en-US', { month: 'long' }).format(monthFromKey(data.firstWithClients.month))}` : '' },
+        { label: 'Churn in the year', value: hasValue(totals.churned) ? signedMoney(-totals.churned) : DASH, tone: totals.churned > 0 ? 'down' : '' },
+        { label: 'New business in the year', value: hasValue(totals.newBusiness) ? signedMoney(totals.newBusiness) : DASH, tone: totals.newBusiness > 0 ? 'up' : '' },
+        { label: 'Upsells in the year', value: hasValue(totals.upsells) ? signedMoney(totals.upsells) : DASH, tone: totals.upsells > 0 ? 'up' : '' },
+        { label: 'Net change', value: signedMoney(summaryNet(totals)), tone: summaryNet(totals) > 0 ? 'up' : summaryNet(totals) < 0 ? 'down' : '' },
+    ];
+    $('#summary-health').innerHTML = rows.map((row) => `<div class="health-row">
+        <span class="health-label">${escapeHtml(row.label)}${row.sub ? `<small>${escapeHtml(row.sub)}</small>` : ''}</span>
+        <span class="health-value ${row.tone ? `value-${row.tone}` : ''}">${row.value}</span>
+    </div>`).join('');
+
+    const note = $('#summary-bonus-note');
+    if (!note) return;
+    const bonusMonths = data.elapsed.filter((entry) => hasValue(entry.bonusPool)).length;
+    note.textContent = hasValue(data.totals.bonusPool)
+        ? `Bonus provisioned in the year: ${money(data.totals.bonusPool)} — entered for ${plural(bonusMonths, 'month')}.`
+        : 'No bonus pool entered for this view yet.';
+}
+
+function summaryNet(totals) {
+    const parts = [totals.newBusiness, totals.upsells, hasValue(totals.churned) ? -totals.churned : null].filter(hasValue);
+    return parts.length ? parts.reduce((total, value) => total + Number(value), 0) : null;
+}
+
+function renderSummaryPlanChart(data) {
+    const canvas = $('#summary-plan-chart');
+    const empty = $('#summary-plan-empty');
+    if (!canvas || typeof Chart === 'undefined') return;
+    const hasData = data.elapsed.length > 0;
+    empty.classList.toggle('is-hidden', hasData);
+    canvas.classList.toggle('is-hidden', !hasData);
+    if (state.summaryPlanChart) { state.summaryPlanChart.destroy(); state.summaryPlanChart = null; }
+    if (!hasData) return;
+
+    state.summaryPlanChart = new Chart(canvas, {
+        data: {
+            labels: data.months.map((entry) => entry.label),
+            datasets: [
+                { type: 'bar', label: 'Actual', data: data.months.map((entry) => (hasValue(entry.actual) && entry.actual > 0 ? entry.actual : null)), backgroundColor: colors.authorised, borderWidth: 0, maxBarThickness: 28 },
+                { type: 'line', label: 'Target', data: data.months.map((entry) => (hasValue(entry.target) ? entry.target : null)), borderColor: '#4a544d', borderWidth: 1.5, borderDash: [5, 4], pointRadius: 2, pointBackgroundColor: '#4a544d', spanGaps: true, tension: 0 },
+            ],
+        },
+        options: summaryChartOptions(),
+    });
+}
+
+function renderSummaryBridgeChart(data) {
+    const canvas = $('#summary-bridge-chart');
+    const empty = $('#summary-bridge-empty');
+    if (!canvas || typeof Chart === 'undefined') return;
+    const first = data.elapsed[0];
+    const net = summaryNet(data.totals);
+    const hasData = Boolean(first) && hasValue(net);
+    empty.classList.toggle('is-hidden', hasData);
+    canvas.classList.toggle('is-hidden', !hasData);
+    if (state.summaryBridgeChart) { state.summaryBridgeChart.destroy(); state.summaryBridgeChart = null; }
+    if (!hasData) return;
+
+    // Barras flutuantes [início, fim]: base de janeiro, o que entrou, o que saiu e onde parou.
+    const steps = [];
+    let cursor = Number(first.actual) || 0;
+    steps.push({ label: `${first.label} base`, range: [0, cursor], color: '#3f4944' });
+    [
+        { label: 'New business', value: data.totals.newBusiness, color: '#57745d' },
+        { label: 'Upsells', value: data.totals.upsells, color: '#7fa487' },
+        { label: 'Churn', value: hasValue(data.totals.churned) ? -data.totals.churned : null, color: colors.authorised },
+    ].forEach((step) => {
+        if (!hasValue(step.value)) return;
+        const next = cursor + Number(step.value);
+        steps.push({ label: step.label, range: [cursor, next], color: step.color, delta: Number(step.value) });
+        cursor = next;
+    });
+    steps.push({ label: `${data.latest.label} base`, range: [0, cursor], color: '#3f4944' });
+
+    state.summaryBridgeChart = new Chart(canvas, {
+        type: 'bar',
+        data: {
+            labels: steps.map((step) => step.label),
+            datasets: [{ label: 'USD', data: steps.map((step) => step.range), backgroundColor: steps.map((step) => step.color), borderWidth: 0, maxBarThickness: 64 }],
+        },
+        options: {
+            ...summaryChartOptions(),
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: (item) => {
+                    const step = steps[item.dataIndex];
+                    return hasValue(step.delta) ? signedMoney(step.delta) : money(step.range[1]);
+                } } },
+            },
+        },
+    });
+}
+
+function summaryChartOptions() {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: {
+            legend: { display: true, position: 'bottom', labels: { boxWidth: 10, boxHeight: 10, font: { family: 'Manrope', size: 10 }, color: '#6d6f68' } },
+            tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${money(item.parsed.y)}` } },
+        },
+        scales: {
+            x: { grid: { display: false }, ticks: { font: { family: 'DM Mono', size: 10 }, color: '#8a8c84' } },
+            y: { grid: { color: '#ece9e2' }, ticks: { font: { family: 'DM Mono', size: 10 }, color: '#8a8c84', callback: (value) => money(value) } },
+        },
+    };
+}
+
+document.querySelectorAll('[data-goto-view]').forEach((button) => button.addEventListener('click', () => {
+    const target = document.querySelector(`.nav-item[data-view="${button.dataset.gotoView}"]`);
+    if (target) target.click();
+}));
+
+// ---- Unit economics ----
+// ATV, ARPA, ALT e LTV saem das invoices do Xero; CAC e CPL usam os custos lançados à mão.
+// Definições:
+//   ATV  = receita / número de invoices no período
+//   ARPA = receita do mês / clientes ativos no mês
+//   ALT  = tempo médio, em meses, entre a primeira e a última invoice dos clientes já perdidos
+//   LTV  = ARPA × ALT (receita; a margem entra na nota do card)
+//   CAC  = custo de Sales & Marketing / novos clientes
+//   CPL  = custo de Marketing / leads
+// Um cliente é considerado perdido após CHURN_GRACE_MONTHS meses sem invoice.
+const CHURN_GRACE_MONTHS = 2;
+
+state.unitInputs = {};
+state.unitInputsStatus = 'loading';
+state.unitInputsError = '';
+state.unitEntriesMode = 'all';
+state.clientEntriesMode = 'all';
+const UNIT_ENDPOINT = 'unit-inputs.php';
+const UNIT_FIELDS = {
+    salesMarketingCost: { kind: 'money' },
+    newClients: { kind: 'count' },
+    marketingCost: { kind: 'money' },
+    leads: { kind: 'count' },
+};
+
+const unitForm = $('#unit-form');
+const unitModal = $('#unit-modal');
+
+async function unitRequest(options = {}) {
+    const response = redirectIfSignedOut(await fetch(UNIT_ENDPOINT, { cache: 'no-store', ...options }));
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `The server answered HTTP ${response.status}.`);
+    return body;
+}
+
+function storeUnitEntry(entry) {
+    state.unitInputs[marginInputKey(entry.month, entry.scope, entry.category)] = entry;
+}
+
+async function loadUnitInputs() {
+    state.unitInputsStatus = 'loading';
+    try {
+        const { entries = [] } = await unitRequest();
+        state.unitInputs = {};
+        entries.forEach(storeUnitEntry);
+        state.unitInputsStatus = 'ready';
+    } catch (error) {
+        state.unitInputsStatus = 'error';
+        state.unitInputsError = error.message;
+    }
+    renderUnitSection();
+}
+
+async function saveUnitInput(entry) {
+    const { entry: saved } = await unitRequest({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entry),
+    });
+    storeUnitEntry(saved);
+    return saved;
+}
+
+function exactUnit(month, scope, category) {
+    return state.unitInputs[marginInputKey(month, scope, category)] || null;
+}
+
+// Combina somando: custos, leads e novos clientes são aditivos entre serviços e mercados.
+function combineUnit(entries) {
+    const parts = entries.filter(Boolean);
+    if (!parts.length) return null;
+    const sum = (field) => {
+        const rows = parts.filter((part) => hasValue(part[field]));
+        return rows.length ? rows.reduce((total, part) => total + Number(part[field]), 0) : null;
+    };
+    return {
+        salesMarketingCost: sum('salesMarketingCost'),
+        newClients: sum('newClients'),
+        marketingCost: sum('marketingCost'),
+        leads: sum('leads'),
+        entryCount: parts.reduce((total, part) => total + (part.entryCount || 1), 0),
+    };
+}
+
+function resolveUnit(month, scope, category) {
+    const exact = exactUnit(month, scope, category);
+    if (exact) return exact;
+    if (category === 'all') {
+        const lines = combineUnit(Object.keys(categoryLabels).map((key) => exactUnit(month, scope, key)));
+        if (lines) return lines;
+    }
+    if (scope === 'all') return combineUnit(Object.keys(companyLabels).map((key) => resolveUnit(month, key, category)));
+    return null;
+}
+
+// ---- Ciclo de vida por cliente ----
+// Esquerda censurada: o n8n só traz invoices a partir de jan/2025, então quem já era
+// cliente antes disso tem a data de início truncada e fica fora da média do ALT.
+function clientLifetimes() {
+    const invoices = scopedInvoices();
+    const today = startOfToday();
+    const currentMonth = monthKey(today);
+    const datasetStart = invoices.reduce((first, invoice) => {
+        const date = invoiceDate(invoice);
+        return date && (!first || date < first) ? date : first;
+    }, null);
+
+    const clients = new Map();
+    invoices.forEach((invoice) => {
+        const date = invoiceDate(invoice);
+        if (!date) return;
+        const key = contactKey(invoice);
+        const entry = clients.get(key) || { key, name: invoice.Contact?.Name || 'Unknown client', scope: invoice.companyKey, first: date, last: date, revenue: 0, months: new Set(), invoices: 0 };
+        if (date < entry.first) entry.first = date;
+        if (date > entry.last) entry.last = date;
+        entry.revenue += amount(invoice);
+        entry.months.add(monthKey(date));
+        entry.invoices += 1;
+        clients.set(key, entry);
+    });
+
+    const cutoff = new Date(today.getFullYear(), today.getMonth() - CHURN_GRACE_MONTHS, 1);
+    return [...clients.values()].map((entry) => {
+        const lifetime = monthKeysBetween(entry.first, entry.last).length; // meses de calendário, ponta a ponta
+        const active = monthKey(entry.last) === currentMonth || entry.last >= cutoff;
+        return {
+            ...entry,
+            lifetime,
+            active,
+            leftCensored: Boolean(datasetStart) && monthKey(entry.first) === monthKey(datasetStart),
+            arpa: lifetime > 0 ? entry.revenue / lifetime : null,
+        };
+    }).sort((a, b) => b.revenue - a.revenue);
+}
+
+function unitMetrics() {
+    const { start, end } = periodBounds();
+    const window = { start: start || new Date(1970, 0, 1), end: end || new Date(9999, 11, 31) };
+    const invoices = scopedInvoices().filter((invoice) => inWindow(invoiceDate(invoice), window));
+    const revenue = invoices.reduce((total, invoice) => total + amount(invoice), 0);
+    const months = monthKeysBetween(window.start < new Date(1990, 0, 1) ? (invoices.length ? invoiceDate(invoices[0]) : startOfToday()) : window.start, window.end > new Date(9000, 0, 1) ? startOfToday() : window.end);
+
+    const inputs = combineUnit(months.map((month) => resolveUnit(month, state.scope, state.category))) || {};
+    const meta = state.scorecardMeta || {};
+    const scorecard = state.scorecard || {};
+    const newClients = hasValue(inputs.newClients) ? inputs.newClients : (hasValue(meta.newClients) ? meta.newClients : null);
+
+    const clients = clientLifetimes();
+    const churned = clients.filter((client) => !client.active && !client.leftCensored);
+    const alt = churned.length ? churned.reduce((total, client) => total + client.lifetime, 0) / churned.length : null;
+
+    const activeClients = scorecard.retention ? scorecard.retention.activeClients : null;
+    const monthsInWindow = Math.max(1, months.length);
+    const arpa = hasValue(activeClients) && activeClients > 0 ? revenue / activeClients / monthsInWindow : null;
+    const margin = meta.marginEntry?.margin ?? meta.marginAggregate?.margin ?? null;
+
+    return {
+        months,
+        revenue,
+        invoiceCount: invoices.length,
+        atv: invoices.length ? revenue / invoices.length : null,
+        arpa,
+        alt,
+        ltv: hasValue(arpa) && hasValue(alt) ? arpa * alt : null,
+        margin,
+        newClients,
+        newClientsFromInvoices: !hasValue(inputs.newClients),
+        salesMarketingCost: inputs.salesMarketingCost ?? null,
+        marketingCost: inputs.marketingCost ?? null,
+        leads: inputs.leads ?? null,
+        cac: hasValue(inputs.salesMarketingCost) && hasValue(newClients) && newClients > 0 ? inputs.salesMarketingCost / newClients : null,
+        cpl: hasValue(inputs.marketingCost) && hasValue(inputs.leads) && inputs.leads > 0 ? inputs.marketingCost / inputs.leads : null,
+        clients,
+        churnedCount: churned.length,
+        censoredCount: clients.filter((client) => client.leftCensored).length,
+        activeCount: clients.filter((client) => client.active).length,
+    };
+}
+
+function unitCard(key, { value, note, foot, state: tone = 'empty' }) {
+    setText(`#unit-${key}-value`, value);
+    setText(`#unit-${key}-note`, note);
+    setText(`#unit-${key}-foot`, foot);
+    const card = $(`#unit-${key}-card`);
+    if (card) card.dataset.state = tone;
+}
+
+function renderUnitSection() {
+    if (!$('#unit-view')) return;
+    const metrics = unitMetrics();
+    const periodLabel = periodBounds().label;
+
+    unitCard('atv', {
+        value: moneyOr(metrics.atv),
+        note: `${moneyOr(metrics.revenue)} over ${plural(metrics.invoiceCount, 'invoice')}`,
+        foot: periodLabel,
+        state: hasValue(metrics.atv) ? 'good' : 'empty',
+    });
+    unitCard('arpa', {
+        value: moneyOr(metrics.arpa),
+        note: 'Revenue per active client per month',
+        foot: `${plural(metrics.activeCount, 'client')} with invoices in this view`,
+        state: hasValue(metrics.arpa) ? 'good' : 'empty',
+    });
+    unitCard('alt', {
+        value: hasValue(metrics.alt) ? `${metrics.alt.toFixed(1)} mo` : DASH,
+        note: metrics.churnedCount ? `Average across ${plural(metrics.churnedCount, 'lost client')}` : 'No lost clients with a known start date',
+        foot: metrics.censoredCount ? `${plural(metrics.censoredCount, 'client')} left out: they started before the invoice history` : 'All clients have a known start date',
+        state: hasValue(metrics.alt) ? 'good' : 'empty',
+    });
+    unitCard('ltv', {
+        value: moneyOr(metrics.ltv),
+        note: 'ARPA × ALT, in revenue',
+        foot: hasValue(metrics.ltv) && hasValue(metrics.margin) ? `${moneyOr(metrics.ltv * metrics.margin)} at the ${percentOr(metrics.margin)} margin entered` : 'Enter a margin to see it net of COGS',
+        state: hasValue(metrics.ltv) ? 'good' : 'empty',
+    });
+    unitCard('cac', {
+        value: moneyOr(metrics.cac),
+        note: hasValue(metrics.salesMarketingCost) ? `${moneyOr(metrics.salesMarketingCost)} over ${hasValue(metrics.newClients) ? plural(metrics.newClients, 'new client') : 'no new clients'}` : 'No Sales & Marketing cost entered',
+        foot: metrics.newClientsFromInvoices ? 'New clients counted from the invoices' : 'New clients entered by hand',
+        state: hasValue(metrics.cac) ? 'good' : 'empty',
+    });
+    unitCard('cpl', {
+        value: moneyOr(metrics.cpl),
+        note: hasValue(metrics.marketingCost) ? `${moneyOr(metrics.marketingCost)} over ${hasValue(metrics.leads) ? plural(metrics.leads, 'lead') : 'no leads'}` : 'No marketing cost entered',
+        foot: periodLabel,
+        state: hasValue(metrics.cpl) ? 'good' : 'empty',
+    });
+    const ratio = hasValue(metrics.ltv) && hasValue(metrics.cac) && metrics.cac > 0 ? metrics.ltv / metrics.cac : null;
+    unitCard('ratio', {
+        value: hasValue(ratio) ? `${ratio.toFixed(1)}×` : DASH,
+        note: 'How much a client returns for each dollar spent to win them',
+        foot: hasValue(ratio) ? (ratio >= 3 ? 'At or above the usual 3× benchmark' : 'Below the usual 3× benchmark') : 'Needs LTV and CAC',
+        state: hasValue(ratio) ? (ratio >= 3 ? 'good' : 'behind') : 'empty',
+    });
+    unitCard('clients', {
+        value: hasValue(metrics.newClients) ? number(metrics.newClients) : DASH,
+        note: `Won in ${periodLabel.toLowerCase()}`,
+        foot: `${plural(metrics.churnedCount, 'client')} lost with a known start date`,
+        state: hasValue(metrics.newClients) ? 'good' : 'empty',
+    });
+
+    renderUnitInputStatus();
+    renderUnitMonthlyTable();
+    renderClientTable(metrics.clients);
+}
+
+function renderUnitInputStatus() {
+    const node = $('#unit-input-status');
+    if (!node) return;
+    if (state.unitInputsStatus === 'loading') { node.textContent = 'Loading saved figures…'; node.dataset.tone = 'muted'; return; }
+    if (state.unitInputsStatus === 'error') { node.textContent = `Could not load saved figures: ${state.unitInputsError}`; node.dataset.tone = 'error'; return; }
+    const count = Object.keys(state.unitInputs).length;
+    node.textContent = count
+        ? `${plural(count, 'entry')} saved. CAC and CPL only appear for months with costs entered; leave New clients empty to use the count from the invoices.`
+        : 'Nothing entered yet. Add the Sales & Marketing cost, the marketing cost and the leads of a month to see CAC and CPL.';
+    node.dataset.tone = count ? 'manual' : 'muted';
+}
+
+function unitMonthlyRows() {
+    if (!state.monthlyRows) state.monthlyRows = buildMonthlyRows();
+    return (state.monthlyRows.mrr || []).map((row) => {
+        const input = resolveUnit(row.month, row.scope, row.category);
+        const newClients = hasValue(input?.newClients) ? input.newClients : row.newClients;
+        return {
+            ...row,
+            atv: row.invoices ? row.mrr / row.invoices : null,
+            arpa: row.clients ? row.mrr / row.clients : null,
+            newClients,
+            salesMarketingCost: input?.salesMarketingCost ?? null,
+            marketingCost: input?.marketingCost ?? null,
+            leads: input?.leads ?? null,
+            cac: hasValue(input?.salesMarketingCost) && hasValue(newClients) && newClients > 0 ? input.salesMarketingCost / newClients : null,
+            cpl: hasValue(input?.marketingCost) && hasValue(input?.leads) && input.leads > 0 ? input.marketingCost / input.leads : null,
+            hasExactInput: Boolean(exactUnit(row.month, row.scope, row.category)),
+        };
+    });
+}
+
+function renderUnitMonthlyTable() {
+    const body = $('#unit-entries-table');
+    if (!body) return;
+    const all = unitMonthlyRows();
+    const mode = state.unitEntriesMode;
+    const rows = mode === 'view' ? all.filter(entryInView) : all;
+    const inViewCount = all.filter(entryInView).length;
+    setText('#unit-entries-summary', mode === 'view'
+        ? `${plural(rows.length, 'entry')} of ${number(all.length)}`
+        : `${plural(all.length, 'entry')} · ${number(inViewCount)} used in current view`);
+
+    body.innerHTML = rows.map((row) => {
+        const used = mode === 'all' && entryInView(row);
+        return `<tr class="${used ? 'is-in-view' : ''}"${used ? ' title="Used by the current view"' : ''}>
+            <td>${escapeHtml(monthLabel(monthFromKey(row.month)))}</td>
+            <td>${escapeHtml(companyLabels[row.scope] || 'Global')}</td>
+            <td>${escapeHtml(serviceName(row.category))}</td>
+            <td class="align-right mono">${moneyOr(row.mrr)}</td>
+            <td class="align-right mono">${number(row.invoices)}</td>
+            <td class="align-right mono">${moneyOr(row.atv)}</td>
+            <td class="align-right mono">${number(row.clients)}</td>
+            <td class="align-right mono">${moneyOr(row.arpa)}</td>
+            <td class="align-right mono">${hasValue(row.newClients) ? number(row.newClients) : DASH}</td>
+            <td class="align-right mono">${moneyOr(row.salesMarketingCost)}</td>
+            <td class="align-right mono">${moneyOr(row.cac)}</td>
+            <td class="align-right mono">${moneyOr(row.marketingCost)}</td>
+            <td class="align-right mono">${hasValue(row.leads) ? number(row.leads) : DASH}</td>
+            <td class="align-right mono">${moneyOr(row.cpl)}</td>
+            <td class="align-right entry-actions"><button type="button" class="row-button" data-unit-show="${escapeHtml(row.key)}">Show</button><button type="button" class="row-button" data-unit-edit="${escapeHtml(row.key)}">${row.hasExactInput ? 'Edit' : 'Add costs'}</button></td>
+        </tr>`;
+    }).join('');
+
+    const empty = $('#unit-entries-empty');
+    empty.textContent = !state.invoices.length && state.sync.phase === 'loading'
+        ? 'Loading invoices…'
+        : !all.length ? 'No billable client invoices yet.'
+            : !rows.length ? 'No month matches the current market, service and period.' : '';
+    empty.classList.toggle('is-hidden', rows.length > 0);
+}
+
+function renderClientTable(clients) {
+    const body = $('#client-entries-table');
+    if (!body) return;
+    const rows = state.clientEntriesMode === 'view' ? clients.filter((client) => !client.active) : clients;
+    setText('#client-entries-summary', `${plural(rows.length, 'client')} · ${number(clients.filter((client) => !client.active).length)} lost`);
+
+    body.innerHTML = rows.map((client) => `<tr>
+        <td>${escapeHtml(client.name)}${client.leftCensored ? '<div class="client-sub">started before the invoice history</div>' : ''}</td>
+        <td>${escapeHtml(companyLabels[client.scope] || DASH)}</td>
+        <td>${escapeHtml(monthLabel(client.first))}</td>
+        <td>${escapeHtml(monthLabel(client.last))}</td>
+        <td class="align-right mono">${number(client.lifetime)}</td>
+        <td class="align-right mono">${moneyOr(client.revenue)}</td>
+        <td class="align-right mono">${moneyOr(client.arpa)}</td>
+        <td class="align-right"><span class="status-pill ${client.active ? 'paid' : 'late'}">${client.active ? 'Active' : 'Lost'}</span></td>
+    </tr>`).join('');
+
+    const empty = $('#client-entries-empty');
+    empty.textContent = rows.length ? '' : state.invoices.length ? 'No client matches this market and service.' : 'Loading invoices…';
+    empty.classList.toggle('is-hidden', rows.length > 0);
+}
+
+// ---- Formulário ----
+function fillUnitValues(entry) {
+    Object.keys(UNIT_FIELDS).forEach((name) => {
+        const value = entry ? entry[name] : null;
+        unitForm.elements[name].value = hasValue(value) ? String(value) : '';
+    });
+}
+
+function loadUnitEntryIntoForm() {
+    const { month, scope, category } = unitForm.elements;
+    const entry = month.value ? exactUnit(month.value, scope.value, category.value) : null;
+    fillUnitValues(entry);
+    $('#unit-form-submit').textContent = entry ? 'Update figures' : 'Save figures';
+}
+
+function showUnitError(message, field) {
+    const node = $('#unit-form-error');
+    unitForm.querySelectorAll('[aria-invalid]').forEach((input) => input.removeAttribute('aria-invalid'));
+    node.hidden = !message;
+    node.textContent = message || '';
+    if (field) { field.setAttribute('aria-invalid', 'true'); field.focus(); }
+}
+
+function openUnitModal(entry = null) {
+    unitForm.reset();
+    showUnitError('');
+    unitForm.elements.month.value = entry ? entry.month : monthKey(selectedSingleMonth() || new Date());
+    unitForm.elements.scope.value = entry ? entry.scope : state.scope;
+    unitForm.elements.category.value = entry ? entry.category : state.category;
+    loadUnitEntryIntoForm();
+    unitModal.showModal();
+}
+
+function closeUnitModal() { unitModal.close(); $('#open-unit-modal').focus(); }
+
+function readUnitForm() {
+    const { elements } = unitForm;
+    if (!/^\d{4}-\d{2}$/.test(elements.month.value)) { showUnitError('Choose the month these figures belong to.', elements.month); return null; }
+    const entry = { month: elements.month.value, scope: elements.scope.value, category: elements.category.value };
+    for (const [name, field] of Object.entries(UNIT_FIELDS)) {
+        const input = elements[name];
+        const label = input.closest('.field').querySelector('span').textContent;
+        if (input.value.trim() === '') {
+            if (input.validity.badInput) { showUnitError(`${label} is not a valid number.`, input); return null; }
+            entry[name] = null;
+            continue;
+        }
+        const value = Number(input.value);
+        if (!Number.isFinite(value)) { showUnitError(`${label} is not a valid number.`, input); return null; }
+        if (value < 0) { showUnitError(`${label} cannot be negative.`, input); return null; }
+        entry[name] = field.kind === 'count' ? Math.round(value) : value;
+    }
+    if (Object.keys(UNIT_FIELDS).every((name) => entry[name] === null)) {
+        showUnitError('Fill in at least one figure.', elements.salesMarketingCost);
+        return null;
+    }
+    entry.enteredAt = new Date().toISOString();
+    return entry;
+}
+
+if (unitForm) {
+    $('#open-unit-modal').addEventListener('click', () => openUnitModal());
+    unitModal.querySelectorAll('[data-close-modal]').forEach((button) => button.addEventListener('click', closeUnitModal));
+    unitModal.addEventListener('click', (event) => { if (event.target === unitModal) closeUnitModal(); });
+    ['month', 'scope', 'category'].forEach((name) => unitForm.elements[name].addEventListener('change', loadUnitEntryIntoForm));
+    unitForm.addEventListener('input', () => { if (!$('#unit-form-error').hidden) showUnitError(''); });
+
+    unitForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const entry = readUnitForm();
+        if (!entry) return;
+        const submit = $('#unit-form-submit');
+        const label = submit.textContent;
+        submit.disabled = true;
+        submit.textContent = 'Saving…';
+        try {
+            const saved = await saveUnitInput(entry);
+            closeUnitModal();
+            showMarginEntry(saved);
+        } catch (error) {
+            showUnitError(error.message || 'Could not save the figures.');
+        } finally {
+            submit.disabled = false;
+            submit.textContent = label;
+        }
+    });
+
+    document.querySelectorAll('.entries-tab[data-unit-table="unit"]').forEach((button) => button.addEventListener('click', () => {
+        state.unitEntriesMode = button.dataset.entries;
+        document.querySelectorAll('.entries-tab[data-unit-table="unit"]').forEach((item) => item.classList.toggle('is-active', item === button));
+        renderUnitMonthlyTable();
+    }));
+    document.querySelectorAll('.entries-tab[data-unit-table="client"]').forEach((button) => button.addEventListener('click', () => {
+        state.clientEntriesMode = button.dataset.entries;
+        document.querySelectorAll('.entries-tab[data-unit-table="client"]').forEach((item) => item.classList.toggle('is-active', item === button));
+        renderClientTable(clientLifetimes());
+    }));
+
+    $('#unit-entries-table').addEventListener('click', (event) => {
+        const button = event.target.closest('button');
+        if (!button) return;
+        const key = button.dataset.unitShow || button.dataset.unitEdit;
+        const [month, scope, category] = String(key).split('|');
+        if (button.dataset.unitEdit) { openUnitModal({ month, scope, category, ...(exactUnit(month, scope, category) || {}) }); return; }
+        showMarginEntry({ month, scope, category });
+        $('#unit-view').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+}
+
 renderScorecard();
 loadMarginInputs();
 loadTargetInputs();
-loadMarginInputs();
+loadBrIndices();
+loadUnitInputs();
