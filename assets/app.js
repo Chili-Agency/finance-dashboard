@@ -3,7 +3,6 @@ const companyLabels = { br: 'Brazil', mx: 'Mexico', pa: 'Panama', int: 'Internat
 const categoryLabels = { seo: 'SEO', ppc: 'PPC' };
 const colors = { paid: '#57745d', late: '#d49b35', open: '#55778a', authorised: '#e84d2c', voided: '#a5a6a0' };
 
-// Sessão expirada em qualquer chamada ao backend: volta para o login.
 function redirectIfSignedOut(response) {
     if (response.status === 401) {
         window.location.href = 'login.php?expired=1';
@@ -1041,25 +1040,42 @@ function selectedSingleMonth() {
     return start && end && isCalendarMonth(start, end) ? start : null;
 }
 
-function marginEntryFor(month, invoices) {
-    const exact = state.marginInputs[marginInputKey(month, state.scope, state.category)];
-    if (exact || state.category !== 'all') return exact || null;
-    const parts = Object.keys(categoryLabels)
-        .map((category) => state.marginInputs[marginInputKey(month, state.scope, category)])
-        .filter(Boolean);
-    return parts.length ? combineServiceLines(month, parts, invoices) : null;
+// COGS e margem de um mês. Cascata igual à dos targets:
+// 1) lançamento exato; 2) soma de SEO + PPC do mesmo mercado; 3) na visão Global, soma dos mercados.
+function marginEntryFor(month, invoices, scope = state.scope, category = state.category) {
+    const exact = state.marginInputs[marginInputKey(month, scope, category)];
+    if (exact) return exact;
+    if (category === 'all') {
+        const lines = Object.keys(categoryLabels)
+            .map((key) => state.marginInputs[marginInputKey(month, scope, key)])
+            .filter(Boolean);
+        if (lines.length) return combineMarginParts(month, lines, scope, category, false);
+    }
+    if (scope === 'all') {
+        const markets = Object.keys(companyLabels)
+            .map((key) => marginEntryFor(month, invoices, key, category))
+            .filter(Boolean);
+        if (markets.length) return combineMarginParts(month, markets, scope, category, true);
+    }
+    return null;
 }
 
-function combineServiceLines(month, parts, invoices) {
-    const revenue = {};
-    invoices.forEach((invoice) => {
+// Receita faturada de uma parte (mercado + serviço) no mês: é o peso das margens.
+function marginPartRevenue(monthInvoices, part) {
+    return monthInvoices.reduce((total, invoice) => {
+        if (part.scope !== 'all' && invoice.companyKey !== part.scope) return total;
+        const value = fullAmount(invoice);
+        return total + (part.category === 'all' ? value : value * categoryShare(invoice, part.category));
+    }, 0);
+}
+
+function combineMarginParts(month, parts, scope, category, acrossMarkets) {
+    const monthInvoices = state.invoices.filter((invoice) => {
+        if (!isBillable(invoice)) return false;
         const date = invoiceDate(invoice);
-        if (!date || monthKey(date) !== month) return;
-        parts.forEach((part) => {
-            revenue[part.category] = (revenue[part.category] || 0) + fullAmount(invoice) * categoryShare(invoice, part.category);
-        });
+        return date && monthKey(date) === month;
     });
-    const revenueOf = (part) => revenue[part.category] || 0;
+    const revenueOf = (part) => marginPartRevenue(monthInvoices, part);
     const sum = (field) => {
         const rows = parts.filter((part) => hasValue(part[field]));
         return rows.length ? rows.reduce((total, part) => total + Number(part[field]), 0) : null;
@@ -1072,17 +1088,23 @@ function combineServiceLines(month, parts, invoices) {
         return rows.reduce((total, part) => total + Number(part[field]), 0) / rows.length;
     };
     const cogsRevenue = parts.filter((part) => hasValue(part.cogs)).reduce((total, part) => total + revenueOf(part), 0);
+    const labelsOf = (part) => {
+        const inner = part.combinedFrom && part.combinedFrom.length
+            ? part.combinedFrom
+            : [part.category === 'all' ? 'all services' : categoryLabels[part.category]];
+        return acrossMarkets ? inner.map((label) => `${companyLabels[part.scope] || 'Global'} ${label}`) : inner;
+    };
     return {
         month,
-        scope: state.scope,
-        category: 'all',
+        scope,
+        category,
         cogs: sum('cogs'),
         cogsTarget: sum('cogsTarget'),
         margin: weighted('margin'),
         marginTarget: weighted('marginTarget'),
         bonusPool: sum('bonusPool'),
         revenue: cogsRevenue > 0 ? cogsRevenue : null,
-        combinedFrom: parts.map((part) => part.category),
+        combinedFrom: parts.flatMap(labelsOf),
         enteredAt: parts.map((part) => part.enteredAt).filter(Boolean).sort().pop() || null,
     };
 }
@@ -1204,7 +1226,7 @@ function renderMarginInputStatus() {
 
 function combinedNote(figures) {
     const parts = (figures && figures.combinedFrom) || [];
-    return parts.length ? ` Combined from ${parts.map((key) => categoryLabels[key]).join(' + ')} entries.` : '';
+    return parts.length ? ` Combined from ${parts.join(' + ')} entries.` : '';
 }
 
 function appendSavedEntryLinks(node, meta) {
