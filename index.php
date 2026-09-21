@@ -221,6 +221,15 @@ function asset(string $path): string
                     <article class="metric-card metric-open"><div class="metric-heading"><span class="metric-label">Average delay</span><span class="metric-badge">04</span></div><strong id="late-average-days">0 days</strong><p><span id="late-oldest">—</span> <span class="metric-muted">oldest · weighted by balance</span></p></article>
                 </div>
 
+                                <article class="panel manual-panel">
+                    <div class="panel-header">
+                        <div><p class="eyebrow">Manual input</p><h3>Late charge rates</h3></div>
+                        <button type="button" class="button-secondary" id="open-rules-modal">Edit rates</button>
+                    </div>
+                    <div class="rules-summary" id="late-rules-summary"></div>
+                    <p class="manual-input-status" id="late-rules-status" data-tone="muted" aria-live="polite"></p>
+                </article>
+
                 <div class="dashboard-grid">
                     <article class="panel"><div class="panel-header"><div><p class="eyebrow">Aging</p><h3>Days past due</h3></div><span class="panel-meta">Balance + charges</span></div><div class="market-list aging-list" id="late-aging"></div></article>
                     <article class="panel market-panel"><div class="panel-header"><div><p class="eyebrow">Portfolio</p><h3>By market</h3></div><span class="panel-meta">USD view</span></div><div class="market-list" id="late-markets"></div></article>
@@ -660,6 +669,54 @@ function asset(string $path): string
                 <div class="modal-actions">
                     <button type="button" class="button-secondary" data-close-modal>Cancel</button>
                     <button type="submit" class="button-primary" id="margin-form-submit">Save figures</button>
+                </div>
+            </footer>
+        </form>
+    </dialog>
+    <dialog class="modal" id="rules-modal" aria-labelledby="rules-modal-title">
+        <form class="modal-form" id="rules-form" novalidate>
+            <header class="modal-header">
+                <div>
+                    <p class="eyebrow">Manual input</p>
+                    <h2 id="rules-modal-title">Late charge rates</h2>
+                </div>
+                <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+            </header>
+            <p class="modal-copy">The late fee is charged once on the open balance. Interest is simple, per month, counted day by day from the due date. Nothing is charged during the grace period.</p>
+
+            <fieldset class="form-group">
+                <legend>Rates by market</legend>
+                <div class="rules-row" data-rule="mx">
+                    <span class="rules-market">Mexico</span>
+                    <label class="field"><span>Late fee</span><div class="input-affix is-suffix"><input type="number" name="mx-lateFee" min="0" max="100" step="0.01" inputmode="decimal" placeholder="0"><i>%</i></div></label>
+                    <label class="field"><span>Interest / month</span><div class="input-affix is-suffix"><input type="number" name="mx-monthlyInterest" min="0" max="100" step="0.01" inputmode="decimal" placeholder="0"><i>%</i></div></label>
+                    <label class="field"><span>Grace period</span><div class="input-affix is-suffix"><input type="number" name="mx-graceDays" min="0" max="365" step="1" inputmode="numeric" placeholder="0"><i>days</i></div></label>
+                </div>
+                <div class="rules-row" data-rule="pa">
+                    <span class="rules-market">Panama</span>
+                    <label class="field"><span>Late fee</span><div class="input-affix is-suffix"><input type="number" name="pa-lateFee" min="0" max="100" step="0.01" inputmode="decimal" placeholder="0"><i>%</i></div></label>
+                    <label class="field"><span>Interest / month</span><div class="input-affix is-suffix"><input type="number" name="pa-monthlyInterest" min="0" max="100" step="0.01" inputmode="decimal" placeholder="0"><i>%</i></div></label>
+                    <label class="field"><span>Grace period</span><div class="input-affix is-suffix"><input type="number" name="pa-graceDays" min="0" max="365" step="1" inputmode="numeric" placeholder="0"><i>days</i></div></label>
+                </div>
+                <div class="rules-row" data-rule="int">
+                    <span class="rules-market">International</span>
+                    <label class="field"><span>Late fee</span><div class="input-affix is-suffix"><input type="number" name="int-lateFee" min="0" max="100" step="0.01" inputmode="decimal" placeholder="0"><i>%</i></div></label>
+                    <label class="field"><span>Interest / month</span><div class="input-affix is-suffix"><input type="number" name="int-monthlyInterest" min="0" max="100" step="0.01" inputmode="decimal" placeholder="0"><i>%</i></div></label>
+                    <label class="field"><span>Grace period</span><div class="input-affix is-suffix"><input type="number" name="int-graceDays" min="0" max="365" step="1" inputmode="numeric" placeholder="0"><i>days</i></div></label>
+                </div>
+                <div class="rules-row is-locked">
+                    <span class="rules-market">Brazil</span>
+                    <p class="rules-locked-copy">10% late fee + 1% interest a month, on the balance corrected by the higher of IGP-M and IPCA. Fixed by contract, not editable here.</p>
+                </div>
+            </fieldset>
+
+            <p class="form-error" id="rules-form-error" role="alert" hidden></p>
+
+            <footer class="modal-footer">
+                <p class="modal-footnote" id="rules-form-meta"></p>
+                <div class="modal-actions">
+                    <button type="button" class="button-secondary" data-close-modal>Cancel</button>
+                    <button type="submit" class="button-primary" id="rules-form-submit">Save rates</button>
                 </div>
             </footer>
         </form>
