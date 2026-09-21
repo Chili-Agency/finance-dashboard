@@ -1849,7 +1849,10 @@ Object.entries(MONTHLY_TABLES).forEach(([name, config]) => {
 });
 
 // ---- Late invoices ----
-// Encargos por atraso. Ajuste conforme os contratos de cada entidade.
+// Encargos por atraso.
+// Brasil: regra fixa do contrato, definida abaixo.
+// México, Panamá e International: vêm da tabela late_charge_rules (botão "Edit rates" na aba).
+// Mercado sem taxa salva não tem encargo aplicado, e a aba avisa.
 //   lateFee          multa única sobre o saldo em aberto (0.02 = 2%)
 //   monthlyInterest  juros simples ao mês, pro rata por dia, contados desde o vencimento (0.01 = 1% a.m.)
 //   graceDays        dias de carência: até aqui, nenhum encargo é cobrado
@@ -1857,10 +1860,14 @@ Object.entries(MONTHLY_TABLES).forEach(([name, config]) => {
 //   correction       índices de correção monetária; com mais de um, vale o maior acumulado no atraso
 // Ordem: o saldo é corrigido primeiro; multa e juros incidem sobre o saldo corrigido.
 const LATE_CHARGE_RULES = {
-    default: { lateFee: 0.02, monthlyInterest: 0.01, graceDays: 0, correction: [] },
+    default: { lateFee: 0, monthlyInterest: 0, graceDays: 0, correction: [] },
     br: { lateFee: 0.10, monthlyInterest: 0.01, graceDays: 0, correction: ['igpm', 'ipca'] },
-    // mx: { lateFee: 0, monthlyInterest: 0.015, graceDays: 5, correction: [] },
 };
+const EDITABLE_RULE_SCOPES = ['mx', 'pa', 'int'];
+const LATE_RULES_ENDPOINT = 'late-rules.php';
+state.lateRules = {};
+state.lateRulesStatus = 'loading';
+state.lateRulesError = '';
 const INDEX_LABELS = { igpm: 'IGP-M', ipca: 'IPCA' };
 state.brIndices = { status: 'loading', series: {}, latest: {}, error: null, stale: [] };
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -1875,10 +1882,14 @@ const shortDate = (date) => (date ? date.toLocaleDateString('en-US', { month: 's
 const ratePercent = (value) => `${Number((value * 100).toFixed(2))}%`;
 
 function lateRule(companyKey) {
-    return { ...LATE_CHARGE_RULES.default, ...(LATE_CHARGE_RULES[companyKey] || {}) };
+    if (LATE_CHARGE_RULES[companyKey]) return { ...LATE_CHARGE_RULES.default, ...LATE_CHARGE_RULES[companyKey], source: 'contract' };
+    const saved = state.lateRules[companyKey];
+    if (saved) return { ...LATE_CHARGE_RULES.default, ...saved, correction: [], source: 'saved' };
+    return { ...LATE_CHARGE_RULES.default, source: 'unset' };
 }
 
 function lateRuleLabel(rule) {
+    if (rule.source === 'unset') return 'Rate not set';
     const parts = [];
     if (rule.lateFee) parts.push(`${ratePercent(rule.lateFee)} fee`);
     if (rule.monthlyInterest) parts.push(`${ratePercent(rule.monthlyInterest)}/month`);
@@ -2052,6 +2063,7 @@ function renderLate() {
     const markets = state.scope === 'all' ? Object.keys(companyLabels) : [state.scope];
     const labels = [...new Set(markets.map((key) => lateRuleLabel(lateRule(key))))];
     setText('#late-rate-label', labels.length === 1 ? labels[0] : 'Per-market rates');
+    renderLateRulesPanel(items);
 
     const averageDays = principal > 0 ? Math.round(items.reduce((total, item) => total + item.days * item.balance, 0) / principal) : 0;
     setText('#late-average-days', items.length ? plural(averageDays, 'day') : DASH);
@@ -2076,7 +2088,9 @@ function renderLate() {
         const severity = item.days > 90 ? 'is-critical' : item.days > 30 ? 'is-warning' : '';
         const original = originalBalance(invoice);
         const rule = lateRule(invoice.companyKey);
-        const graceNote = item.days <= rule.graceDays ? `<div class="client-sub">in grace period</div>` : '';
+        const graceNote = rule.source === 'unset'
+            ? '<div class="client-sub">rate not set</div>'
+            : item.days <= rule.graceDays ? '<div class="client-sub">in grace period</div>' : '';
         return `<tr>
             <td>${escapeHtml(invoice.Contact?.Name || 'Unknown client')}<div class="client-sub">${escapeHtml(invoice.InvoiceNumber || invoice.InvoiceID || 'Unnumbered')}${categoryTag(invoice) ? ` · <span class="category-tag">${escapeHtml(categoryTag(invoice))}</span>` : ''}</div></td>
             <td>${escapeHtml(companyLabels[invoice.companyKey] || invoice.company || DASH)}</td>
@@ -2869,8 +2883,162 @@ if (unitForm) {
     });
 }
 
+// ---- Taxas de encargos editáveis (México, Panamá, International) ----
+const rulesForm = $('#rules-form');
+const rulesModal = $('#rules-modal');
+
+async function lateRulesRequest(options = {}) {
+    const response = redirectIfSignedOut(await fetch(LATE_RULES_ENDPOINT, { cache: 'no-store', ...options }));
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `The server answered HTTP ${response.status}.`);
+    return body;
+}
+
+function storeLateRules(rules) {
+    state.lateRules = {};
+    (rules || []).forEach((rule) => {
+        if (EDITABLE_RULE_SCOPES.includes(rule.scope)) state.lateRules[rule.scope] = rule;
+    });
+}
+
+async function loadLateRules() {
+    state.lateRulesStatus = 'loading';
+    try {
+        const { rules } = await lateRulesRequest();
+        storeLateRules(rules);
+        state.lateRulesStatus = 'ready';
+    } catch (error) {
+        state.lateRulesStatus = 'error';
+        state.lateRulesError = error.message;
+    }
+    renderLate();
+}
+
+function renderLateRulesPanel(items) {
+    const summary = $('#late-rules-summary');
+    const status = $('#late-rules-status');
+    if (!summary || !status) return;
+
+    summary.innerHTML = Object.entries(companyLabels).map(([key, label]) => {
+        const rule = lateRule(key);
+        const dimmed = state.scope !== 'all' && state.scope !== key;
+        return `<div class="rules-chip${rule.source === 'unset' ? ' is-unset' : ''}${dimmed ? ' is-dimmed' : ''}">
+            <span>${escapeHtml(label)}</span><strong>${escapeHtml(lateRuleLabel(rule))}</strong>
+        </div>`;
+    }).join('');
+
+    if (state.lateRulesStatus === 'loading') { status.textContent = 'Loading saved rates…'; status.dataset.tone = 'muted'; return; }
+    if (state.lateRulesStatus === 'error') {
+        status.textContent = `Could not load the saved rates, so only Brazil has charges applied: ${state.lateRulesError}`;
+        status.dataset.tone = 'error';
+        return;
+    }
+    const unset = EDITABLE_RULE_SCOPES.filter((key) => !state.lateRules[key]);
+    const affected = unset.filter((key) => items.some((item) => item.invoice.companyKey === key));
+    if (affected.length) {
+        status.textContent = `No rate saved for ${affected.map((key) => companyLabels[key]).join(', ')}: their overdue invoices show no charges until you set one.`;
+        status.dataset.tone = 'sample';
+        return;
+    }
+    const latest = Object.values(state.lateRules).sort((a, b) => String(b.enteredAt).localeCompare(String(a.enteredAt)))[0];
+    status.textContent = latest
+        ? `Last changed ${new Date(latest.enteredAt).toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}${latest.updatedBy ? ` by ${latest.updatedBy}` : ''}.`
+        : 'Brazil follows its contract rule. Set the rates for the other markets.';
+    status.dataset.tone = latest ? 'manual' : 'muted';
+}
+
+const percentField = (value) => (hasValue(value) ? String(Number((Number(value) * 100).toFixed(4))) : '');
+
+function showRulesError(message, field) {
+    const node = $('#rules-form-error');
+    rulesForm.querySelectorAll('[aria-invalid]').forEach((input) => input.removeAttribute('aria-invalid'));
+    node.hidden = !message;
+    node.textContent = message || '';
+    if (field) { field.setAttribute('aria-invalid', 'true'); field.focus(); }
+}
+
+function openRulesModal() {
+    rulesForm.reset();
+    showRulesError('');
+    EDITABLE_RULE_SCOPES.forEach((key) => {
+        const rule = state.lateRules[key];
+        rulesForm.elements[`${key}-lateFee`].value = rule ? percentField(rule.lateFee) : '';
+        rulesForm.elements[`${key}-monthlyInterest`].value = rule ? percentField(rule.monthlyInterest) : '';
+        rulesForm.elements[`${key}-graceDays`].value = rule ? String(rule.graceDays) : '';
+    });
+    const latest = Object.values(state.lateRules).sort((a, b) => String(b.enteredAt).localeCompare(String(a.enteredAt)))[0];
+    setText('#rules-form-meta', latest
+        ? `Last saved ${new Date(latest.enteredAt).toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}${latest.updatedBy ? ` by ${latest.updatedBy}` : ''}. A blank field counts as zero.`
+        : 'Nothing saved yet. A blank field counts as zero.');
+    rulesModal.showModal();
+    rulesForm.elements['mx-lateFee'].focus();
+}
+
+function closeRulesModal() { rulesModal.close(); $('#open-rules-modal').focus(); }
+
+function readRulesForm() {
+    const rules = [];
+    for (const key of EDITABLE_RULE_SCOPES) {
+        const market = companyLabels[key];
+        const read = (name, label, { max, whole = false }) => {
+            const input = rulesForm.elements[`${key}-${name}`];
+            if (input.value.trim() === '') {
+                if (input.validity.badInput) { showRulesError(`${market}: ${label} is not a valid number.`, input); return undefined; }
+                return 0;
+            }
+            const value = Number(input.value);
+            if (!Number.isFinite(value)) { showRulesError(`${market}: ${label} is not a valid number.`, input); return undefined; }
+            if (value < 0 || value > max) { showRulesError(`${market}: ${label} must be between 0 and ${max}${whole ? ' days' : '%'}.`, input); return undefined; }
+            if (whole && !Number.isInteger(value)) { showRulesError(`${market}: ${label} must be a whole number of days.`, input); return undefined; }
+            return value;
+        };
+        const lateFee = read('lateFee', 'late fee', { max: 100 });
+        if (lateFee === undefined) return null;
+        const monthlyInterest = read('monthlyInterest', 'monthly interest', { max: 100 });
+        if (monthlyInterest === undefined) return null;
+        const graceDays = read('graceDays', 'grace period', { max: 365, whole: true });
+        if (graceDays === undefined) return null;
+        rules.push({ scope: key, lateFee: lateFee / 100, monthlyInterest: monthlyInterest / 100, graceDays });
+    }
+    return rules;
+}
+
+if (rulesForm) {
+    $('#open-rules-modal').addEventListener('click', openRulesModal);
+    rulesModal.querySelectorAll('[data-close-modal]').forEach((button) => button.addEventListener('click', closeRulesModal));
+    rulesModal.addEventListener('click', (event) => { if (event.target === rulesModal) closeRulesModal(); });
+    rulesForm.addEventListener('input', () => { if (!$('#rules-form-error').hidden) showRulesError(''); });
+
+    rulesForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const rules = readRulesForm();
+        if (!rules) return;
+        const submit = $('#rules-form-submit');
+        const label = submit.textContent;
+        submit.disabled = true;
+        submit.textContent = 'Saving…';
+        try {
+            const body = await lateRulesRequest({
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rules }),
+            });
+            storeLateRules(body.rules);
+            state.lateRulesStatus = 'ready';
+            closeRulesModal();
+            renderLate();
+        } catch (error) {
+            showRulesError(error.message || 'Could not save the rates.');
+        } finally {
+            submit.disabled = false;
+            submit.textContent = label;
+        }
+    });
+}
+
 renderScorecard();
 loadMarginInputs();
 loadTargetInputs();
 loadBrIndices();
 loadUnitInputs();
+loadLateRules();

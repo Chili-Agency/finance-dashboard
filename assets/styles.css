@@ -303,3 +303,25 @@
 .manual-panel .manual-input-status{margin-top:12px;max-width:none}
 @media(max-width:1100px){.unit-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:700px){.unit-grid{grid-template-columns:1fr}}
+
+/* ---- Late charge rates ---- */
+.rules-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}
+.rules-chip{border:1px solid var(--line);padding:10px 12px;background:#fbfaf6}
+.rules-chip span{display:block;font:500 9px 'DM Mono',monospace;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.rules-chip strong{display:block;margin-top:5px;font-size:11px;font-weight:700}
+.rules-chip.is-unset{border-style:dashed}
+.rules-chip.is-unset strong{color:#a06f18}
+.rules-chip.is-dimmed{opacity:.45}
+#late-rules-status{margin-top:12px;max-width:none}
+.rules-row{clear:both;display:grid;grid-template-columns:96px repeat(3,1fr);gap:12px;align-items:end;padding:12px 0;border-bottom:1px solid var(--line)}
+.rules-row:last-child{border-bottom:0}
+.rules-market{font-size:12px;font-weight:700;padding-bottom:11px}
+.rules-row .input-affix i{min-width:42px}
+.rules-row.is-locked{align-items:center}
+.rules-locked-copy{grid-column:2 / -1;margin:0;font-size:11px;line-height:1.5;color:var(--muted)}
+.modal-footnote{margin:0;font-size:10px;color:var(--muted)}
+@media(max-width:700px){.rules-summary{grid-template-columns:repeat(2,1fr)}.rules-row{grid-template-columns:1fr}.rules-market{padding-bottom:0}.rules-locked-copy{grid-column:auto}}
+#rules-modal{width:min(720px,calc(100vw - 32px))}
+.rules-row > *{min-width:0}
+.rules-row .input-affix{min-width:0}
+.rules-row .input-affix input{min-width:0;width:100%}
