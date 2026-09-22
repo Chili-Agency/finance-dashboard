@@ -2,6 +2,7 @@
 declare(strict_types=1);
 require __DIR__ . '/auth.php';
 $currentUser = auth_require_page();
+$csrfToken = (string) ($_SESSION['csrf_token'] ?? '');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
 function asset(string $path): string
@@ -56,7 +57,7 @@ function asset(string $path): string
                         <small><?= htmlspecialchars($currentUser['email'], ENT_QUOTES, 'UTF-8') ?></small>
                     </div>
                     <form method="post" action="logout.php">
-                        <input type="hidden" name="csrf" value="<?= htmlspecialchars(auth_csrf_token(), ENT_QUOTES, 'UTF-8') ?>">
+                        <input type="hidden" name="csrf" value="<?= htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') ?>">
                         <button type="submit" class="logout-button">Sign out</button>
                     </form>
                 </div>
@@ -100,6 +101,10 @@ function asset(string $path): string
                         <p class="eyebrow">Plan vs actual</p>
                         <h2>Where the year stands</h2>
                         <p class="section-copy" id="summary-scope-note">Plan versus actual for the selected year, in one screen.</p>
+                        <div class="manual-input-bar">
+                            <button type="button" class="input-button" id="open-import-modal" aria-haspopup="dialog" aria-controls="import-modal"><span aria-hidden="true">↑</span> Import targets sheet</button>
+                            <p class="manual-input-status" id="import-status" data-tone="muted" aria-live="polite"></p>
+                        </div>
                     </div>
                     <div class="filter-stack">
                         <div class="scope-tabs" role="tablist" aria-label="Company scope">
@@ -829,6 +834,38 @@ function asset(string $path): string
                 <div class="modal-actions">
                     <button type="button" class="button-secondary" data-close-modal>Cancel</button>
                     <button type="submit" class="button-primary" id="targets-form-submit">Save Target MRR</button>
+                </div>
+            </footer>
+        </form>
+    </dialog>
+    <dialog class="modal" id="import-modal" aria-labelledby="import-modal-title">
+        <form class="modal-form" id="import-form" novalidate>
+            <header class="modal-header">
+                <div>
+                    <p class="eyebrow">Spreadsheet import</p>
+                    <h2 id="import-modal-title">Import the targets sheet</h2>
+                </div>
+                <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+            </header>
+            <p class="modal-copy">Reads Target MRR, COGS, Target COGS, current margin and target margin from the country tabs (SEOBR, PPCMX…) and from Consolidated, which feeds the Global view. Nothing is saved until you confirm.</p>
+
+            <input type="hidden" name="csrf" value="<?= htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') ?>">
+
+            <label class="import-drop" id="import-drop">
+                <input type="file" name="sheet" id="import-file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+                <strong id="import-drop-title">Choose the .xlsx file</strong>
+                <span id="import-drop-note">or drop it here · Google Sheets: File › Download › Microsoft Excel</span>
+            </label>
+
+            <div class="import-preview" id="import-preview" hidden aria-live="polite"></div>
+
+            <p class="form-error" id="import-form-error" role="alert" hidden></p>
+
+            <footer class="modal-footer">
+                <p class="modal-hint" id="import-form-hint">Saving replaces those months in Targets and Margin &amp; COGS. Bonus pool and anything the sheet leaves blank keep their saved values.</p>
+                <div class="modal-actions">
+                    <button type="button" class="button-secondary" data-close-modal>Cancel</button>
+                    <button type="submit" class="button-primary" id="import-form-submit" disabled>Save to dashboard</button>
                 </div>
             </footer>
         </form>
