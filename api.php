@@ -66,6 +66,35 @@ $markerPatterns = [
 
 $lineMarkers = ['upsell'];
 
+// Ordem = prioridade. "Others" agrupa serviços fora de SEO/PPC; cada linha recebe
+// também o serviço específico. SMM vem primeiro: "Social Media Marketing" é SMM, não
+// Marketing. Os padrões valem para o nome da conta no Xero e, se ele não disser nada,
+// para descrição, código do item e tracking da linha.
+$otherServiceRules = [
+    'smm' => [
+        '/\bSMM\b/i',
+        '/social[\s-]*media/i',
+        '/redes\s*sociai?s/i',
+        '/redes\s*sociales/i',
+    ],
+    'marketing' => [
+        '/\bmarketing\b/i',
+        '/\bmercadeo\b/i',
+        '/\bEDM\b/i',
+        '/e-?mail\s*marketing/i',
+    ],
+    'webdev' => [
+        '/\bweb[\s-]*dev/i',
+        '/\bweb\s*design/i',
+        '/\bwebsite\b/i',
+        '/\blanding\s*pages?\b/i',
+        '/desenvolvimento\s*(de\s*)?(web|sites?)/i',
+        '/desarrollo\s*(de\s*)?(web|sitios?)/i',
+        '/\bsitio\s*web\b/i',
+        '/\bweb\b/i',
+    ],
+];
+
 $categoryRules = [
     'seo' => [
         'accountName' => ['/\bSEO\b/i'],
@@ -86,7 +115,7 @@ $errors = [];
 $sourceCounts = [];
 $sourceTypeCounts = [];
 $diagnostics = [];
-$categoryCounts = ['seo' => 0, 'ppc' => 0, 'other' => 0];
+$categoryCounts = ['seo' => 0, 'ppc' => 0, 'others' => 0, 'other' => 0];
 $sourceErrors = [];
 $sourceWarnings = [];
 $sourceSeconds = [];
@@ -115,7 +144,7 @@ foreach ($requested as $key) {
 
     $before = count($invoices);
     $sourceTypeCounts[$key] = [];
-    $diagnostics[$key] = ['withLineItems' => 0, 'withReference' => 0, 'firstMonthMarked' => 0, 'upsellMarked' => 0, 'referralMarked' => 0, 'withAccountName' => 0, 'seo' => 0, 'ppc' => 0, 'unclassified' => 0];
+    $diagnostics[$key] = ['withLineItems' => 0, 'withReference' => 0, 'firstMonthMarked' => 0, 'upsellMarked' => 0, 'referralMarked' => 0, 'withAccountName' => 0, 'seo' => 0, 'ppc' => 0, 'others' => 0, 'smm' => 0, 'marketing' => 0, 'webdev' => 0, 'unclassified' => 0];
 
     foreach ($response['data'] as $invoice) {
         if (!is_array($invoice)) {
@@ -151,7 +180,7 @@ foreach ($requested as $key) {
             $diagnostics[$key]['withReference']++;
         }
 
-        $slim = slimInvoice($invoice, $markerPatterns, $categoryRules, $lineMarkers);
+        $slim = slimInvoice($invoice, $markerPatterns, $categoryRules, $lineMarkers, $otherServiceRules);
 
         $slim['companyKey'] = $key;
         $slim['company'] = $company['label'];
@@ -176,11 +205,14 @@ foreach ($requested as $key) {
         if (!empty($slim['hasAccountNames'])) {
             $diagnostics[$key]['withAccountName']++;
         }
-        foreach (['seo', 'ppc'] as $category) {
+        foreach (['seo', 'ppc', 'others'] as $category) {
             if (in_array($category, $slim['categories'], true)) {
                 $diagnostics[$key][$category]++;
                 $categoryCounts[$category]++;
             }
+        }
+        foreach ($slim['otherServices'] as $service) {
+            $diagnostics[$key][$service]++;
         }
         if ($slim['categories'] === []) {
             $diagnostics[$key]['unclassified']++;
@@ -214,11 +246,12 @@ echo json_encode([
     'fetchedAt' => gmdate('c'),
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
-function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules, array $lineMarkers): array
+function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules, array $lineMarkers, array $otherServiceRules): array
 {
     $reference = (string) ($invoice['Reference'] ?? '');
     $descriptions = [];
-    $categoryKeys = array_merge(array_keys($categoryRules), ['other']);
+    // 'others' = SMM, Marketing e Web dev; 'other' = linha que não se encaixou em nada.
+    $categoryKeys = array_merge(array_keys($categoryRules), ['others', 'other']);
     $lineWeights = [];
     $hasAccountNames = false;
     $itemCodes = [];
@@ -252,8 +285,10 @@ function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules
             $lineFlags[$marker] = matchesAny(implode(' | ', $lineText), $markerPatterns[$marker] ?? [])
                 || matchesAny($reference, $markerPatterns[$marker] ?? []);
         }
+        $class = classifyLine($line, $categoryRules, $otherServiceRules);
         $lineWeights[] = [
-            'category' => classifyLine($line, $categoryRules) ?? 'other',
+            'category' => $class['category'] ?? 'other',
+            'service' => $class['service'] ?? null,
             'amount' => (float) ($line['LineAmount'] ?? 0),
             'flags' => $lineFlags,
         ];
@@ -278,11 +313,26 @@ function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules
             : categoryShares($lineWeights, $categoryKeys, static fn (array $line): bool => !empty($line['flags'][$marker]));
     }
     $categories = [];
-    foreach (array_keys($categoryRules) as $category) {
+    foreach (array_merge(array_keys($categoryRules), ['others']) as $category) {
         if (($categoryShares[$category] ?? 0) > 0) {
             $categories[] = $category;
         }
     }
+
+    // Serviço específico dentro de Others, com a fatia de cada um no total da fatura.
+    $serviceKeys = array_keys($otherServiceRules);
+    $serviceWeights = array_map(
+        static fn (array $line): array => ['category' => $line['service'] ?? '_rest'] + $line,
+        $lineWeights
+    );
+    $otherServiceShares = array_intersect_key(
+        categoryShares($serviceWeights, array_merge($serviceKeys, ['_rest'])),
+        array_flip($serviceKeys)
+    );
+    if ($lineWeights === []) {
+        $otherServiceShares = array_fill_keys($serviceKeys, 0.0);
+    }
+    $otherServices = array_keys(array_filter($otherServiceShares, static fn (float $share): bool => $share > 0));
 
     return [
         'InvoiceID' => $invoice['InvoiceID'] ?? null,
@@ -313,6 +363,8 @@ function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules
         'categories' => $categories,
         'categoryShares' => $categoryShares,
         'upsellShares' => $markerShares['upsell'] ?? null,
+        'otherServices' => $otherServices,
+        'otherServiceShares' => $otherServiceShares,
         'hasAccountNames' => $hasAccountNames,
     ];
 }
@@ -330,16 +382,18 @@ function matchesAny(string $text, array $patterns): bool
     return false;
 }
 
-function classifyLine(array $line, array $categoryRules): ?string
+/** @return array{category:string, service:?string}|null */
+function classifyLine(array $line, array $categoryRules, array $otherServiceRules): ?array
 {
     $name = trim((string) ($line['AccountName'] ?? ''));
     $code = trim((string) ($line['AccountCode'] ?? ''));
+    $found = static fn (string $category, ?string $service = null): array => ['category' => $category, 'service' => $service];
 
     if ($name !== '') {
         foreach ($categoryRules as $category => $rule) {
             foreach ($rule['accountName'] ?? [] as $pattern) {
                 if (preg_match($pattern, $name) === 1) {
-                    return $category;
+                    return $found($category);
                 }
             }
         }
@@ -348,22 +402,51 @@ function classifyLine(array $line, array $categoryRules): ?string
     if ($code !== '') {
         foreach ($categoryRules as $category => $rule) {
             if (in_array($code, $rule['accountCodes'] ?? [], true)) {
-                return $category;
+                return $found($category);
             }
         }
     }
 
-    if ($name === '') {
-        $text = (string) ($line['Description'] ?? '');
-        foreach ($categoryRules as $category => $rule) {
-            foreach ($rule['text'] ?? [] as $pattern) {
-                if ($text !== '' && preg_match($pattern, $text) === 1) {
-                    return $category;
+    $text = (string) ($line['Description'] ?? '');
+    $textMatchesCore = false;
+    foreach ($categoryRules as $category => $rule) {
+        foreach ($rule['text'] ?? [] as $pattern) {
+            if ($text !== '' && preg_match($pattern, $text) === 1) {
+                if ($name === '') {
+                    return $found($category);
                 }
+                $textMatchesCore = true;
             }
         }
     }
 
+    // Others: primeiro pelo nome da conta; depois pelo texto da linha, mas nunca quando
+    // o texto fala de SEO ou PPC (esse caso continua como não classificado, como antes).
+    if ($name !== '' && ($service = matchService($name, $otherServiceRules)) !== null) {
+        return $found('others', $service);
+    }
+    if (!$textMatchesCore) {
+        $parts = [$text, (string) ($line['ItemCode'] ?? '')];
+        foreach ((array) ($line['Tracking'] ?? []) as $tracking) {
+            if (is_array($tracking) && !empty($tracking['Option'])) {
+                $parts[] = (string) $tracking['Option'];
+            }
+        }
+        if (($service = matchService(implode(' | ', $parts), $otherServiceRules)) !== null) {
+            return $found('others', $service);
+        }
+    }
+
+    return null;
+}
+
+function matchService(string $text, array $otherServiceRules): ?string
+{
+    foreach ($otherServiceRules as $service => $patterns) {
+        if (matchesAny($text, $patterns)) {
+            return $service;
+        }
+    }
     return null;
 }
 

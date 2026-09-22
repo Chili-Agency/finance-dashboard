@@ -8,7 +8,7 @@ header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
 const SCOPES = ['all', 'br', 'mx', 'pa', 'int'];
-const CATEGORIES = ['all', 'seo', 'ppc'];
+const CATEGORIES = ['all', 'seo', 'ppc', 'others'];
 
 const FIELDS = [
     'salesMarketingCost' => ['sales_marketing_cost', 'money', 0, null],

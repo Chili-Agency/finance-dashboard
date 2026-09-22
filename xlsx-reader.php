@@ -1,6 +1,5 @@
 <?php
 declare(strict_types=1);
-
 const XLSX_MAX_PART_BYTES = 40 * 1024 * 1024; // proteção contra zip bomb
 
 final class XlsxReader
@@ -13,7 +12,6 @@ final class XlsxReader
 
     /** @var array<string, int> aba => células com fórmula mas sem valor calculado salvo */
     private array $uncached = [];
-
     public static function missingExtensions(): array
     {
         $missing = [];

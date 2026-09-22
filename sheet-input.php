@@ -44,6 +44,8 @@ try {
             }
             $file = uploadedFile();
             $parsed = parseWorkbook($file['path']);
+            $pdo = connect();
+            $parsed = withoutUnsupportedCategories($parsed, unsupportedCategories($pdo, ['others']));
             $summary = summarize($parsed, $file);
 
             if ($mode === 'preview') {
@@ -53,7 +55,6 @@ try {
                 throw new InvalidArgumentException('Nothing to import: no figures were found in the target tabs.');
             }
 
-            $pdo = connect();
             $saved = save($pdo, $parsed['entries']);
             respond(200, $summary + ['saved' => $saved]);
 
@@ -129,7 +130,7 @@ function tabTarget(string $sheet): array
         return ['reason' => 'Example tab'];
     }
     if ($key === 'OTHERS') {
-        return ['reason' => 'No SEO or PPC line in the dashboard; it still counts in Consolidated'];
+        return ['scope' => 'all', 'category' => 'others'];
     }
     return ['reason' => 'Not a target tab'];
 }
@@ -269,9 +270,10 @@ function parseWorkbook(string $path): array
             }
         }
     }
+    $isConsolidated = static fn (array $tab): bool => $tab['scope'] === 'all' && $tab['category'] === 'all';
     $marketMonths = [];
     foreach ($tabs as $index => $tab) {
-        if ($tab['scope'] !== 'all') {
+        if (!$isConsolidated($tab)) {
             $marketMonths += $cogsMonths[$index];
         }
     }
@@ -280,7 +282,7 @@ function parseWorkbook(string $path): array
     $skipped = [];
     $leftOut = 0;
     foreach ($tabs as $index => $tab) {
-        $actualMonths = $tab['scope'] === 'all' ? $marketMonths : $cogsMonths[$index];
+        $actualMonths = $isConsolidated($tab) ? $marketMonths : $cogsMonths[$index];
         foreach ($tab['months'] as $column => $month) {
             $entry = ['month' => $month, 'scope' => $tab['scope'], 'category' => $tab['category']];
             $filled = false;
@@ -327,6 +329,71 @@ function parseWorkbook(string $path): array
     }
 
     return ['tabs' => $tabs, 'ignored' => $ignored, 'entries' => $entries, 'skipped' => $skipped, 'leftOut' => $leftOut];
+}
+
+/**
+ * Categorias que a coluna `category` de mrr_targets ou margin_inputs não consegue guardar
+ * (ENUM sem o valor, ou VARCHAR curto demais). Se a consulta falhar, assume que aceita.
+ *
+ * @return array<string, list<string>> categoria => tabelas que a recusam
+ */
+function unsupportedCategories(PDO $pdo, array $categories): array
+{
+    try {
+        $columns = $pdo->query(
+            "SELECT TABLE_NAME AS table_name, DATA_TYPE AS data_type, COLUMN_TYPE AS column_type,
+                    CHARACTER_MAXIMUM_LENGTH AS max_length
+               FROM information_schema.COLUMNS
+              WHERE TABLE_SCHEMA = DATABASE()
+                AND TABLE_NAME IN ('mrr_targets', 'margin_inputs')
+                AND COLUMN_NAME = 'category'"
+        )->fetchAll();
+    } catch (Throwable $error) {
+        error_log('[sheet-import] category column check: ' . $error->getMessage());
+        return [];
+    }
+    $blocked = [];
+    foreach ($categories as $category) {
+        foreach ($columns as $column) {
+            $type = strtolower((string) $column['data_type']);
+            $refuses = match (true) {
+                $type === 'enum' => stripos((string) $column['column_type'], "'{$category}'") === false,
+                in_array($type, ['char', 'varchar'], true) => (int) $column['max_length'] < strlen($category),
+                default => false,
+            };
+            if ($refuses) {
+                $blocked[$category][] = (string) $column['table_name'];
+            }
+        }
+    }
+    return $blocked;
+}
+
+function withoutUnsupportedCategories(array $parsed, array $blocked): array
+{
+    if ($blocked === []) {
+        return $parsed;
+    }
+    foreach ($parsed['tabs'] as $index => $tab) {
+        if (isset($blocked[$tab['category']])) {
+            $parsed['ignored'][] = [
+                'sheet' => $tab['sheet'],
+                'reason' => sprintf(
+                    "The category column in %s doesn't accept '%s' yet, so this tab was left out",
+                    implode(' and ', $blocked[$tab['category']]),
+                    $tab['category']
+                ),
+                'blocked' => true,
+            ];
+            unset($parsed['tabs'][$index]);
+        }
+    }
+    $parsed['tabs'] = array_values($parsed['tabs']);
+    $parsed['entries'] = array_values(array_filter(
+        $parsed['entries'],
+        static fn (array $entry): bool => !isset($blocked[$entry['category']])
+    ));
+    return $parsed;
 }
 
 function summarize(array $parsed, array $file): array
