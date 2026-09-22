@@ -1,6 +1,8 @@
 const state = { invoices: [], sourceTypeCounts: {}, categoryCounts: {}, scope: 'all', category: 'all', period: 'current', customStart: '', customEnd: '', statusChart: null, mrrChart: null };
 const companyLabels = { br: 'Brazil', mx: 'Mexico', pa: 'Panama', int: 'International' };
-const categoryLabels = { seo: 'SEO', ppc: 'PPC' };
+const categoryLabels = { seo: 'SEO', ppc: 'PPC', others: 'Others' };
+// Serviços agrupados em Others (api.php › $otherServiceRules), na ordem de prioridade.
+const otherServiceLabels = { smm: 'SMM', marketing: 'Marketing', webdev: 'Web dev' };
 const colors = { paid: '#57745d', late: '#d49b35', open: '#55778a', authorised: '#e84d2c', voided: '#a5a6a0' };
 
 function redirectIfSignedOut(response) {
@@ -44,8 +46,29 @@ function categoryShare(invoice, category = state.category) {
     return Number.isFinite(value) ? value : 0;
 }
 function inCategory(invoice) { return state.category === 'all' || categoryShare(invoice) > 0; }
+function otherServicesOf(invoice) {
+    return (invoice.otherServices || []).filter((key) => otherServiceLabels[key]);
+}
+// Célula "Service" das tabelas quando o filtro é Others: o serviço específico e, se a
+// fatura mistura mais de um, a fatia de cada um dentro da parte Others.
+function otherServiceCell(invoice) {
+    const services = otherServicesOf(invoice);
+    if (!services.length) return `<td class="service-col">${DASH}</td>`;
+    const shares = invoice.otherServiceShares || {};
+    const total = services.reduce((sum, key) => sum + (Number(shares[key]) || 0), 0);
+    const pills = services.map((key) => {
+        const part = total > 0 && services.length > 1 ? ` <small>${Math.round((Number(shares[key]) || 0) / total * 100)}%</small>` : '';
+        return `<span class="service-pill is-${key}">${escapeHtml(otherServiceLabels[key])}${part}</span>`;
+    }).join('');
+    return `<td class="service-col">${pills}</td>`;
+}
 function categoryTag(invoice) {
-    const list = (invoice.categories || []).map((key) => categoryLabels[key]).filter(Boolean);
+    // Others aparece pelo nome do serviço (ex.: "SEO + SMM"), não pelo nome do grupo.
+    const list = (invoice.categories || []).flatMap((key) => {
+        if (key !== 'others') return [categoryLabels[key]];
+        const services = otherServicesOf(invoice).map((service) => otherServiceLabels[service]);
+        return services.length ? services : [categoryLabels.others];
+    }).filter(Boolean);
     return list.length ? list.join(' + ') : '';
 }
 function amount(invoice) { return fullAmount(invoice) * categoryShare(invoice); }
@@ -307,7 +330,8 @@ function renderMarkets(invoices) {
 
 function renderTable(invoices) {
     $('#table-summary').textContent = `${number(invoices.length)} record${invoices.length === 1 ? '' : 's'}`;
-    $('#invoice-table').innerHTML = invoices.map((invoice) => { const bucket = invoiceBucket(invoice); const date = invoiceDate(invoice); const due = dueDate(invoice); const statusLabel = bucket === 'late' ? 'Late' : bucket[0].toUpperCase() + bucket.slice(1); return `<tr><td>${escapeHtml(invoice.Contact?.Name || 'Unknown client')}<div class="client-sub">${escapeHtml(invoice.InvoiceNumber || invoice.InvoiceID || 'Unnumbered')}${categoryTag(invoice) ? ` · <span class="category-tag">${escapeHtml(categoryTag(invoice))}</span>` : ''}</div></td><td>${companyLabels[invoice.companyKey] || invoice.company || '—'}</td><td>${date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td><td>${due ? due.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td><td><span class="status-pill ${bucket}">${statusLabel}</span></td><td class="align-right">${money(amount(invoice))}</td></tr>`; }).join('');
+    $('#invoice-table').closest('table').classList.toggle('shows-service', state.category === 'others');
+    $('#invoice-table').innerHTML = invoices.map((invoice) => { const bucket = invoiceBucket(invoice); const date = invoiceDate(invoice); const due = dueDate(invoice); const statusLabel = bucket === 'late' ? 'Late' : bucket[0].toUpperCase() + bucket.slice(1); return `<tr><td>${escapeHtml(invoice.Contact?.Name || 'Unknown client')}<div class="client-sub">${escapeHtml(invoice.InvoiceNumber || invoice.InvoiceID || 'Unnumbered')}${categoryTag(invoice) ? ` · <span class="category-tag">${escapeHtml(categoryTag(invoice))}</span>` : ''}</div></td>${otherServiceCell(invoice)}<td>${companyLabels[invoice.companyKey] || invoice.company || '—'}</td><td>${date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td><td>${due ? due.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}</td><td><span class="status-pill ${bucket}">${statusLabel}</span></td><td class="align-right">${money(amount(invoice))}</td></tr>`; }).join('');
     $('#table-empty').classList.toggle('is-hidden', invoices.length > 0);
 }
 
@@ -338,8 +362,11 @@ function renderInvoices() {
     const noticeFree = $('#error-notice').classList.contains('is-hidden');
     if (state.category !== 'all' && invoices.length === 0 && noticeFree && state.invoices.length) {
         const label = categoryLabels[state.category];
+        const noneYet = state.category === 'others'
+            ? 'No invoice line matches SMM, Marketing or Web dev yet. Check the Xero account names, or add their wording to $otherServiceRules in api.php.'
+            : `No invoice line is linked to a ${label} account yet. Check that the n8n workflow sends AccountName, or add the ${label} account codes to $categoryRules in api.php.`;
         showDynamicNotice(Number(state.categoryCounts[state.category] || 0) === 0
-            ? `No invoice line is linked to a ${label} account yet. Check that the n8n workflow sends AccountName, or add the ${label} account codes to $categoryRules in api.php.`
+            ? noneYet
             : `No ${label} client invoices match this market and reporting period.`);
         return;
     }
@@ -500,7 +527,7 @@ function contactKey(invoice) { return invoice.Contact?.ContactID || invoice.Cont
 function isBillable(invoice) { return isRevenue(invoice) && !EXCLUDED_STATUSES.includes(normalStatus(invoice)); }
 function inScopeBillable() { return state.invoices.filter((invoice) => isBillable(invoice) && (state.scope === 'all' || invoice.companyKey === state.scope)); }
 function scopedInvoices() { return inScopeBillable().filter(inCategory); }
-const SERVICE_LINES = ['seo', 'ppc', 'other'];
+const SERVICE_LINES = ['seo', 'ppc', 'others', 'other'];
 function linesInView() { return state.category === 'all' ? SERVICE_LINES : [state.category]; }
 function lineAmount(invoice, line) {
     const shares = invoice.categoryShares;
@@ -2105,6 +2132,7 @@ function renderLate() {
     })));
 
     setText('#late-table-summary', `${number(items.length)} record${items.length === 1 ? '' : 's'}`);
+    $('#late-table').closest('table').classList.toggle('shows-service', state.category === 'others');
     $('#late-table').innerHTML = items.map((item) => {
         const { invoice } = item;
         const severity = item.days > 90 ? 'is-critical' : item.days > 30 ? 'is-warning' : '';
@@ -2115,6 +2143,7 @@ function renderLate() {
             : item.days <= rule.graceDays ? '<div class="client-sub">in grace period</div>' : '';
         return `<tr>
             <td>${escapeHtml(invoice.Contact?.Name || 'Unknown client')}<div class="client-sub">${escapeHtml(invoice.InvoiceNumber || invoice.InvoiceID || 'Unnumbered')}${categoryTag(invoice) ? ` · <span class="category-tag">${escapeHtml(categoryTag(invoice))}</span>` : ''}</div></td>
+            ${otherServiceCell(invoice)}
             <td>${escapeHtml(companyLabels[invoice.companyKey] || invoice.company || DASH)}</td>
             <td>${shortDate(invoiceDate(invoice))}</td>
             <td>${shortDate(item.due)}</td>
@@ -3248,6 +3277,9 @@ function renderImportPreview(preview) {
         const items = preview.skipped.map((item) => `<li><strong>${escapeHtml(item.sheet)}</strong>, ${escapeHtml(importMonth(item.month))}: ${escapeHtml(item.field)} ${escapeHtml(importValue(item))} <span>${escapeHtml(item.reason)}</span></li>`).join('');
         notes.push(`<details class="import-details is-warning"><summary>${plural(preview.skipped.length, 'value')} won’t be imported</summary><ul>${items}</ul></details>`);
     }
+    preview.ignored.filter((item) => item.blocked).forEach((item) => {
+        notes.push(`<p class="import-note is-warning">${escapeHtml(item.sheet)} won’t be imported: ${escapeHtml(item.reason)}. Widen that column to accept it, then import again.</p>`);
+    });
     if (preview.ignored.length) {
         const items = preview.ignored.map((item) => `<li><strong>${escapeHtml(item.sheet)}</strong> <span>${escapeHtml(item.reason)}</span></li>`).join('');
         notes.push(`<details class="import-details"><summary>${plural(preview.ignored.length, 'tab')} not read</summary><ul>${items}</ul></details>`);

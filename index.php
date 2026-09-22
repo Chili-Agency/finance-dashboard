@@ -120,6 +120,7 @@ function asset(string $path): string
                                 <button class="category-tab is-active" data-category="all" role="tab">All</button>
                                 <button class="category-tab" data-category="seo" role="tab">SEO</button>
                                 <button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                                <button class="category-tab" data-category="others" role="tab" title="SMM, Marketing and Web dev">Others</button>
                             </div>
                         </div>
                     </div>
@@ -172,6 +173,7 @@ function asset(string $path): string
                                 <button class="category-tab is-active" data-category="all" role="tab">All</button>
                                 <button class="category-tab" data-category="seo" role="tab">SEO</button>
                                 <button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                                <button class="category-tab" data-category="others" role="tab" title="SMM, Marketing and Web dev">Others</button>
                             </div>
                         </div>
                     </div>
@@ -189,7 +191,7 @@ function asset(string $path): string
                     <article class="panel market-panel"><div class="panel-header"><div><p class="eyebrow">Portfolio</p><h3>By market</h3></div><span class="panel-meta">USD view</span></div><div class="market-list" id="market-list"></div><div class="rate-note">Rates pulled live from <strong>Open Exchange Rates</strong> at fetch time.</div></article>
                 </div>
 
-                <article class="panel table-panel"><div class="panel-header"><div><p class="eyebrow">Ledger</p><h3>Client invoices</h3></div><span class="panel-meta" id="table-summary">0 records</span></div><div class="table-scroll"><table><thead><tr><th>Client / invoice</th><th>Market</th><th>Issued</th><th>Due</th><th>Status</th><th class="align-right">Amount (USD)</th></tr></thead><tbody id="invoice-table"></tbody></table><div class="table-empty is-hidden" id="table-empty">No client invoices match this period.</div></div></article>
+                <article class="panel table-panel"><div class="panel-header"><div><p class="eyebrow">Ledger</p><h3>Client invoices</h3></div><span class="panel-meta" id="table-summary">0 records</span></div><div class="table-scroll"><table><thead><tr><th>Client / invoice</th><th class="service-col">Service</th><th>Market</th><th>Issued</th><th>Due</th><th>Status</th><th class="align-right">Amount (USD)</th></tr></thead><tbody id="invoice-table"></tbody></table><div class="table-empty is-hidden" id="table-empty">No client invoices match this period.</div></div></article>
             </section>
 
             <section class="view" id="late-view" aria-labelledby="page-title">
@@ -214,6 +216,7 @@ function asset(string $path): string
                                 <button class="category-tab is-active" data-category="all" role="tab">All</button>
                                 <button class="category-tab" data-category="seo" role="tab">SEO</button>
                                 <button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                                <button class="category-tab" data-category="others" role="tab" title="SMM, Marketing and Web dev">Others</button>
                             </div>
                         </div>
                     </div>
@@ -240,7 +243,7 @@ function asset(string $path): string
                     <article class="panel market-panel"><div class="panel-header"><div><p class="eyebrow">Portfolio</p><h3>By market</h3></div><span class="panel-meta">USD view</span></div><div class="market-list" id="late-markets"></div></article>
                 </div>
 
-                <article class="panel table-panel"><div class="panel-header"><div><p class="eyebrow">Ledger</p><h3>Overdue invoices</h3></div><span class="panel-meta" id="late-table-summary">0 records</span></div><div class="table-scroll"><table class="late-table"><thead><tr><th>Client / invoice</th><th>Market</th><th>Issued</th><th>Due</th><th class="align-right">Days late</th><th class="align-right">Balance (USD)</th><th class="align-right">Correction</th><th class="align-right">Late fee</th><th class="align-right">Interest</th><th class="align-right">Total due</th></tr></thead><tbody id="late-table"></tbody></table><div class="table-empty is-hidden" id="late-table-empty">No overdue invoices.</div></div></article>
+                <article class="panel table-panel"><div class="panel-header"><div><p class="eyebrow">Ledger</p><h3>Overdue invoices</h3></div><span class="panel-meta" id="late-table-summary">0 records</span></div><div class="table-scroll"><table class="late-table"><thead><tr><th>Client / invoice</th><th class="service-col">Service</th><th>Market</th><th>Issued</th><th>Due</th><th class="align-right">Days late</th><th class="align-right">Balance (USD)</th><th class="align-right">Correction</th><th class="align-right">Late fee</th><th class="align-right">Interest</th><th class="align-right">Total due</th></tr></thead><tbody id="late-table"></tbody></table><div class="table-empty is-hidden" id="late-table-empty">No overdue invoices.</div></div></article>
             </section>
 
 
@@ -265,6 +268,7 @@ function asset(string $path): string
                                 <button class="category-tab is-active" data-category="all" role="tab">All</button>
                                 <button class="category-tab" data-category="seo" role="tab">SEO</button>
                                 <button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                                <button class="category-tab" data-category="others" role="tab" title="SMM, Marketing and Web dev">Others</button>
                             </div>
                         </div>
                     </div>
@@ -317,7 +321,8 @@ function asset(string $path): string
                 </article>
             </section>
 
-            <section class="view" id="mrr-view" aria-labelledby="page-title"><div class="section-intro mrr-intro"><div><p class="eyebrow">Revenue intelligence</p><h2>Monthly recurring revenue</h2><p class="section-copy">Issued client invoices, normalized to USD. Use the period selector to compare months.</p></div><div class="mrr-side"><div class="filter-stack"><div class="scope-tabs" role="tablist" aria-label="Company scope"><button class="scope-tab is-active" data-scope="all" role="tab">Global</button><button class="scope-tab" data-scope="br" role="tab">Brazil</button><button class="scope-tab" data-scope="mx" role="tab">Mexico</button><button class="scope-tab" data-scope="pa" role="tab">Panama</button><button class="scope-tab" data-scope="int" role="tab">International</button></div><div class="category-filter"><span>Service</span><div class="category-tabs" role="tablist" aria-label="Service line"><button class="category-tab is-active" data-category="all" role="tab">All</button><button class="category-tab" data-category="seo" role="tab">SEO</button><button class="category-tab" data-category="ppc" role="tab">PPC</button></div></div></div><div class="mrr-callout"><span>Selected period</span><strong id="mrr-total">$0</strong><small id="mrr-label">Current month</small></div></div></div><article class="panel mrr-panel"><div class="panel-header"><div><p class="eyebrow">Trend</p><h3>Revenue by month</h3></div><span class="panel-meta">Issued invoices</span></div><div class="mrr-chart-wrap"><canvas id="mrr-chart"></canvas><div class="chart-empty" id="mrr-empty">No revenue data available</div></div></article><div class="mrr-breakdown" id="mrr-breakdown"></div>
+            <section class="view" id="mrr-view" aria-labelledby="page-title"><div class="section-intro mrr-intro"><div><p class="eyebrow">Revenue intelligence</p><h2>Monthly recurring revenue</h2><p class="section-copy">Issued client invoices, normalized to USD. Use the period selector to compare months.</p></div><div class="mrr-side"><div class="filter-stack"><div class="scope-tabs" role="tablist" aria-label="Company scope"><button class="scope-tab is-active" data-scope="all" role="tab">Global</button><button class="scope-tab" data-scope="br" role="tab">Brazil</button><button class="scope-tab" data-scope="mx" role="tab">Mexico</button><button class="scope-tab" data-scope="pa" role="tab">Panama</button><button class="scope-tab" data-scope="int" role="tab">International</button></div><div class="category-filter"><span>Service</span><div class="category-tabs" role="tablist" aria-label="Service line"><button class="category-tab is-active" data-category="all" role="tab">All</button><button class="category-tab" data-category="seo" role="tab">SEO</button><button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                                <button class="category-tab" data-category="others" role="tab" title="SMM, Marketing and Web dev">Others</button></div></div></div><div class="mrr-callout"><span>Selected period</span><strong id="mrr-total">$0</strong><small id="mrr-label">Current month</small></div></div></div><article class="panel mrr-panel"><div class="panel-header"><div><p class="eyebrow">Trend</p><h3>Revenue by month</h3></div><span class="panel-meta">Issued invoices</span></div><div class="mrr-chart-wrap"><canvas id="mrr-chart"></canvas><div class="chart-empty" id="mrr-empty">No revenue data available</div></div></article><div class="mrr-breakdown" id="mrr-breakdown"></div>
                 <article class="panel table-panel entries-panel monthly-panel">
                     <div class="panel-header">
                         <div><p class="eyebrow">Month by month</p><h3>MRR log</h3></div>
@@ -360,6 +365,7 @@ function asset(string $path): string
                                 <button class="category-tab is-active" data-category="all" role="tab">All</button>
                                 <button class="category-tab" data-category="seo" role="tab">SEO</button>
                                 <button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                                <button class="category-tab" data-category="others" role="tab" title="SMM, Marketing and Web dev">Others</button>
                             </div>
                         </div>
                     </div>
@@ -451,6 +457,7 @@ function asset(string $path): string
                                 <button class="category-tab is-active" data-category="all" role="tab">All</button>
                                 <button class="category-tab" data-category="seo" role="tab">SEO</button>
                                 <button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                                <button class="category-tab" data-category="others" role="tab" title="SMM, Marketing and Web dev">Others</button>
                             </div>
                         </div>
                     </div>
@@ -547,6 +554,7 @@ function asset(string $path): string
                                 <button class="category-tab is-active" data-category="all" role="tab">All</button>
                                 <button class="category-tab" data-category="seo" role="tab">SEO</button>
                                 <button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                                <button class="category-tab" data-category="others" role="tab" title="SMM, Marketing and Web dev">Others</button>
                             </div>
                         </div>
                     </div>
@@ -646,6 +654,7 @@ function asset(string $path): string
                             <option value="all">All</option>
                             <option value="seo">SEO</option>
                             <option value="ppc">PPC</option>
+                            <option value="others">Others (SMM, Marketing, Web dev)</option>
                         </select>
                     </label>
                 </div>
@@ -755,6 +764,7 @@ function asset(string $path): string
                             <option value="all">All</option>
                             <option value="seo">SEO</option>
                             <option value="ppc">PPC</option>
+                            <option value="others">Others (SMM, Marketing, Web dev)</option>
                         </select>
                     </label>
                 </div>
@@ -815,6 +825,7 @@ function asset(string $path): string
                             <option value="all">All</option>
                             <option value="seo">SEO</option>
                             <option value="ppc">PPC</option>
+                            <option value="others">Others (SMM, Marketing, Web dev)</option>
                         </select>
                     </label>
                 </div>

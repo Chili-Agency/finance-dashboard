@@ -360,3 +360,11 @@
 @media(prefers-reduced-motion:reduce){.import-drop{transition:none}}
 @media(max-width:700px){#import-modal{width:100vw}.import-scroll{max-height:none}}
 .import-note.is-warning{color:#a06f18;font-weight:600}
+/* Categoria Others: coluna com o serviço específico nas tabelas de faturas */
+.service-col{display:none}
+table.shows-service .service-col{display:table-cell}
+.service-pill{display:inline-block;margin:0 4px 3px 0;padding:4px 7px;font:500 9px 'DM Mono',monospace;letter-spacing:.04em;background:#ece9e2;color:var(--ink);white-space:nowrap}
+.service-pill small{font:inherit;color:var(--muted);margin-left:2px}
+.service-pill.is-smm{background:#e1ecf0;color:#3f6475}
+.service-pill.is-marketing{background:#f7ebce;color:#8a5f14}
+.service-pill.is-webdev{background:#e8eee8;color:#4a6650}
