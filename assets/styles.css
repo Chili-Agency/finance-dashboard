@@ -389,3 +389,6 @@ table.shows-service .service-col{display:table-cell}
 .stat-scope[hidden]{display:none}
 .churn-scope-note{margin:14px 0 0;padding:10px 12px;background:#e1ecf0;border-left:3px solid var(--blue);color:#3d5a69;font-size:11px;line-height:1.55}
 .churn-scope-note[hidden]{display:none}
+/* Unit economics: nota abaixo dos campos de custo */
+.unit-field-hint{margin:10px 0 0}
+#unit-ads-status+#unit-input-status{margin-top:6px}
