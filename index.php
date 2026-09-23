@@ -427,7 +427,7 @@ function asset(string $path): string
                     </div>
                     <div class="table-scroll monthly-scroll">
                         <table class="entries-table">
-                            <thead><tr><th>Month</th><th>Market</th><th>Service</th><th class="align-right">Initial base</th><th class="align-right">Churned</th><th class="align-right">Upsells</th><th class="align-right">Retained</th><th class="align-right">Retention</th><th class="align-right">Target</th><th class="align-right">Clients lost</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
+                            <thead><tr><th>Month</th><th>Market</th><th>Service</th><th class="align-right" title="Final portfolio of the previous month">Initial base</th><th class="align-right">Churned</th><th class="align-right" title="Initial base minus churn">Retained</th><th class="align-right" title="(Initial base − churn) / initial base">Retention</th><th class="align-right">Target</th><th class="align-right">Upsells</th><th class="align-right" title="MRR of the month; becomes next month's initial base">Final portfolio</th><th class="align-right">Clients lost</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
                             <tbody id="retention-entries-table"></tbody>
                         </table>
                         <div class="table-empty is-hidden" id="retention-entries-empty"></div>

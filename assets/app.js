@@ -677,10 +677,11 @@ function measureWindow(ctx, windows, meta) {
         : meta.markedFirstMonth > 0 ? 'marker'
             : historyAvailable ? 'history' : 'unavailable';
 
-    let initial = 0;
+    // Portfólio inicial = portfólio final do período anterior, na mesma régua do Total MRR
+    // (é o MRR que aparece no mês anterior). Não depende da abertura por linha de serviço.
+    const initial = previous.reduce((sum, invoice) => sum + amount(invoice), 0);
     let churned = 0;
     let expansion = 0;
-    let retained = 0;
     const churnedClients = meta.collectClients ? [] : null;
     baseContacts.forEach((key) => {
         const before = previousLines.get(key) || new Map();
@@ -703,8 +704,6 @@ function measureWindow(ctx, windows, meta) {
             beforeTotal += previousValue;
             afterTotal += currentValue;
         });
-        initial += beforeTotal;
-        retained += afterTotal;
         if (beforeTotal > 0 && Math.abs(afterTotal) < 0.005) meta.lostClients += 1;
         if (churnedClients && clientChurn > 0.005) {
             churnedClients.push({ key, before: beforeTotal, after: afterTotal, churned: clientChurn, lines: droppedLines, lost: beforeTotal > 0 && Math.abs(afterTotal) < 0.005 });
@@ -727,12 +726,70 @@ function measureWindow(ctx, windows, meta) {
         initial,
         churned,
         expansion,
-        retained,
+        // Retenção = (portfólio inicial − churn) / portfólio inicial. Upsells ficam de fora.
+        retained: initial - churned,
         activeClients: currentByContact.size,
         newBusiness,
         reactivated,
         totalMrr: current.reduce((sum, invoice) => sum + amount(invoice), 0),
         invoiceCount: current.length,
+    };
+}
+
+// Retenção do período do seletor. O portfólio inicial é o portfólio final (MRR) do mês
+// anterior ao início do período. Num mês só, é a comparação com o mês anterior; em vários
+// meses, churn e upsells são a soma de cada mês contra o anterior (mesma regra da ponte do
+// Overview). Datas personalizadas que não começam no dia 1 entram pelo mês inteiro.
+function retentionOverWindow(ctx, window) {
+    const lastBilled = [...ctx.byMonth.keys()].sort().pop();
+    let months = monthKeysBetween(window.start, window.end);
+    if (lastBilled) months = months.filter((key) => key <= lastBilled);
+    if (!months.length) months = [monthKey(window.start)];
+
+    const monthWindow = (date) => ({ start: date, end: endOfMonth(date), label: monthLabel(date) });
+    const firstMonth = monthFromKey(months[0]);
+    const baseWindow = monthWindow(new Date(firstMonth.getFullYear(), firstMonth.getMonth() - 1, 1));
+    const endWindow = monthWindow(monthFromKey(months[months.length - 1]));
+
+    const totals = { hasBase: false, initial: null, churned: 0, expansion: 0, taggedUpsell: 0, crossSells: 0, upsellOutsideBase: 0 };
+    const byClient = new Map();
+    months.forEach((key, index) => {
+        const current = monthWindow(monthFromKey(key));
+        const previous = previousWindowOf(current);
+        const meta = { ...emptyScorecardMeta(), collectClients: true };
+        const m = measureWindow(ctx, { current, previous, beforePrevious: previousWindowOf(previous) }, meta);
+        if (index === 0) { totals.hasBase = m.hasBase; totals.initial = m.initial; }
+        totals.churned += m.churned;
+        totals.expansion += m.expansion;
+        totals.taggedUpsell += meta.taggedUpsell;
+        totals.crossSells += meta.crossSells;
+        totals.upsellOutsideBase += meta.upsellOutsideBase;
+        (meta.churnedClients || []).forEach((item) => {
+            const entry = byClient.get(item.key) || { key: item.key, churned: 0, lines: new Set() };
+            entry.churned += item.churned;
+            item.lines.forEach((line) => entry.lines.add(line));
+            byClient.set(item.key, entry);
+        });
+    });
+
+    // Colunas do modal: o que cada cliente faturou no mês-base e no último mês do período.
+    const baseTotals = totalsByContact(invoicesInWindow(ctx.invoices, ctx.byMonth, baseWindow));
+    const endTotals = totalsByContact(invoicesInWindow(ctx.invoices, ctx.byMonth, endWindow));
+    const list = [...byClient.values()].map((entry) => {
+        const before = baseTotals.get(entry.key) || 0;
+        const after = endTotals.get(entry.key) || 0;
+        return { key: entry.key, before, after, churned: entry.churned, lines: [...entry.lines], lost: Math.abs(after) < 0.005 };
+    });
+    const churnedClients = describeChurnedClients(list, ctx, { current: endWindow });
+
+    return {
+        ...totals,
+        retained: hasValue(totals.initial) ? totals.initial - totals.churned : null,
+        baseLabel: baseWindow.label,
+        endLabel: endWindow.label,
+        months: months.length,
+        churnedClients,
+        lostClients: churnedClients.filter((item) => item.lost).length,
     };
 }
 
@@ -750,7 +807,6 @@ function buildScorecard() {
         margin: { current: manual.margin, target: manual.marginTarget, bonusPool: manual.bonusPool },
     };
     const meta = emptyScorecardMeta();
-    meta.collectClients = true;
 
     const invoices = scopedInvoices();
     const windows = scorecardWindows(invoices);
@@ -786,11 +842,21 @@ function buildScorecard() {
     meta.previousLabel = windows.previous.label;
     meta.priorLabel = windows.beforePrevious.label;
 
-    const result = measureWindow(metricContext(invoices), windows, meta);
-    scorecard.retention.initialPortfolio = result.hasBase ? result.initial : null;
-    scorecard.retention.churned = result.hasBase ? result.churned : null;
-    scorecard.retention.upsells = result.hasBase ? result.expansion : null;
-    scorecard.retention.retained = result.hasBase ? result.retained : null;
+    const ctx = metricContext(invoices);
+    const result = measureWindow(ctx, windows, meta);
+    const retention = retentionOverWindow(ctx, windows.current);
+    meta.previousLabel = retention.baseLabel;
+    meta.retentionEndLabel = retention.endLabel;
+    meta.retentionMonths = retention.months;
+    meta.churnedClients = retention.churnedClients;
+    meta.lostClients = retention.lostClients;
+    meta.taggedUpsell = retention.taggedUpsell;
+    meta.crossSells = retention.crossSells;
+    meta.upsellOutsideBase = retention.upsellOutsideBase;
+    scorecard.retention.initialPortfolio = retention.hasBase ? retention.initial : null;
+    scorecard.retention.churned = retention.hasBase ? retention.churned : null;
+    scorecard.retention.upsells = retention.hasBase ? retention.expansion : null;
+    scorecard.retention.retained = retention.hasBase ? retention.retained : null;
     scorecard.retention.activeClients = result.activeClients;
 
     scorecard.newBusiness.actual = result.newBusiness;
@@ -845,11 +911,13 @@ function targetBlock({ caption, value, target, note, lowerIsBetter = false, form
 function renderRetentionSection() {
     const data = state.scorecard.retention || {};
     const meta = state.scorecardMeta || {};
+    // Retido = portfólio inicial − churn (upsells não entram na retenção).
     const retained = hasValue(data.retained)
         ? Number(data.retained)
         : hasValue(data.initialPortfolio) && hasValue(data.churned)
-            ? Number(data.initialPortfolio) - Number(data.churned) + Number(data.upsells || 0)
+            ? Number(data.initialPortfolio) - Number(data.churned)
             : null;
+    const baseHint = meta.previousLabel ? `Final portfolio of ${meta.previousLabel}` : 'Final portfolio of the previous month';
 
     setText('#ret-initial', moneyOr(data.initialPortfolio));
     setText('#ret-churned', moneyOr(data.churned));
@@ -857,14 +925,17 @@ function renderRetentionSection() {
     setText('#ret-clients', hasValue(data.activeClients) ? number(data.activeClients) : DASH);
     setText('#ret-churn-rate', percentOr(share(data.churned, data.initialPortfolio)));
     setText('#ret-expansion-rate', percentOr(share(data.upsells, data.initialPortfolio)));
-    setText('#ret-initial-note', meta.previousLabel ? `Billed in ${meta.previousLabel}` : 'Previous period');
+    setText('#ret-initial-note', baseHint);
     setText('#ret-clients-note', meta.invoiceCount ? `${plural(meta.invoiceCount, 'invoice')} in the period` : 'No invoices in the period');
     setText('#ret-churn-note', meta.lostClients ? `${plural(meta.lostClients, 'client')} stopped billing` : 'No client stopped billing');
     setText('#ret-upsell-note', upsellNote(meta));
     const churnScope = $('#ret-churn-scope');
     if (churnScope) {
-        churnScope.hidden = !meta.latestOnly;
-        churnScope.textContent = meta.latestOnly ? `Latest month only: ${meta.currentLabel} vs ${meta.previousLabel}` : '';
+        const summed = !meta.latestOnly && meta.retentionMonths > 1;
+        churnScope.hidden = !meta.latestOnly && !summed;
+        churnScope.textContent = meta.latestOnly
+            ? `Latest month only: ${meta.currentLabel} vs ${meta.previousLabel}`
+            : summed ? `Summed month by month, ${plural(meta.retentionMonths, 'month')} through ${meta.retentionEndLabel}` : '';
     }
     const churnLink = $('#open-churn-modal');
     if (churnLink) {
@@ -874,10 +945,10 @@ function renderRetentionSection() {
     }
 
     const rows = [
-        { label: 'Initial portfolio value', hint: meta.previousLabel ? `Billed in ${meta.previousLabel}` : 'Previous period', value: data.initialPortfolio, tone: '', signed: false },
+        { label: 'Initial portfolio value', hint: baseHint, value: data.initialPortfolio, tone: '', signed: false },
         { label: 'Churned value', hint: 'Lost clients and downgrades', value: hasValue(data.churned) ? -Number(data.churned) : null, tone: 'is-negative', signed: true },
-        { label: 'Upsells & cross-sells', hint: meta.taggedUpsell > 0 ? `${money(meta.taggedUpsell)} tagged in Xero, rest from growth per service line` : 'Growth per client and service line', value: data.upsells, tone: 'is-positive', signed: true },
-        { label: 'Retention (existing)', hint: 'What the same base is worth now', value: retained, tone: 'is-total', signed: false },
+        { label: 'Retained portfolio', hint: 'Initial portfolio minus churn', value: retained, tone: 'is-total', signed: false },
+        { label: 'Upsells & cross-sells', hint: `${meta.taggedUpsell > 0 ? `${money(meta.taggedUpsell)} tagged in Xero · ` : ''}not counted in retention`, value: data.upsells, tone: 'is-positive', signed: true },
     ];
     const max = Math.max(...rows.map((row) => Math.abs(Number(row.value) || 0)), 1);
 
@@ -889,8 +960,9 @@ function renderRetentionSection() {
         </div>
     `).join('');
 
+    // Retenção = (portfólio inicial − churn) / portfólio inicial.
     const retentionRate = share(retained, data.initialPortfolio);
-    const grossRate = hasValue(data.churned) ? share(Number(data.initialPortfolio) - Number(data.churned), data.initialPortfolio) : null;
+    const netRate = hasValue(retained) ? share(retained + Number(data.upsells || 0), data.initialPortfolio) : null;
     $('#retention-target').innerHTML = targetBlock({
         caption: 'Retention (existing)',
         value: retentionRate,
@@ -898,7 +970,7 @@ function renderRetentionSection() {
         format: 'percent',
         naLabel: 'N/A',
         note: hasValue(retentionRate)
-            ? `The ${meta.previousLabel || 'previous'} base is worth ${moneyOr(retained)} now, against ${moneyOr(data.initialPortfolio)} before. Without upsells: ${percentOr(grossRate)}.`
+            ? `${moneyOr(retained)} kept of the ${moneyOr(data.initialPortfolio)} ${meta.previousLabel ? `${meta.previousLabel} ` : ''}portfolio after ${moneyOr(data.churned)} churned. With upsells: ${percentOr(netRate)}.`
             : 'Needs billing in the previous period to compare.',
     });
 }
@@ -942,7 +1014,9 @@ function renderChurnModal() {
     const lost = clients.filter((item) => item.lost).length;
     const previous = meta.previousLabel || 'Previous period';
     const window = meta.currentWindow;
-    const current = window && isCalendarMonth(window.start, window.end) ? monthLabel(window.start) : meta.currentLabel || 'Selected period';
+    const current = meta.retentionEndLabel
+        || (window && isCalendarMonth(window.start, window.end) ? monthLabel(window.start) : meta.currentLabel || 'Selected period');
+    const summed = !meta.latestOnly && meta.retentionMonths > 1;
 
     setText('#churn-modal-context', `${state.scope === 'all' ? 'Global' : companyLabels[state.scope]} · ${serviceName(state.category)} · ${current} against ${previous}`);
     setText('#churn-modal-summary', clients.length
@@ -952,10 +1026,12 @@ function renderChurnModal() {
     setText('#churn-col-current', current);
 
     const scopeNote = $('#churn-modal-scope');
-    scopeNote.hidden = !meta.latestOnly;
+    scopeNote.hidden = !meta.latestOnly && !summed;
     scopeNote.textContent = meta.latestOnly
         ? `“${periodBounds().label}” has no earlier period to compare against, so this list compares the latest month with invoices (${current}) with the month before it (${previous}). Pick a month or range in Reporting period to see other months.`
-        : '';
+        : summed
+            ? `Churn is summed month by month across ${plural(meta.retentionMonths, 'month')}, each against the month before it. The ${previous} and ${current} columns show what each client billed in those months.`
+            : '';
 
     $('#churn-table').innerHTML = clients.map((item) => {
         const lines = item.lines.map((line) => SERVICE_LINE_LABELS[line] || line).join(' + ');
@@ -1866,6 +1942,8 @@ function buildMonthlyRows() {
                     churned: m.hasBase ? m.churned : null,
                     upsells: m.hasBase ? m.expansion : null,
                     retained: m.hasBase ? m.retained : null,
+                    // Portfólio final do mês = MRR do mês; é o portfólio inicial do mês seguinte.
+                    final: m.totalMrr,
                     rate: m.hasBase ? share(m.retained, m.initial) : null,
                     target: retentionTarget,
                     lostClients: m.hasBase ? meta.lostClients : null,
@@ -1915,10 +1993,11 @@ const MONTHLY_TABLES = {
         columns: [
             (row) => `<td class="align-right mono">${moneyOr(row.initial)}</td>`,
             (row) => `<td class="align-right mono">${hasValue(row.churned) ? `<span class="${row.churned > 0 ? 'value-down' : ''}">${moneyOr(row.churned)}</span>` : DASH}</td>`,
-            (row) => `<td class="align-right mono">${hasValue(row.upsells) ? `<span class="${row.upsells > 0 ? 'value-up' : ''}">${moneyOr(row.upsells)}</span>` : DASH}</td>`,
             (row) => `<td class="align-right mono">${moneyOr(row.retained)}</td>`,
             (row) => `<td class="align-right mono">${hasValue(row.rate) ? `<span class="${hasValue(row.target) ? (row.rate >= row.target ? 'value-up' : 'value-down') : ''}">${percentOr(row.rate)}</span>` : 'N/A'}</td>`,
             (row) => `<td class="align-right mono">${percentOr(row.target)}</td>`,
+            (row) => `<td class="align-right mono">${hasValue(row.upsells) ? `<span class="${row.upsells > 0 ? 'value-up' : ''}">${moneyOr(row.upsells)}</span>` : DASH}</td>`,
+            (row) => `<td class="align-right mono">${moneyOr(row.final)}</td>`,
             (row) => `<td class="align-right mono">${hasValue(row.lostClients) ? number(row.lostClients) : DASH}</td>`,
         ],
     },

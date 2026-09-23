@@ -48,6 +48,7 @@
 .waterfall-row.is-positive .waterfall-bar span{background:var(--green)}
 .waterfall-row.is-total{border-top:1px solid var(--ink);border-bottom:0;padding-top:15px}
 .waterfall-row.is-total .waterfall-bar span{background:var(--ink)}
+.waterfall-row.is-total:not(:last-child){border-bottom:1px solid var(--line)}
 .waterfall-value{font:500 12px 'DM Mono',monospace;text-align:right}
 
 .gauge-wrap{display:flex;align-items:center;gap:26px;margin-top:18px;flex-wrap:wrap}
