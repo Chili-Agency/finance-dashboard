@@ -1,6 +1,7 @@
 const state = { invoices: [], sourceTypeCounts: {}, categoryCounts: {}, scope: 'all', category: 'all', period: 'current', customStart: '', customEnd: '', statusChart: null, mrrChart: null };
 const companyLabels = { br: 'Brazil', mx: 'Mexico', pa: 'Panama', int: 'International' };
 const categoryLabels = { seo: 'SEO', ppc: 'PPC', others: 'Others' };
+// Serviços agrupados em Others (api.php › $otherServiceRules), na ordem de prioridade.
 const otherServiceLabels = { smm: 'SMM', marketing: 'Marketing', webdev: 'Web dev' };
 const colors = { paid: '#57745d', late: '#d49b35', open: '#55778a', authorised: '#e84d2c', voided: '#a5a6a0' };
 
@@ -574,7 +575,8 @@ function scorecardWindows(invoices) {
         label = monthLabel(start);
     }
 
-    const current = { start, end, label };
+    // Sem início e fim (ex.: "All available"), a comparação usa só o último mês com invoices.
+    const current = { start, end, label, latestOnly: !bounds.start || !bounds.end };
     const previous = previousWindowOf(current);
     return { current, previous, beforePrevious: previousWindowOf(previous) };
 }
@@ -679,11 +681,14 @@ function measureWindow(ctx, windows, meta) {
     let churned = 0;
     let expansion = 0;
     let retained = 0;
+    const churnedClients = meta.collectClients ? [] : null;
     baseContacts.forEach((key) => {
         const before = previousLines.get(key) || new Map();
         const after = currentLines.get(key) || new Map();
         let beforeTotal = 0;
         let afterTotal = 0;
+        let clientChurn = 0;
+        const droppedLines = [];
         linesInView().forEach((line) => {
             const previousValue = before.get(line)?.value || 0;
             const currentValue = after.get(line)?.value || 0;
@@ -692,6 +697,7 @@ function measureWindow(ctx, windows, meta) {
             const up = Math.max(delta, 0, tagged);
             expansion += up;
             churned += up - delta;
+            if (churnedClients && up - delta > 0.005) { clientChurn += up - delta; droppedLines.push(line); }
             if (tagged > 0) meta.taggedUpsell += tagged;
             if (line !== 'other' && previousValue <= 0 && currentValue > 0) meta.crossSells += 1;
             beforeTotal += previousValue;
@@ -700,7 +706,11 @@ function measureWindow(ctx, windows, meta) {
         initial += beforeTotal;
         retained += afterTotal;
         if (beforeTotal > 0 && Math.abs(afterTotal) < 0.005) meta.lostClients += 1;
+        if (churnedClients && clientChurn > 0.005) {
+            churnedClients.push({ key, before: beforeTotal, after: afterTotal, churned: clientChurn, lines: droppedLines, lost: beforeTotal > 0 && Math.abs(afterTotal) < 0.005 });
+        }
     });
+    if (churnedClients) meta.churnedClients = describeChurnedClients(churnedClients, ctx, windows);
 
     let newBusiness = 0;
     let reactivated = 0;
@@ -740,6 +750,7 @@ function buildScorecard() {
         margin: { current: manual.margin, target: manual.marginTarget, bonusPool: manual.bonusPool },
     };
     const meta = emptyScorecardMeta();
+    meta.collectClients = true;
 
     const invoices = scopedInvoices();
     const windows = scorecardWindows(invoices);
@@ -770,6 +781,8 @@ function buildScorecard() {
     if (!windows) { state.scorecard = scorecard; return; }
 
     meta.currentLabel = windows.current.label;
+    meta.currentWindow = windows.current;
+    meta.latestOnly = Boolean(windows.current.latestOnly);
     meta.previousLabel = windows.previous.label;
     meta.priorLabel = windows.beforePrevious.label;
 
@@ -848,6 +861,17 @@ function renderRetentionSection() {
     setText('#ret-clients-note', meta.invoiceCount ? `${plural(meta.invoiceCount, 'invoice')} in the period` : 'No invoices in the period');
     setText('#ret-churn-note', meta.lostClients ? `${plural(meta.lostClients, 'client')} stopped billing` : 'No client stopped billing');
     setText('#ret-upsell-note', upsellNote(meta));
+    const churnScope = $('#ret-churn-scope');
+    if (churnScope) {
+        churnScope.hidden = !meta.latestOnly;
+        churnScope.textContent = meta.latestOnly ? `Latest month only: ${meta.currentLabel} vs ${meta.previousLabel}` : '';
+    }
+    const churnLink = $('#open-churn-modal');
+    if (churnLink) {
+        const count = hasValue(data.churned) && Array.isArray(meta.churnedClients) ? meta.churnedClients.length : 0;
+        churnLink.hidden = count === 0;
+        churnLink.firstChild.textContent = `See ${plural(count, 'client')} `;
+    }
 
     const rows = [
         { label: 'Initial portfolio value', hint: meta.previousLabel ? `Billed in ${meta.previousLabel}` : 'Previous period', value: data.initialPortfolio, tone: '', signed: false },
@@ -885,6 +909,86 @@ function upsellNote(meta) {
     if (meta.crossSells > 0) parts.push(`${plural(meta.crossSells, 'new service line')} on existing clients`);
     if (meta.upsellOutsideBase > 0) parts.push(`${plural(meta.upsellOutsideBase, 'upsell invoice')} for clients not billed in ${meta.previousLabel || 'the previous period'}`);
     return parts.length ? parts.join(' · ') : 'Measured by value change';
+}
+
+// ---- Clientes que geraram churn no período (modal do card "Churned value") ----
+// Mesma regra do card: cliente da base do período anterior cuja receita caiu em alguma
+// linha de serviço. "Lost" parou de faturar por completo; "Downgrade" continua, mas menor.
+const SERVICE_LINE_LABELS = { ...categoryLabels, other: 'Unclassified' };
+
+function describeChurnedClients(list, ctx, windows) {
+    const wanted = new Set(list.map((item) => item.key));
+    const info = new Map();
+    ctx.invoices.forEach((invoice) => {
+        const key = contactKey(invoice);
+        if (!wanted.has(key)) return;
+        const date = invoiceDate(invoice);
+        if (!date || date > windows.current.end) return;
+        const known = info.get(key);
+        if (!known || date > known.lastDate) {
+            info.set(key, { name: invoice.Contact?.Name || 'Unnamed client', companyKey: invoice.companyKey, lastDate: date });
+        }
+    });
+    return list.map((item) => ({ ...item, ...(info.get(item.key) || { name: 'Unnamed client', companyKey: null, lastDate: null }) }))
+        .sort((a, b) => b.churned - a.churned || a.name.localeCompare(b.name));
+}
+
+const churnModal = $('#churn-modal');
+
+function renderChurnModal() {
+    const meta = state.scorecardMeta || {};
+    const clients = Array.isArray(meta.churnedClients) ? meta.churnedClients : [];
+    const total = clients.reduce((sum, item) => sum + item.churned, 0);
+    const lost = clients.filter((item) => item.lost).length;
+    const previous = meta.previousLabel || 'Previous period';
+    const window = meta.currentWindow;
+    const current = window && isCalendarMonth(window.start, window.end) ? monthLabel(window.start) : meta.currentLabel || 'Selected period';
+
+    setText('#churn-modal-context', `${state.scope === 'all' ? 'Global' : companyLabels[state.scope]} · ${serviceName(state.category)} · ${current} against ${previous}`);
+    setText('#churn-modal-summary', clients.length
+        ? `${plural(clients.length, 'client')} · ${money(total)} churned · ${number(lost)} lost, ${number(clients.length - lost)} downgraded`
+        : 'No client lost value in this period.');
+    setText('#churn-col-previous', previous);
+    setText('#churn-col-current', current);
+
+    const scopeNote = $('#churn-modal-scope');
+    scopeNote.hidden = !meta.latestOnly;
+    scopeNote.textContent = meta.latestOnly
+        ? `“${periodBounds().label}” has no earlier period to compare against, so this list compares the latest month with invoices (${current}) with the month before it (${previous}). Pick a month or range in Reporting period to see other months.`
+        : '';
+
+    $('#churn-table').innerHTML = clients.map((item) => {
+        const lines = item.lines.map((line) => SERVICE_LINE_LABELS[line] || line).join(' + ');
+        return `<tr>
+            <td>${escapeHtml(item.name)}<span class="entry-sub">Last invoice ${escapeHtml(shortDate(item.lastDate))}</span></td>
+            <td>${escapeHtml(companyLabels[item.companyKey] || DASH)}</td>
+            <td>${escapeHtml(lines || DASH)}</td>
+            <td class="align-right mono">${money(item.before)}</td>
+            <td class="align-right mono">${money(item.after)}</td>
+            <td class="align-right mono"><span class="value-down">${signedMoney(-item.churned)}</span></td>
+            <td><span class="status-pill ${item.lost ? 'is-lost' : 'is-downgrade'}">${item.lost ? 'Lost' : 'Downgrade'}</span></td>
+        </tr>`;
+    }).join('');
+    $('#churn-table-empty').classList.toggle('is-hidden', clients.length > 0);
+    const foot = $('#churn-table-total');
+    foot.classList.toggle('is-hidden', clients.length === 0);
+    setText('#churn-total-value', signedMoney(-total));
+}
+
+function openChurnModal() {
+    renderChurnModal();
+    churnModal.showModal();
+}
+
+function closeChurnModal() {
+    churnModal.close();
+    $('#open-churn-modal').focus();
+}
+
+if (churnModal) {
+    $('#open-churn-modal').addEventListener('click', openChurnModal);
+    churnModal.querySelectorAll('[data-close-modal]').forEach((button) => button.addEventListener('click', closeChurnModal));
+    churnModal.addEventListener('click', (event) => { if (event.target === churnModal) closeChurnModal(); });
 }
 
 function renderTargetsSection() {
@@ -3215,6 +3319,9 @@ if (rulesForm) {
     });
 }
 
+// ---- Importação da planilha de metas (Overview) ----
+// O servidor lê o .xlsx duas vezes: uma para a prévia (nada é gravado) e outra na
+// confirmação, que grava tudo numa transação em mrr_targets e margin_inputs.
 const IMPORT_ENDPOINT = 'sheet-import.php';
 const IMPORT_MAX_BYTES = 10 * 1024 * 1024;
 const IMPORT_COLUMNS = [
@@ -3245,6 +3352,8 @@ async function importRequest(options = {}) {
     return body;
 }
 
+// Status do botão: vem das próprias tabelas mrr_targets e margin_inputs (campo enteredAt),
+// então funciona igual para figuras importadas ou digitadas no modal.
 function renderImportStatus() {
     const node = $('#import-status');
     if (!node) return;

@@ -381,6 +381,8 @@ function asset(string $path): string
                         <span class="stat-label">Churned value</span>
                         <strong id="ret-churned">—</strong>
                         <p class="stat-note"><span id="ret-churn-rate">—</span> of the initial base · <span id="ret-churn-note">—</span></p>
+                        <p class="stat-scope" id="ret-churn-scope" hidden></p>
+                        <button type="button" class="stat-link" id="open-churn-modal" aria-haspopup="dialog" aria-controls="churn-modal" hidden>See clients <span aria-hidden="true">→</span></button>
                     </article>
                     <article class="stat-card is-positive">
                         <span class="stat-label">Upsells &amp; cross-sells</span>
@@ -624,6 +626,49 @@ function asset(string $path): string
             </section>
         </main>
     </div>
+
+    <dialog class="modal is-wide" id="churn-modal" aria-labelledby="churn-modal-title">
+        <div class="modal-form">
+            <header class="modal-header">
+                <div>
+                    <p class="eyebrow">Retention</p>
+                    <h2 id="churn-modal-title">Churned clients</h2>
+                </div>
+                <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+            </header>
+            <p class="modal-copy" id="churn-modal-context"></p>
+            <p class="churn-scope-note" id="churn-modal-scope" role="note" hidden></p>
+            <p class="churn-summary" id="churn-modal-summary"></p>
+
+            <div class="table-scroll churn-scroll">
+                <table class="entries-table churn-table">
+                    <thead>
+                        <tr>
+                            <th>Client</th>
+                            <th>Market</th>
+                            <th>Service lost</th>
+                            <th class="align-right" id="churn-col-previous">Previous</th>
+                            <th class="align-right" id="churn-col-current">Current</th>
+                            <th class="align-right">Churned</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="churn-table"></tbody>
+                    <tfoot id="churn-table-total">
+                        <tr><td colspan="5">Total churned</td><td class="align-right mono"><span class="value-down" id="churn-total-value">—</span></td><td></td></tr>
+                    </tfoot>
+                </table>
+                <div class="table-empty is-hidden" id="churn-table-empty">No client lost value in this period.</div>
+            </div>
+
+            <footer class="modal-footer">
+                <p class="modal-hint">Lost stopped billing entirely; Downgrade still bills, but less in at least one service line. Values in USD.</p>
+                <div class="modal-actions">
+                    <button type="button" class="button-secondary" data-close-modal>Close</button>
+                </div>
+            </footer>
+        </div>
+    </dialog>
 
     <dialog class="modal" id="margin-modal" aria-labelledby="margin-modal-title">
         <form class="modal-form" id="margin-form" novalidate>
