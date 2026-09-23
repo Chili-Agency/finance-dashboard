@@ -252,7 +252,7 @@ function asset(string $path): string
                     <div>
                         <p class="eyebrow">Unit economics</p>
                         <h2>What a client costs and returns</h2>
-                        <p class="section-copy">ATV, LTV and ALT come from the Xero invoices. CAC and CPL use the costs and leads entered below.</p>
+                        <p class="section-copy">ATV, LTV and ALT come from the Xero invoices. CPL is Google Ads spend over primary conversions; CAC adds the other acquisition costs entered below.</p>
                     </div>
                     <div class="filter-stack">
                         <div class="scope-tabs" role="tablist" aria-label="Company scope">
@@ -280,9 +280,10 @@ function asset(string $path): string
 
                 <article class="panel manual-panel">
                     <div class="panel-header">
-                        <div><p class="eyebrow">Manual input</p><h3>Acquisition costs and leads</h3></div>
-                        <button type="button" class="button-secondary" id="open-unit-modal">Enter figures</button>
+                        <div><p class="eyebrow">Acquisition costs</p><h3>Google Ads + other costs</h3></div>
+                        <button type="button" class="button-secondary" id="open-unit-modal">Enter other costs</button>
                     </div>
+                    <p class="manual-input-status" id="unit-ads-status" data-tone="muted" aria-live="polite"></p>
                     <p class="manual-input-status" id="unit-input-status" data-tone="muted" aria-live="polite"></p>
                 </article>
 
@@ -298,7 +299,7 @@ function asset(string $path): string
                         </div>
                     </div>
                     <div class="table-scroll monthly-scroll">
-                        <table class="entries-table"><thead><tr><th>Month</th><th>Market</th><th>Service</th><th class="align-right">Revenue</th><th class="align-right">Invoices</th><th class="align-right">ATV</th><th class="align-right">Active clients</th><th class="align-right">ARPA</th><th class="align-right">New clients</th><th class="align-right">S&amp;M cost</th><th class="align-right">CAC</th><th class="align-right">Marketing cost</th><th class="align-right">Leads</th><th class="align-right">CPL</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody id="unit-entries-table"></tbody></table>
+                        <table class="entries-table"><thead><tr><th>Month</th><th>Market</th><th>Service</th><th class="align-right">Revenue</th><th class="align-right">Invoices</th><th class="align-right">ATV</th><th class="align-right">Active clients</th><th class="align-right">ARPA</th><th class="align-right">New clients</th><th class="align-right">Google Ads</th><th class="align-right">Other costs</th><th class="align-right">CAC</th><th class="align-right">Conversions</th><th class="align-right">CPL</th><th><span class="visually-hidden">Actions</span></th></tr></thead><tbody id="unit-entries-table"></tbody></table>
                         <div class="table-empty is-hidden" id="unit-entries-empty"></div>
                     </div>
                 </article>
@@ -426,7 +427,7 @@ function asset(string $path): string
                     </div>
                     <div class="table-scroll monthly-scroll">
                         <table class="entries-table">
-                            <thead><tr><th>Month</th><th>Market</th><th>Service</th><th class="align-right">Initial base</th><th class="align-right">Churned</th><th class="align-right">Upsells</th><th class="align-right">Retained</th><th class="align-right">Retention</th><th class="align-right">Target</th><th class="align-right">Clients lost</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
+                            <thead><tr><th>Month</th><th>Market</th><th>Service</th><th class="align-right" title="Final portfolio of the previous month">Initial base</th><th class="align-right">Churned</th><th class="align-right" title="Initial base minus churn">Retained</th><th class="align-right" title="(Initial base − churn) / initial base">Retention</th><th class="align-right">Target</th><th class="align-right">Upsells</th><th class="align-right" title="MRR of the month; becomes next month's initial base">Final portfolio</th><th class="align-right">Clients lost</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
                             <tbody id="retention-entries-table"></tbody>
                         </table>
                         <div class="table-empty is-hidden" id="retention-entries-empty"></div>
@@ -785,11 +786,11 @@ function asset(string $path): string
             <header class="modal-header">
                 <div>
                     <p class="eyebrow">Manual input</p>
-                    <h2 id="unit-modal-title">Acquisition costs and leads</h2>
+                    <h2 id="unit-modal-title">Other acquisition costs</h2>
                 </div>
                 <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
             </header>
-            <p class="modal-copy">Figures for one month, market and service line. Money in USD.</p>
+            <p class="modal-copy">Google Ads spend and conversions come in automatically. Enter here what it leaves out (sales salaries, tools, other channels) for one month, market and service line. Money in USD.</p>
 
             <fieldset class="form-group">
                 <legend>Applies to</legend>
@@ -818,17 +819,10 @@ function asset(string $path): string
             <fieldset class="form-group">
                 <legend>Acquisition (CAC)</legend>
                 <div class="form-grid">
-                    <label class="field"><span>Sales &amp; Marketing cost</span><div class="input-affix"><i>$</i><input type="number" name="salesMarketingCost" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div></label>
+                    <label class="field"><span>Other acquisition costs</span><div class="input-affix"><i>$</i><input type="number" name="salesMarketingCost" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div></label>
                     <label class="field"><span>New clients</span><input type="number" name="newClients" min="0" step="1" inputmode="numeric" placeholder="from invoices"></label>
                 </div>
-            </fieldset>
-
-            <fieldset class="form-group">
-                <legend>Demand generation (CPL)</legend>
-                <div class="form-grid">
-                    <label class="field"><span>Marketing cost</span><div class="input-affix"><i>$</i><input type="number" name="marketingCost" min="0" step="0.01" inputmode="decimal" placeholder="0.00"></div></label>
-                    <label class="field"><span>Leads</span><input type="number" name="leads" min="0" step="1" inputmode="numeric" placeholder="0"></label>
-                </div>
+                <p class="modal-hint unit-field-hint">Added to the Google Ads spend of the same month, market and service. Leave New clients empty to count them from the invoices.</p>
             </fieldset>
 
             <p class="form-error" id="unit-form-error" role="alert" hidden></p>

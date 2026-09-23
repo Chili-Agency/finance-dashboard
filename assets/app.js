@@ -420,7 +420,7 @@ $('#apply-date-filter').addEventListener('click', () => {
     $('#error-notice').classList.add('is-hidden');
     renderAll();
 });
-$('#refresh-button').addEventListener('click', loadInvoices);
+$('#refresh-button').addEventListener('click', () => { loadInvoices(); if (typeof loadAds === 'function') loadAds(); });
 document.querySelectorAll('.scope-tab').forEach((button) => button.addEventListener('click', () => { state.scope = button.dataset.scope; document.querySelectorAll('.scope-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.scope === state.scope)); renderAll(); }));
 document.querySelectorAll('.category-tab').forEach((button) => button.addEventListener('click', () => { state.category = button.dataset.category; document.querySelectorAll('.category-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.category === state.category)); renderAll(); }));
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => { document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('is-active')); button.classList.add('is-active'); document.querySelectorAll('.view').forEach((view) => view.classList.remove('is-visible')); $(`#${button.dataset.view}-view`).classList.add('is-visible'); $('#page-title').textContent = button.dataset.title || button.textContent.trim(); }));
@@ -677,10 +677,11 @@ function measureWindow(ctx, windows, meta) {
         : meta.markedFirstMonth > 0 ? 'marker'
             : historyAvailable ? 'history' : 'unavailable';
 
-    let initial = 0;
+    // Portfólio inicial = portfólio final do período anterior, na mesma régua do Total MRR
+    // (é o MRR que aparece no mês anterior). Não depende da abertura por linha de serviço.
+    const initial = previous.reduce((sum, invoice) => sum + amount(invoice), 0);
     let churned = 0;
     let expansion = 0;
-    let retained = 0;
     const churnedClients = meta.collectClients ? [] : null;
     baseContacts.forEach((key) => {
         const before = previousLines.get(key) || new Map();
@@ -703,8 +704,6 @@ function measureWindow(ctx, windows, meta) {
             beforeTotal += previousValue;
             afterTotal += currentValue;
         });
-        initial += beforeTotal;
-        retained += afterTotal;
         if (beforeTotal > 0 && Math.abs(afterTotal) < 0.005) meta.lostClients += 1;
         if (churnedClients && clientChurn > 0.005) {
             churnedClients.push({ key, before: beforeTotal, after: afterTotal, churned: clientChurn, lines: droppedLines, lost: beforeTotal > 0 && Math.abs(afterTotal) < 0.005 });
@@ -727,12 +726,70 @@ function measureWindow(ctx, windows, meta) {
         initial,
         churned,
         expansion,
-        retained,
+        // Retenção = (portfólio inicial − churn) / portfólio inicial. Upsells ficam de fora.
+        retained: initial - churned,
         activeClients: currentByContact.size,
         newBusiness,
         reactivated,
         totalMrr: current.reduce((sum, invoice) => sum + amount(invoice), 0),
         invoiceCount: current.length,
+    };
+}
+
+// Retenção do período do seletor. O portfólio inicial é o portfólio final (MRR) do mês
+// anterior ao início do período. Num mês só, é a comparação com o mês anterior; em vários
+// meses, churn e upsells são a soma de cada mês contra o anterior (mesma regra da ponte do
+// Overview). Datas personalizadas que não começam no dia 1 entram pelo mês inteiro.
+function retentionOverWindow(ctx, window) {
+    const lastBilled = [...ctx.byMonth.keys()].sort().pop();
+    let months = monthKeysBetween(window.start, window.end);
+    if (lastBilled) months = months.filter((key) => key <= lastBilled);
+    if (!months.length) months = [monthKey(window.start)];
+
+    const monthWindow = (date) => ({ start: date, end: endOfMonth(date), label: monthLabel(date) });
+    const firstMonth = monthFromKey(months[0]);
+    const baseWindow = monthWindow(new Date(firstMonth.getFullYear(), firstMonth.getMonth() - 1, 1));
+    const endWindow = monthWindow(monthFromKey(months[months.length - 1]));
+
+    const totals = { hasBase: false, initial: null, churned: 0, expansion: 0, taggedUpsell: 0, crossSells: 0, upsellOutsideBase: 0 };
+    const byClient = new Map();
+    months.forEach((key, index) => {
+        const current = monthWindow(monthFromKey(key));
+        const previous = previousWindowOf(current);
+        const meta = { ...emptyScorecardMeta(), collectClients: true };
+        const m = measureWindow(ctx, { current, previous, beforePrevious: previousWindowOf(previous) }, meta);
+        if (index === 0) { totals.hasBase = m.hasBase; totals.initial = m.initial; }
+        totals.churned += m.churned;
+        totals.expansion += m.expansion;
+        totals.taggedUpsell += meta.taggedUpsell;
+        totals.crossSells += meta.crossSells;
+        totals.upsellOutsideBase += meta.upsellOutsideBase;
+        (meta.churnedClients || []).forEach((item) => {
+            const entry = byClient.get(item.key) || { key: item.key, churned: 0, lines: new Set() };
+            entry.churned += item.churned;
+            item.lines.forEach((line) => entry.lines.add(line));
+            byClient.set(item.key, entry);
+        });
+    });
+
+    // Colunas do modal: o que cada cliente faturou no mês-base e no último mês do período.
+    const baseTotals = totalsByContact(invoicesInWindow(ctx.invoices, ctx.byMonth, baseWindow));
+    const endTotals = totalsByContact(invoicesInWindow(ctx.invoices, ctx.byMonth, endWindow));
+    const list = [...byClient.values()].map((entry) => {
+        const before = baseTotals.get(entry.key) || 0;
+        const after = endTotals.get(entry.key) || 0;
+        return { key: entry.key, before, after, churned: entry.churned, lines: [...entry.lines], lost: Math.abs(after) < 0.005 };
+    });
+    const churnedClients = describeChurnedClients(list, ctx, { current: endWindow });
+
+    return {
+        ...totals,
+        retained: hasValue(totals.initial) ? totals.initial - totals.churned : null,
+        baseLabel: baseWindow.label,
+        endLabel: endWindow.label,
+        months: months.length,
+        churnedClients,
+        lostClients: churnedClients.filter((item) => item.lost).length,
     };
 }
 
@@ -750,7 +807,6 @@ function buildScorecard() {
         margin: { current: manual.margin, target: manual.marginTarget, bonusPool: manual.bonusPool },
     };
     const meta = emptyScorecardMeta();
-    meta.collectClients = true;
 
     const invoices = scopedInvoices();
     const windows = scorecardWindows(invoices);
@@ -786,11 +842,21 @@ function buildScorecard() {
     meta.previousLabel = windows.previous.label;
     meta.priorLabel = windows.beforePrevious.label;
 
-    const result = measureWindow(metricContext(invoices), windows, meta);
-    scorecard.retention.initialPortfolio = result.hasBase ? result.initial : null;
-    scorecard.retention.churned = result.hasBase ? result.churned : null;
-    scorecard.retention.upsells = result.hasBase ? result.expansion : null;
-    scorecard.retention.retained = result.hasBase ? result.retained : null;
+    const ctx = metricContext(invoices);
+    const result = measureWindow(ctx, windows, meta);
+    const retention = retentionOverWindow(ctx, windows.current);
+    meta.previousLabel = retention.baseLabel;
+    meta.retentionEndLabel = retention.endLabel;
+    meta.retentionMonths = retention.months;
+    meta.churnedClients = retention.churnedClients;
+    meta.lostClients = retention.lostClients;
+    meta.taggedUpsell = retention.taggedUpsell;
+    meta.crossSells = retention.crossSells;
+    meta.upsellOutsideBase = retention.upsellOutsideBase;
+    scorecard.retention.initialPortfolio = retention.hasBase ? retention.initial : null;
+    scorecard.retention.churned = retention.hasBase ? retention.churned : null;
+    scorecard.retention.upsells = retention.hasBase ? retention.expansion : null;
+    scorecard.retention.retained = retention.hasBase ? retention.retained : null;
     scorecard.retention.activeClients = result.activeClients;
 
     scorecard.newBusiness.actual = result.newBusiness;
@@ -845,11 +911,13 @@ function targetBlock({ caption, value, target, note, lowerIsBetter = false, form
 function renderRetentionSection() {
     const data = state.scorecard.retention || {};
     const meta = state.scorecardMeta || {};
+    // Retido = portfólio inicial − churn (upsells não entram na retenção).
     const retained = hasValue(data.retained)
         ? Number(data.retained)
         : hasValue(data.initialPortfolio) && hasValue(data.churned)
-            ? Number(data.initialPortfolio) - Number(data.churned) + Number(data.upsells || 0)
+            ? Number(data.initialPortfolio) - Number(data.churned)
             : null;
+    const baseHint = meta.previousLabel ? `Final portfolio of ${meta.previousLabel}` : 'Final portfolio of the previous month';
 
     setText('#ret-initial', moneyOr(data.initialPortfolio));
     setText('#ret-churned', moneyOr(data.churned));
@@ -857,14 +925,17 @@ function renderRetentionSection() {
     setText('#ret-clients', hasValue(data.activeClients) ? number(data.activeClients) : DASH);
     setText('#ret-churn-rate', percentOr(share(data.churned, data.initialPortfolio)));
     setText('#ret-expansion-rate', percentOr(share(data.upsells, data.initialPortfolio)));
-    setText('#ret-initial-note', meta.previousLabel ? `Billed in ${meta.previousLabel}` : 'Previous period');
+    setText('#ret-initial-note', baseHint);
     setText('#ret-clients-note', meta.invoiceCount ? `${plural(meta.invoiceCount, 'invoice')} in the period` : 'No invoices in the period');
     setText('#ret-churn-note', meta.lostClients ? `${plural(meta.lostClients, 'client')} stopped billing` : 'No client stopped billing');
     setText('#ret-upsell-note', upsellNote(meta));
     const churnScope = $('#ret-churn-scope');
     if (churnScope) {
-        churnScope.hidden = !meta.latestOnly;
-        churnScope.textContent = meta.latestOnly ? `Latest month only: ${meta.currentLabel} vs ${meta.previousLabel}` : '';
+        const summed = !meta.latestOnly && meta.retentionMonths > 1;
+        churnScope.hidden = !meta.latestOnly && !summed;
+        churnScope.textContent = meta.latestOnly
+            ? `Latest month only: ${meta.currentLabel} vs ${meta.previousLabel}`
+            : summed ? `Summed month by month, ${plural(meta.retentionMonths, 'month')} through ${meta.retentionEndLabel}` : '';
     }
     const churnLink = $('#open-churn-modal');
     if (churnLink) {
@@ -874,10 +945,10 @@ function renderRetentionSection() {
     }
 
     const rows = [
-        { label: 'Initial portfolio value', hint: meta.previousLabel ? `Billed in ${meta.previousLabel}` : 'Previous period', value: data.initialPortfolio, tone: '', signed: false },
+        { label: 'Initial portfolio value', hint: baseHint, value: data.initialPortfolio, tone: '', signed: false },
         { label: 'Churned value', hint: 'Lost clients and downgrades', value: hasValue(data.churned) ? -Number(data.churned) : null, tone: 'is-negative', signed: true },
-        { label: 'Upsells & cross-sells', hint: meta.taggedUpsell > 0 ? `${money(meta.taggedUpsell)} tagged in Xero, rest from growth per service line` : 'Growth per client and service line', value: data.upsells, tone: 'is-positive', signed: true },
-        { label: 'Retention (existing)', hint: 'What the same base is worth now', value: retained, tone: 'is-total', signed: false },
+        { label: 'Retained portfolio', hint: 'Initial portfolio minus churn', value: retained, tone: 'is-total', signed: false },
+        { label: 'Upsells & cross-sells', hint: `${meta.taggedUpsell > 0 ? `${money(meta.taggedUpsell)} tagged in Xero · ` : ''}not counted in retention`, value: data.upsells, tone: 'is-positive', signed: true },
     ];
     const max = Math.max(...rows.map((row) => Math.abs(Number(row.value) || 0)), 1);
 
@@ -889,8 +960,9 @@ function renderRetentionSection() {
         </div>
     `).join('');
 
+    // Retenção = (portfólio inicial − churn) / portfólio inicial.
     const retentionRate = share(retained, data.initialPortfolio);
-    const grossRate = hasValue(data.churned) ? share(Number(data.initialPortfolio) - Number(data.churned), data.initialPortfolio) : null;
+    const netRate = hasValue(retained) ? share(retained + Number(data.upsells || 0), data.initialPortfolio) : null;
     $('#retention-target').innerHTML = targetBlock({
         caption: 'Retention (existing)',
         value: retentionRate,
@@ -898,7 +970,7 @@ function renderRetentionSection() {
         format: 'percent',
         naLabel: 'N/A',
         note: hasValue(retentionRate)
-            ? `The ${meta.previousLabel || 'previous'} base is worth ${moneyOr(retained)} now, against ${moneyOr(data.initialPortfolio)} before. Without upsells: ${percentOr(grossRate)}.`
+            ? `${moneyOr(retained)} kept of the ${moneyOr(data.initialPortfolio)} ${meta.previousLabel ? `${meta.previousLabel} ` : ''}portfolio after ${moneyOr(data.churned)} churned. With upsells: ${percentOr(netRate)}.`
             : 'Needs billing in the previous period to compare.',
     });
 }
@@ -942,7 +1014,9 @@ function renderChurnModal() {
     const lost = clients.filter((item) => item.lost).length;
     const previous = meta.previousLabel || 'Previous period';
     const window = meta.currentWindow;
-    const current = window && isCalendarMonth(window.start, window.end) ? monthLabel(window.start) : meta.currentLabel || 'Selected period';
+    const current = meta.retentionEndLabel
+        || (window && isCalendarMonth(window.start, window.end) ? monthLabel(window.start) : meta.currentLabel || 'Selected period');
+    const summed = !meta.latestOnly && meta.retentionMonths > 1;
 
     setText('#churn-modal-context', `${state.scope === 'all' ? 'Global' : companyLabels[state.scope]} · ${serviceName(state.category)} · ${current} against ${previous}`);
     setText('#churn-modal-summary', clients.length
@@ -952,10 +1026,12 @@ function renderChurnModal() {
     setText('#churn-col-current', current);
 
     const scopeNote = $('#churn-modal-scope');
-    scopeNote.hidden = !meta.latestOnly;
+    scopeNote.hidden = !meta.latestOnly && !summed;
     scopeNote.textContent = meta.latestOnly
         ? `“${periodBounds().label}” has no earlier period to compare against, so this list compares the latest month with invoices (${current}) with the month before it (${previous}). Pick a month or range in Reporting period to see other months.`
-        : '';
+        : summed
+            ? `Churn is summed month by month across ${plural(meta.retentionMonths, 'month')}, each against the month before it. The ${previous} and ${current} columns show what each client billed in those months.`
+            : '';
 
     $('#churn-table').innerHTML = clients.map((item) => {
         const lines = item.lines.map((line) => SERVICE_LINE_LABELS[line] || line).join(' + ');
@@ -1866,6 +1942,8 @@ function buildMonthlyRows() {
                     churned: m.hasBase ? m.churned : null,
                     upsells: m.hasBase ? m.expansion : null,
                     retained: m.hasBase ? m.retained : null,
+                    // Portfólio final do mês = MRR do mês; é o portfólio inicial do mês seguinte.
+                    final: m.totalMrr,
                     rate: m.hasBase ? share(m.retained, m.initial) : null,
                     target: retentionTarget,
                     lostClients: m.hasBase ? meta.lostClients : null,
@@ -1915,10 +1993,11 @@ const MONTHLY_TABLES = {
         columns: [
             (row) => `<td class="align-right mono">${moneyOr(row.initial)}</td>`,
             (row) => `<td class="align-right mono">${hasValue(row.churned) ? `<span class="${row.churned > 0 ? 'value-down' : ''}">${moneyOr(row.churned)}</span>` : DASH}</td>`,
-            (row) => `<td class="align-right mono">${hasValue(row.upsells) ? `<span class="${row.upsells > 0 ? 'value-up' : ''}">${moneyOr(row.upsells)}</span>` : DASH}</td>`,
             (row) => `<td class="align-right mono">${moneyOr(row.retained)}</td>`,
             (row) => `<td class="align-right mono">${hasValue(row.rate) ? `<span class="${hasValue(row.target) ? (row.rate >= row.target ? 'value-up' : 'value-down') : ''}">${percentOr(row.rate)}</span>` : 'N/A'}</td>`,
             (row) => `<td class="align-right mono">${percentOr(row.target)}</td>`,
+            (row) => `<td class="align-right mono">${hasValue(row.upsells) ? `<span class="${row.upsells > 0 ? 'value-up' : ''}">${moneyOr(row.upsells)}</span>` : DASH}</td>`,
+            (row) => `<td class="align-right mono">${moneyOr(row.final)}</td>`,
             (row) => `<td class="align-right mono">${hasValue(row.lostClients) ? number(row.lostClients) : DASH}</td>`,
         ],
     },
@@ -2717,14 +2796,15 @@ document.querySelectorAll('[data-goto-view]').forEach((button) => button.addEven
 }));
 
 // ---- Unit economics ----
-// ATV, ARPA, ALT e LTV saem das invoices do Xero; CAC e CPL usam os custos lançados à mão.
+// ATV, ARPA, ALT e LTV saem das invoices do Xero; CAC e CPL usam o Google Ads (via n8n)
+// e os outros custos de aquisição lançados à mão.
 // Definições:
 //   ATV  = receita / número de invoices no período
 //   ARPA = receita do mês / clientes ativos no mês
 //   ALT  = tempo médio, em meses, entre a primeira e a última invoice dos clientes já perdidos
 //   LTV  = ARPA × ALT (receita; a margem entra na nota do card)
-//   CAC  = custo de Sales & Marketing / novos clientes
-//   CPL  = custo de Marketing / leads
+//   CAC  = (gasto no Google Ads + outros custos de aquisição) / novos clientes
+//   CPL  = gasto no Google Ads / conversões primárias do Google Ads
 // Um cliente é considerado perdido após CHURN_GRACE_MONTHS meses sem invoice.
 const CHURN_GRACE_MONTHS = 2;
 
@@ -2734,12 +2814,59 @@ state.unitInputsError = '';
 state.unitEntriesMode = 'all';
 state.clientEntriesMode = 'all';
 const UNIT_ENDPOINT = 'unit-inputs.php';
+// salesMarketingCost guarda os "outros custos de aquisição", somados ao Google Ads no CAC.
 const UNIT_FIELDS = {
     salesMarketingCost: { kind: 'money' },
     newClients: { kind: 'count' },
-    marketingCost: { kind: 'money' },
-    leads: { kind: 'count' },
 };
+
+// ---- Google Ads (workflow n8n "Chili Finance - Google Ads (CAC/CPL)", via ads.php) ----
+state.ads = { status: 'loading', rows: [], accounts: [], errors: [], fetchedAt: null };
+const ADS_ENDPOINT = 'ads.php';
+
+async function loadAds() {
+    state.ads = { ...state.ads, status: 'loading' };
+    renderUnitSection();
+    try {
+        const response = redirectIfSignedOut(await fetch(ADS_ENDPOINT, { cache: 'no-store' }));
+        const body = await response.json().catch(() => null);
+        if (!body) throw new Error(`The server answered HTTP ${response.status}.`);
+        if (body.configured === false) {
+            state.ads = { status: 'off', rows: [], accounts: [], errors: body.errors || [], fetchedAt: null };
+        } else if (!response.ok) {
+            throw new Error((body.errors || []).join(' · ') || `The server answered HTTP ${response.status}.`);
+        } else {
+            state.ads = { status: 'ready', rows: body.rows || [], accounts: body.accounts || [], errors: body.errors || [], fetchedAt: body.fetchedAt || null };
+        }
+    } catch (error) {
+        state.ads = { status: 'error', rows: [], accounts: [], errors: [error.message], fetchedAt: null };
+    }
+    renderUnitSection();
+}
+
+// Soma o Google Ads de um recorte. Campanhas sem serviço no nome ("unassigned") só entram em All.
+function adsFor(months, scope = state.scope, category = state.category) {
+    if (state.ads.status !== 'ready') return null;
+    const wanted = new Set(months);
+    const totals = { cost: 0, conversions: 0, unassignedCost: 0, missingFx: 0, rows: 0 };
+    state.ads.rows.forEach((row) => {
+        if (!wanted.has(row.month) || (scope !== 'all' && row.market !== scope)) return;
+        if (category !== 'all' && row.category !== category) {
+            if (row.category === 'unassigned' && hasValue(row.costUsd)) totals.unassignedCost += Number(row.costUsd);
+            return;
+        }
+        if (!hasValue(row.costUsd)) { totals.missingFx += 1; return; }
+        totals.cost += Number(row.costUsd);
+        totals.conversions += Number(row.conversions) || 0;
+        totals.rows += 1;
+    });
+    return totals;
+}
+
+function adsAccountsInView(scope = state.scope) {
+    // market "all": uma conta só, dividida por país no n8n; vale para qualquer mercado.
+    return state.ads.accounts.filter((account) => account.configured && (scope === 'all' || account.market === 'all' || account.market === scope));
+}
 
 const unitForm = $('#unit-form');
 const unitModal = $('#unit-modal');
@@ -2794,8 +2921,6 @@ function combineUnit(entries) {
     return {
         salesMarketingCost: sum('salesMarketingCost'),
         newClients: sum('newClients'),
-        marketingCost: sum('marketingCost'),
-        leads: sum('leads'),
         entryCount: parts.reduce((total, part) => total + (part.entryCount || 1), 0),
     };
 }
@@ -2871,6 +2996,7 @@ function unitMetrics() {
     const monthsInWindow = Math.max(1, months.length);
     const arpa = hasValue(activeClients) && activeClients > 0 ? revenue / activeClients / monthsInWindow : null;
     const margin = meta.marginEntry?.margin ?? meta.marginAggregate?.margin ?? null;
+    const acquisition = acquisitionFigures(adsFor(months), inputs.salesMarketingCost, newClients);
 
     return {
         months,
@@ -2883,15 +3009,28 @@ function unitMetrics() {
         margin,
         newClients,
         newClientsFromInvoices: !hasValue(inputs.newClients),
-        salesMarketingCost: inputs.salesMarketingCost ?? null,
-        marketingCost: inputs.marketingCost ?? null,
-        leads: inputs.leads ?? null,
-        cac: hasValue(inputs.salesMarketingCost) && hasValue(newClients) && newClients > 0 ? inputs.salesMarketingCost / newClients : null,
-        cpl: hasValue(inputs.marketingCost) && hasValue(inputs.leads) && inputs.leads > 0 ? inputs.marketingCost / inputs.leads : null,
+        ...acquisition,
         clients,
         churnedCount: churned.length,
         censoredCount: clients.filter((client) => client.leftCensored).length,
         activeCount: clients.filter((client) => client.active).length,
+    };
+}
+
+// CAC = (Google Ads + outros custos) / novos clientes; CPL = Google Ads / conversões primárias.
+function acquisitionFigures(ads, otherCost, newClients) {
+    const adsCost = ads ? ads.cost : null;
+    const hasAds = Boolean(ads) && ads.rows > 0;
+    const other = hasValue(otherCost) ? Number(otherCost) : null;
+    const acquisitionCost = hasAds || hasValue(other) ? (hasAds ? adsCost : 0) + (other || 0) : null;
+    return {
+        ads,
+        adsCost: hasAds ? adsCost : (ads ? 0 : null),
+        conversions: ads ? ads.conversions : null,
+        otherCost: other,
+        acquisitionCost,
+        cac: hasValue(acquisitionCost) && hasValue(newClients) && newClients > 0 ? acquisitionCost / newClients : null,
+        cpl: hasAds && ads.conversions > 0 ? adsCost / ads.conversions : null,
     };
 }
 
@@ -2932,16 +3071,26 @@ function renderUnitSection() {
         foot: hasValue(metrics.ltv) && hasValue(metrics.margin) ? `${moneyOr(metrics.ltv * metrics.margin)} at the ${percentOr(metrics.margin)} margin entered` : 'Enter a margin to see it net of COGS',
         state: hasValue(metrics.ltv) ? 'good' : 'empty',
     });
+    const costParts = [
+        hasValue(metrics.adsCost) ? `Google Ads ${money(metrics.adsCost)}` : null,
+        hasValue(metrics.otherCost) ? `other ${money(metrics.otherCost)}` : null,
+    ].filter(Boolean).join(' + ');
     unitCard('cac', {
         value: moneyOr(metrics.cac),
-        note: hasValue(metrics.salesMarketingCost) ? `${moneyOr(metrics.salesMarketingCost)} over ${hasValue(metrics.newClients) ? plural(metrics.newClients, 'new client') : 'no new clients'}` : 'No Sales & Marketing cost entered',
-        foot: metrics.newClientsFromInvoices ? 'New clients counted from the invoices' : 'New clients entered by hand',
+        note: hasValue(metrics.acquisitionCost)
+            ? `${moneyOr(metrics.acquisitionCost)} over ${hasValue(metrics.newClients) && metrics.newClients > 0 ? plural(metrics.newClients, 'new client') : 'no new clients'}`
+            : adsUnavailableNote('No acquisition cost for this period'),
+        foot: `${costParts ? `${costParts} · ` : ''}${metrics.newClientsFromInvoices ? 'new clients from the invoices' : 'new clients entered by hand'}`,
         state: hasValue(metrics.cac) ? 'good' : 'empty',
     });
     unitCard('cpl', {
         value: moneyOr(metrics.cpl),
-        note: hasValue(metrics.marketingCost) ? `${moneyOr(metrics.marketingCost)} over ${hasValue(metrics.leads) ? plural(metrics.leads, 'lead') : 'no leads'}` : 'No marketing cost entered',
-        foot: periodLabel,
+        note: hasValue(metrics.adsCost) && metrics.ads && metrics.ads.rows > 0
+            ? `${money(metrics.adsCost)} in Google Ads over ${plural(Math.round(metrics.conversions), 'primary conversion')}`
+            : adsUnavailableNote('No Google Ads spend in this period'),
+        foot: metrics.ads && metrics.ads.unassignedCost > 0
+            ? `${money(metrics.ads.unassignedCost)} from campaigns without a service in the name is left out of ${serviceName(state.category)}`
+            : metrics.ads && metrics.ads.missingFx > 0 ? 'Some Google Ads spend has no exchange rate and is left out' : periodLabel,
         state: hasValue(metrics.cpl) ? 'good' : 'empty',
     });
     const ratio = hasValue(metrics.ltv) && hasValue(metrics.cac) && metrics.cac > 0 ? metrics.ltv / metrics.cac : null;
@@ -2963,15 +3112,44 @@ function renderUnitSection() {
     renderClientTable(metrics.clients);
 }
 
+function adsUnavailableNote(fallback) {
+    if (state.ads.status === 'loading') return 'Loading Google Ads…';
+    if (state.ads.status === 'off') return 'Google Ads is not connected yet';
+    if (state.ads.status === 'error') return 'Google Ads could not be loaded';
+    if (!adsAccountsInView().length) return `No Google Ads account set up for ${companyLabels[state.scope] || 'this view'}`;
+    return fallback;
+}
+
+function renderAdsStatus() {
+    const node = $('#unit-ads-status');
+    if (!node) return;
+    const ads = state.ads;
+    if (ads.status === 'loading') { node.textContent = 'Loading Google Ads…'; node.dataset.tone = 'muted'; return; }
+    if (ads.status === 'off') { node.textContent = 'Google Ads is not connected: set N8N_WEBHOOK_ADS in the .env with the webhook of the n8n workflow.'; node.dataset.tone = 'sample'; return; }
+    if (ads.status === 'error') { node.textContent = `Could not load Google Ads: ${ads.errors.join(' · ')}`; node.dataset.tone = 'error'; return; }
+    const configured = ads.accounts.filter((account) => account.configured);
+    const loaded = configured.filter((account) => account.ok);
+    const markets = loaded.map((account) => (account.market === 'all' ? 'all markets' : companyLabels[account.market] || account.market));
+    const parts = [
+        loaded.length
+            ? `Google Ads connected for ${listNames([...new Set(markets)])}${ads.fetchedAt ? `, fetched ${relativeTime(new Date(ads.fetchedAt).getTime())}` : ''}.`
+            : 'Google Ads is connected, but no account is set up in the n8n workflow yet.',
+        ads.errors.length ? `Issues: ${ads.errors.join(' · ')}` : '',
+    ].filter(Boolean);
+    node.textContent = parts.join(' ');
+    node.dataset.tone = ads.errors.length ? 'error' : loaded.length ? 'manual' : 'sample';
+}
+
 function renderUnitInputStatus() {
+    renderAdsStatus();
     const node = $('#unit-input-status');
     if (!node) return;
     if (state.unitInputsStatus === 'loading') { node.textContent = 'Loading saved figures…'; node.dataset.tone = 'muted'; return; }
     if (state.unitInputsStatus === 'error') { node.textContent = `Could not load saved figures: ${state.unitInputsError}`; node.dataset.tone = 'error'; return; }
     const count = Object.keys(state.unitInputs).length;
     node.textContent = count
-        ? `${plural(count, 'entry')} saved. CAC and CPL only appear for months with costs entered; leave New clients empty to use the count from the invoices.`
-        : 'Nothing entered yet. Add the Sales & Marketing cost, the marketing cost and the leads of a month to see CAC and CPL.';
+        ? `${plural(count, 'entry')} saved. Other acquisition costs are added to the Google Ads spend in CAC; leave New clients empty to use the count from the invoices.`
+        : 'No other acquisition costs entered. CAC uses only the Google Ads spend until you add them (salaries, tools, other channels).';
     node.dataset.tone = count ? 'manual' : 'muted';
 }
 
@@ -2985,11 +3163,7 @@ function unitMonthlyRows() {
             atv: row.invoices ? row.mrr / row.invoices : null,
             arpa: row.clients ? row.mrr / row.clients : null,
             newClients,
-            salesMarketingCost: input?.salesMarketingCost ?? null,
-            marketingCost: input?.marketingCost ?? null,
-            leads: input?.leads ?? null,
-            cac: hasValue(input?.salesMarketingCost) && hasValue(newClients) && newClients > 0 ? input.salesMarketingCost / newClients : null,
-            cpl: hasValue(input?.marketingCost) && hasValue(input?.leads) && input.leads > 0 ? input.marketingCost / input.leads : null,
+            ...acquisitionFigures(adsFor([row.month], row.scope, row.category), input?.salesMarketingCost, newClients),
             hasExactInput: Boolean(exactUnit(row.month, row.scope, row.category)),
         };
     });
@@ -3018,10 +3192,10 @@ function renderUnitMonthlyTable() {
             <td class="align-right mono">${number(row.clients)}</td>
             <td class="align-right mono">${moneyOr(row.arpa)}</td>
             <td class="align-right mono">${hasValue(row.newClients) ? number(row.newClients) : DASH}</td>
-            <td class="align-right mono">${moneyOr(row.salesMarketingCost)}</td>
+            <td class="align-right mono">${moneyOr(row.adsCost)}</td>
+            <td class="align-right mono">${moneyOr(row.otherCost)}</td>
             <td class="align-right mono">${moneyOr(row.cac)}</td>
-            <td class="align-right mono">${moneyOr(row.marketingCost)}</td>
-            <td class="align-right mono">${hasValue(row.leads) ? number(row.leads) : DASH}</td>
+            <td class="align-right mono">${hasValue(row.conversions) ? number(Math.round(row.conversions)) : DASH}</td>
             <td class="align-right mono">${moneyOr(row.cpl)}</td>
             <td class="align-right entry-actions"><button type="button" class="row-button" data-unit-show="${escapeHtml(row.key)}">Show</button><button type="button" class="row-button" data-unit-edit="${escapeHtml(row.key)}">${row.hasExactInput ? 'Edit' : 'Add costs'}</button></td>
         </tr>`;
@@ -3110,7 +3284,7 @@ function readUnitForm() {
         entry[name] = field.kind === 'count' ? Math.round(value) : value;
     }
     if (Object.keys(UNIT_FIELDS).every((name) => entry[name] === null)) {
-        showUnitError('Fill in at least one figure.', elements.salesMarketingCost);
+        showUnitError('Fill in the other acquisition costs or the new clients.', elements.salesMarketingCost);
         return null;
     }
     entry.enteredAt = new Date().toISOString();
@@ -3570,3 +3744,4 @@ loadTargetInputs();
 loadBrIndices();
 loadUnitInputs();
 loadLateRules();
+loadAds();
