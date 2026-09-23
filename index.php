@@ -143,7 +143,7 @@ function asset(string $path): string
                         <div class="summary-chart-wrap"><canvas id="summary-plan-chart"></canvas><div class="chart-empty is-hidden" id="summary-plan-empty">No data for this year</div></div>
                     </article>
                     <article class="panel">
-                        <div class="panel-header"><div><p class="eyebrow">Portfolio</p><h3>Health</h3></div><button type="button" class="link-button" data-goto-view="retention">Open →</button></div>
+                        <div class="panel-header"><div><p class="eyebrow">Portfolio</p><h3 id="summary-health-title">Health</h3></div><button type="button" class="link-button" data-goto-view="retention">Open →</button></div>
                         <div class="health-list" id="summary-health"></div>
                         <p class="manual-input-status" id="summary-bonus-note" data-tone="muted"></p>
                     </article>
@@ -151,8 +151,8 @@ function asset(string $path): string
 
                 <article class="panel">
                     <div class="panel-header"><div><p class="eyebrow">Bridge</p><h3 id="summary-bridge-title">Portfolio bridge</h3></div><span class="panel-meta">USD</span></div>
-                    <p class="section-copy summary-chart-copy">What came into and left the recurring base this year.</p>
-                    <div class="summary-chart-wrap"><canvas id="summary-bridge-chart"></canvas><div class="chart-empty is-hidden" id="summary-bridge-empty">No data for this year</div></div>
+                    <p class="section-copy summary-chart-copy" id="summary-bridge-copy">What came into and left the recurring base in the selected period.</p>
+                    <div class="summary-chart-wrap"><canvas id="summary-bridge-chart"></canvas><div class="chart-empty is-hidden" id="summary-bridge-empty">No data for this period</div></div>
                 </article>
             </section>
 
