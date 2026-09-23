@@ -575,7 +575,8 @@ function scorecardWindows(invoices) {
         label = monthLabel(start);
     }
 
-    const current = { start, end, label };
+    // Sem início e fim (ex.: "All available"), a comparação usa só o último mês com invoices.
+    const current = { start, end, label, latestOnly: !bounds.start || !bounds.end };
     const previous = previousWindowOf(current);
     return { current, previous, beforePrevious: previousWindowOf(previous) };
 }
@@ -680,11 +681,14 @@ function measureWindow(ctx, windows, meta) {
     let churned = 0;
     let expansion = 0;
     let retained = 0;
+    const churnedClients = meta.collectClients ? [] : null;
     baseContacts.forEach((key) => {
         const before = previousLines.get(key) || new Map();
         const after = currentLines.get(key) || new Map();
         let beforeTotal = 0;
         let afterTotal = 0;
+        let clientChurn = 0;
+        const droppedLines = [];
         linesInView().forEach((line) => {
             const previousValue = before.get(line)?.value || 0;
             const currentValue = after.get(line)?.value || 0;
@@ -693,6 +697,7 @@ function measureWindow(ctx, windows, meta) {
             const up = Math.max(delta, 0, tagged);
             expansion += up;
             churned += up - delta;
+            if (churnedClients && up - delta > 0.005) { clientChurn += up - delta; droppedLines.push(line); }
             if (tagged > 0) meta.taggedUpsell += tagged;
             if (line !== 'other' && previousValue <= 0 && currentValue > 0) meta.crossSells += 1;
             beforeTotal += previousValue;
@@ -701,7 +706,11 @@ function measureWindow(ctx, windows, meta) {
         initial += beforeTotal;
         retained += afterTotal;
         if (beforeTotal > 0 && Math.abs(afterTotal) < 0.005) meta.lostClients += 1;
+        if (churnedClients && clientChurn > 0.005) {
+            churnedClients.push({ key, before: beforeTotal, after: afterTotal, churned: clientChurn, lines: droppedLines, lost: beforeTotal > 0 && Math.abs(afterTotal) < 0.005 });
+        }
     });
+    if (churnedClients) meta.churnedClients = describeChurnedClients(churnedClients, ctx, windows);
 
     let newBusiness = 0;
     let reactivated = 0;
@@ -741,6 +750,7 @@ function buildScorecard() {
         margin: { current: manual.margin, target: manual.marginTarget, bonusPool: manual.bonusPool },
     };
     const meta = emptyScorecardMeta();
+    meta.collectClients = true;
 
     const invoices = scopedInvoices();
     const windows = scorecardWindows(invoices);
@@ -771,6 +781,8 @@ function buildScorecard() {
     if (!windows) { state.scorecard = scorecard; return; }
 
     meta.currentLabel = windows.current.label;
+    meta.currentWindow = windows.current;
+    meta.latestOnly = Boolean(windows.current.latestOnly);
     meta.previousLabel = windows.previous.label;
     meta.priorLabel = windows.beforePrevious.label;
 
@@ -849,6 +861,17 @@ function renderRetentionSection() {
     setText('#ret-clients-note', meta.invoiceCount ? `${plural(meta.invoiceCount, 'invoice')} in the period` : 'No invoices in the period');
     setText('#ret-churn-note', meta.lostClients ? `${plural(meta.lostClients, 'client')} stopped billing` : 'No client stopped billing');
     setText('#ret-upsell-note', upsellNote(meta));
+    const churnScope = $('#ret-churn-scope');
+    if (churnScope) {
+        churnScope.hidden = !meta.latestOnly;
+        churnScope.textContent = meta.latestOnly ? `Latest month only: ${meta.currentLabel} vs ${meta.previousLabel}` : '';
+    }
+    const churnLink = $('#open-churn-modal');
+    if (churnLink) {
+        const count = hasValue(data.churned) && Array.isArray(meta.churnedClients) ? meta.churnedClients.length : 0;
+        churnLink.hidden = count === 0;
+        churnLink.firstChild.textContent = `See ${plural(count, 'client')} `;
+    }
 
     const rows = [
         { label: 'Initial portfolio value', hint: meta.previousLabel ? `Billed in ${meta.previousLabel}` : 'Previous period', value: data.initialPortfolio, tone: '', signed: false },
@@ -886,6 +909,86 @@ function upsellNote(meta) {
     if (meta.crossSells > 0) parts.push(`${plural(meta.crossSells, 'new service line')} on existing clients`);
     if (meta.upsellOutsideBase > 0) parts.push(`${plural(meta.upsellOutsideBase, 'upsell invoice')} for clients not billed in ${meta.previousLabel || 'the previous period'}`);
     return parts.length ? parts.join(' · ') : 'Measured by value change';
+}
+
+// ---- Clientes que geraram churn no período (modal do card "Churned value") ----
+// Mesma regra do card: cliente da base do período anterior cuja receita caiu em alguma
+// linha de serviço. "Lost" parou de faturar por completo; "Downgrade" continua, mas menor.
+const SERVICE_LINE_LABELS = { ...categoryLabels, other: 'Unclassified' };
+
+function describeChurnedClients(list, ctx, windows) {
+    const wanted = new Set(list.map((item) => item.key));
+    const info = new Map();
+    ctx.invoices.forEach((invoice) => {
+        const key = contactKey(invoice);
+        if (!wanted.has(key)) return;
+        const date = invoiceDate(invoice);
+        if (!date || date > windows.current.end) return;
+        const known = info.get(key);
+        if (!known || date > known.lastDate) {
+            info.set(key, { name: invoice.Contact?.Name || 'Unnamed client', companyKey: invoice.companyKey, lastDate: date });
+        }
+    });
+    return list.map((item) => ({ ...item, ...(info.get(item.key) || { name: 'Unnamed client', companyKey: null, lastDate: null }) }))
+        .sort((a, b) => b.churned - a.churned || a.name.localeCompare(b.name));
+}
+
+const churnModal = $('#churn-modal');
+
+function renderChurnModal() {
+    const meta = state.scorecardMeta || {};
+    const clients = Array.isArray(meta.churnedClients) ? meta.churnedClients : [];
+    const total = clients.reduce((sum, item) => sum + item.churned, 0);
+    const lost = clients.filter((item) => item.lost).length;
+    const previous = meta.previousLabel || 'Previous period';
+    const window = meta.currentWindow;
+    const current = window && isCalendarMonth(window.start, window.end) ? monthLabel(window.start) : meta.currentLabel || 'Selected period';
+
+    setText('#churn-modal-context', `${state.scope === 'all' ? 'Global' : companyLabels[state.scope]} · ${serviceName(state.category)} · ${current} against ${previous}`);
+    setText('#churn-modal-summary', clients.length
+        ? `${plural(clients.length, 'client')} · ${money(total)} churned · ${number(lost)} lost, ${number(clients.length - lost)} downgraded`
+        : 'No client lost value in this period.');
+    setText('#churn-col-previous', previous);
+    setText('#churn-col-current', current);
+
+    const scopeNote = $('#churn-modal-scope');
+    scopeNote.hidden = !meta.latestOnly;
+    scopeNote.textContent = meta.latestOnly
+        ? `“${periodBounds().label}” has no earlier period to compare against, so this list compares the latest month with invoices (${current}) with the month before it (${previous}). Pick a month or range in Reporting period to see other months.`
+        : '';
+
+    $('#churn-table').innerHTML = clients.map((item) => {
+        const lines = item.lines.map((line) => SERVICE_LINE_LABELS[line] || line).join(' + ');
+        return `<tr>
+            <td>${escapeHtml(item.name)}<span class="entry-sub">Last invoice ${escapeHtml(shortDate(item.lastDate))}</span></td>
+            <td>${escapeHtml(companyLabels[item.companyKey] || DASH)}</td>
+            <td>${escapeHtml(lines || DASH)}</td>
+            <td class="align-right mono">${money(item.before)}</td>
+            <td class="align-right mono">${money(item.after)}</td>
+            <td class="align-right mono"><span class="value-down">${signedMoney(-item.churned)}</span></td>
+            <td><span class="status-pill ${item.lost ? 'is-lost' : 'is-downgrade'}">${item.lost ? 'Lost' : 'Downgrade'}</span></td>
+        </tr>`;
+    }).join('');
+    $('#churn-table-empty').classList.toggle('is-hidden', clients.length > 0);
+    const foot = $('#churn-table-total');
+    foot.classList.toggle('is-hidden', clients.length === 0);
+    setText('#churn-total-value', signedMoney(-total));
+}
+
+function openChurnModal() {
+    renderChurnModal();
+    churnModal.showModal();
+}
+
+function closeChurnModal() {
+    churnModal.close();
+    $('#open-churn-modal').focus();
+}
+
+if (churnModal) {
+    $('#open-churn-modal').addEventListener('click', openChurnModal);
+    churnModal.querySelectorAll('[data-close-modal]').forEach((button) => button.addEventListener('click', closeChurnModal));
+    churnModal.addEventListener('click', (event) => { if (event.target === churnModal) closeChurnModal(); });
 }
 
 function renderTargetsSection() {
@@ -1766,6 +1869,7 @@ function buildMonthlyRows() {
                     rate: m.hasBase ? share(m.retained, m.initial) : null,
                     target: retentionTarget,
                     lostClients: m.hasBase ? meta.lostClients : null,
+                    reactivated: m.reactivated,
                 });
             }
 
@@ -2311,7 +2415,6 @@ function renderOverview() {
 
     setText('#summary-scope-note', `${companyLabels[state.scope] || 'All markets'} · ${state.category === 'all' ? 'all services' : categoryLabels[state.category]} · ${data.year}`);
     setText('#summary-matrix-title', `${data.year}${latest ? `, through ${monthOf(latest)}` : ''}`);
-    setText('#summary-bridge-title', `Recurring base bridge · ${data.year}`);
 
     summaryCard('revenue', {
         value: percentOr(share(totals.revenue, totals.target), 0),
@@ -2349,9 +2452,10 @@ function renderOverview() {
 
     renderImportStatus();
     renderSummaryMatrix(data);
-    renderSummaryHealth(data);
+    const period = summaryPeriod();
+    renderSummaryHealth(period);
     renderSummaryPlanChart(data);
-    renderSummaryBridgeChart(data);
+    renderSummaryBridgeChart(period);
 }
 
 function renderSummaryMatrix(data) {
@@ -2386,15 +2490,121 @@ function summaryTone(row, entry) {
     return Number(value) >= Number(reference) ? 'cell-up' : 'cell-down';
 }
 
-function renderSummaryHealth(data) {
-    const { totals, latest } = data;
-    const rows = [
-        { label: 'Active clients', value: latest && hasValue(latest.clients) ? number(latest.clients) : DASH, sub: data.firstWithClients ? `of ${number(data.firstWithClients.clients)} in ${new Intl.DateTimeFormat('en-US', { month: 'long' }).format(monthFromKey(data.firstWithClients.month))}` : '' },
-        { label: 'Churn in the year', value: hasValue(totals.churned) ? signedMoney(-totals.churned) : DASH, tone: totals.churned > 0 ? 'down' : '' },
-        { label: 'New business in the year', value: hasValue(totals.newBusiness) ? signedMoney(totals.newBusiness) : DASH, tone: totals.newBusiness > 0 ? 'up' : '' },
-        { label: 'Upsells in the year', value: hasValue(totals.upsells) ? signedMoney(totals.upsells) : DASH, tone: totals.upsells > 0 ? 'up' : '' },
-        { label: 'Net change', value: signedMoney(summaryNet(totals)), tone: summaryNet(totals) > 0 ? 'up' : summaryNet(totals) < 0 ? 'down' : '' },
-    ];
+// ---- Health e ponte da base recorrente: seguem o período do seletor ----
+// Os dois blocos usam os meses (calendário) que o período cobre. A base de partida é o
+// portfólio (MRR) do mês anterior ao início do período; a de chegada, o do último mês.
+// Datas personalizadas que não começam no dia 1 entram pelo mês inteiro.
+function summaryRow(name, month) {
+    if (!month) return null;
+    if (!state.monthlyRows) state.monthlyRows = buildMonthlyRows();
+    return (state.monthlyRows[name] || [])
+        .find((row) => row.month === month && row.scope === state.scope && row.category === state.category) || null;
+}
+
+// Meses com faturamento nesta visão (mercado + serviço). O período é recortado até o último
+// deles: um mês ainda sem invoices não é lido como se a base inteira tivesse saído.
+function summaryPeriodMonths() {
+    if (!state.monthlyRows) state.monthlyRows = buildMonthlyRows();
+    const available = [...new Set((state.monthlyRows.mrr || [])
+        .filter((row) => row.scope === state.scope && row.category === state.category)
+        .map((row) => row.month))].sort();
+    if (!available.length) return [];
+    const { start, end } = periodBounds();
+    const last = available[available.length - 1];
+    const from = start ? monthKey(start) : available[0];
+    let to = end ? monthKey(end) : last;
+    if (to > last) to = last;
+    if (from > to) return [];
+    return monthKeysBetween(monthFromKey(from), monthFromKey(to));
+}
+
+function summaryPeriodLabel(months) {
+    if (!months.length) return periodBounds().label;
+    const first = monthFromKey(months[0]);
+    const last = monthFromKey(months[months.length - 1]);
+    if (months.length === 1) return monthLabel(first);
+    const firstText = first.getFullYear() === last.getFullYear()
+        ? new Intl.DateTimeFormat('en-US', { month: 'short' }).format(first)
+        : monthLabel(first);
+    return `${firstText} – ${monthLabel(last)}`;
+}
+
+function summaryPeriod() {
+    const months = summaryPeriodMonths();
+    const label = summaryPeriodLabel(months);
+    if (!months.length) return { months, label, hasData: false };
+
+    const first = monthFromKey(months[0]);
+    const baseMonth = monthKey(new Date(first.getFullYear(), first.getMonth() - 1, 1));
+    const endMonth = months[months.length - 1];
+    const baseRow = summaryRow('mrr', baseMonth);
+    const endRow = summaryRow('mrr', endMonth);
+
+    // Soma um campo nos meses do período; null quando nenhum mês tem o dado.
+    const sumOf = (name, field) => {
+        const values = months.map((month) => summaryRow(name, month)).filter((row) => row && hasValue(row[field]));
+        return values.length ? values.reduce((total, row) => total + Number(row[field]), 0) : null;
+    };
+
+    const invoices = scopedInvoices();
+    const bonusEntries = months.map((month) => marginEntryFor(month, invoices)).filter((entry) => entry && hasValue(entry.bonusPool));
+
+    const base = baseRow ? baseRow.mrr : 0;
+    const end = endRow ? endRow.mrr : 0;
+    const flows = {
+        newBusiness: sumOf('mrr', 'newBusiness'),
+        upsells: sumOf('retention', 'upsells'),
+        reactivated: sumOf('retention', 'reactivated'),
+        churned: sumOf('retention', 'churned'),
+    };
+    const explained = base
+        + (flows.newBusiness || 0)
+        + (flows.upsells || 0)
+        + (flows.reactivated || 0)
+        - (flows.churned || 0);
+    // Diferença que as linhas de serviço não explicam (ex.: rateio de categorias que não fecha 100%).
+    const other = Math.abs(end - explained) >= 1 ? end - explained : 0;
+    const hasData = months.some((month) => summaryRow('mrr', month) || summaryRow('retention', month)) || Boolean(baseRow);
+
+    return {
+        months,
+        label,
+        hasData,
+        baseMonth,
+        endMonth,
+        base,
+        end,
+        baseClients: baseRow ? baseRow.clients : null,
+        endClients: endRow ? endRow.clients : null,
+        ...flows,
+        other,
+        net: end - base,
+        bonusPool: bonusEntries.length ? bonusEntries.reduce((total, entry) => total + Number(entry.bonusPool), 0) : null,
+        bonusMonths: bonusEntries.length,
+    };
+}
+
+function renderSummaryHealth(period) {
+    setText('#summary-health-title', `Health · ${period.label}`);
+    const tone = (value) => (!hasValue(value) || Number(value) === 0 ? '' : Number(value) > 0 ? 'up' : 'down');
+    const flow = (value) => (hasValue(value) ? signedMoney(value) : DASH);
+    const rows = period.hasData ? [
+        {
+            label: 'Active clients',
+            value: hasValue(period.endClients) ? number(period.endClients) : DASH,
+            sub: [
+                period.months.length > 1 ? `in ${monthLabel(monthFromKey(period.endMonth))}` : '',
+                hasValue(period.baseClients) ? `from ${number(period.baseClients)} in ${monthLabel(monthFromKey(period.baseMonth))}` : '',
+            ].filter(Boolean).join(', '),
+        },
+        { label: 'Churn', value: flow(hasValue(period.churned) ? -period.churned : null), tone: tone(hasValue(period.churned) ? -period.churned : null) },
+        { label: 'New business', value: flow(period.newBusiness), tone: tone(period.newBusiness) },
+        { label: 'Upsells', value: flow(period.upsells), tone: tone(period.upsells) },
+        ...(period.reactivated > 0 ? [{ label: 'Reactivated', sub: 'clients back after a gap', value: flow(period.reactivated), tone: 'up' }] : []),
+        ...(period.other ? [{ label: 'Other changes', sub: 'not tied to a service line', value: flow(period.other), tone: tone(period.other) }] : []),
+        { label: 'Net change', sub: `recurring base vs ${monthLabel(monthFromKey(period.baseMonth))}`, value: signedMoney(period.net), tone: tone(period.net) },
+    ] : [{ label: 'No billable invoices in this period', value: DASH }];
+
     $('#summary-health').innerHTML = rows.map((row) => `<div class="health-row">
         <span class="health-label">${escapeHtml(row.label)}${row.sub ? `<small>${escapeHtml(row.sub)}</small>` : ''}</span>
         <span class="health-value ${row.tone ? `value-${row.tone}` : ''}">${row.value}</span>
@@ -2402,15 +2612,9 @@ function renderSummaryHealth(data) {
 
     const note = $('#summary-bonus-note');
     if (!note) return;
-    const bonusMonths = data.elapsed.filter((entry) => hasValue(entry.bonusPool)).length;
-    note.textContent = hasValue(data.totals.bonusPool)
-        ? `Bonus provisioned in the year: ${money(data.totals.bonusPool)} — entered for ${plural(bonusMonths, 'month')}.`
-        : 'No bonus pool entered for this view yet.';
-}
-
-function summaryNet(totals) {
-    const parts = [totals.newBusiness, totals.upsells, hasValue(totals.churned) ? -totals.churned : null].filter(hasValue);
-    return parts.length ? parts.reduce((total, value) => total + Number(value), 0) : null;
+    note.textContent = hasValue(period.bonusPool)
+        ? `Bonus provisioned in ${period.label}: ${money(period.bonusPool)} — entered for ${plural(period.bonusMonths, 'month')}.`
+        : `No bonus pool entered for ${period.label} in this view.`;
 }
 
 function renderSummaryPlanChart(data) {
@@ -2435,33 +2639,42 @@ function renderSummaryPlanChart(data) {
     });
 }
 
-function renderSummaryBridgeChart(data) {
+function renderSummaryBridgeChart(period) {
     const canvas = $('#summary-bridge-chart');
     const empty = $('#summary-bridge-empty');
+    setText('#summary-bridge-title', `Recurring base bridge · ${period.label}`);
+    setText('#summary-bridge-copy', period.hasData
+        ? `From the ${monthLabel(monthFromKey(period.baseMonth))} portfolio to ${monthLabel(monthFromKey(period.endMonth))}: what came into and left the recurring base.`
+        : 'What came into and left the recurring base in the selected period.');
     if (!canvas || typeof Chart === 'undefined') return;
-    const first = data.elapsed[0];
-    const net = summaryNet(data.totals);
-    const hasData = Boolean(first) && hasValue(net);
-    empty.classList.toggle('is-hidden', hasData);
+    const hasData = period.hasData;
+    if (empty) {
+        empty.textContent = 'No data for this period';
+        empty.classList.toggle('is-hidden', hasData);
+    }
     canvas.classList.toggle('is-hidden', !hasData);
     if (state.summaryBridgeChart) { state.summaryBridgeChart.destroy(); state.summaryBridgeChart = null; }
     if (!hasData) return;
 
-    // Barras flutuantes [início, fim]: base de janeiro, o que entrou, o que saiu e onde parou.
+    // Barras flutuantes [início, fim]: portfólio do mês anterior ao período, o que entrou,
+    // o que saiu e o portfólio do último mês do período.
+    const short = (month) => monthLabel(monthFromKey(month));
     const steps = [];
-    let cursor = Number(first.actual) || 0;
-    steps.push({ label: `${first.label} base`, range: [0, cursor], color: '#3f4944' });
+    let cursor = Number(period.base) || 0;
+    steps.push({ label: `${short(period.baseMonth)} base`, range: [0, cursor], color: '#3f4944' });
     [
-        { label: 'New business', value: data.totals.newBusiness, color: '#57745d' },
-        { label: 'Upsells', value: data.totals.upsells, color: '#7fa487' },
-        { label: 'Churn', value: hasValue(data.totals.churned) ? -data.totals.churned : null, color: colors.authorised },
+        { label: 'New business', value: period.newBusiness, color: '#57745d' },
+        { label: 'Upsells', value: period.upsells, color: '#7fa487' },
+        { label: 'Reactivated', value: period.reactivated > 0 ? period.reactivated : null, color: '#9dbba3' },
+        { label: 'Churn', value: hasValue(period.churned) ? -period.churned : null, color: colors.authorised },
+        { label: 'Other changes', value: period.other || null, color: '#b3b1a8' },
     ].forEach((step) => {
         if (!hasValue(step.value)) return;
         const next = cursor + Number(step.value);
         steps.push({ label: step.label, range: [cursor, next], color: step.color, delta: Number(step.value) });
         cursor = next;
     });
-    steps.push({ label: `${data.latest.label} base`, range: [0, cursor], color: '#3f4944' });
+    steps.push({ label: `${short(period.endMonth)} base`, range: [0, Number(period.end) || 0], color: '#3f4944' });
 
     state.summaryBridgeChart = new Chart(canvas, {
         type: 'bar',

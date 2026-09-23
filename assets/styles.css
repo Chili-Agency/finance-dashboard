@@ -368,3 +368,24 @@ table.shows-service .service-col{display:table-cell}
 .service-pill.is-smm{background:#e1ecf0;color:#3f6475}
 .service-pill.is-marketing{background:#f7ebce;color:#8a5f14}
 .service-pill.is-webdev{background:#e8eee8;color:#4a6650}
+/* Card Churned value: link para a lista de clientes */
+.stat-link{align-self:flex-start;margin-top:12px;padding:0;border:0;background:none;font:600 10px Manrope;color:var(--ink);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.stat-link span{display:inline-block;text-decoration:none;transition:transform .15s ease}
+.stat-link:hover{color:var(--red-deep)}
+.stat-link:hover span{transform:translateX(2px)}
+.stat-link:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+.stat-link[hidden]{display:none}
+/* Modal de clientes com churn */
+.modal.is-wide{width:min(980px,calc(100vw - 32px))}
+.churn-summary{margin:14px 0 0;font:500 11px 'DM Mono',monospace;color:var(--ink)}
+.churn-scroll{max-height:min(58vh,520px);margin-top:14px}
+.churn-table{min-width:760px}
+.churn-table thead th{position:sticky;top:0;background:var(--panel);z-index:1}
+.churn-table tfoot td{font-weight:700;border-bottom:0;border-top:1px solid var(--line)}
+.status-pill.is-lost{background:#fae2dc;color:var(--red-deep)}
+.status-pill.is-downgrade{background:#f7ebce;color:#a06f18}
+/* Aviso de que "All available" compara só o último mês */
+.stat-scope{margin:10px 0 0;color:var(--muted);font:500 9px 'DM Mono',monospace;letter-spacing:.02em}
+.stat-scope[hidden]{display:none}
+.churn-scope-note{margin:14px 0 0;padding:10px 12px;background:#e1ecf0;border-left:3px solid var(--blue);color:#3d5a69;font-size:11px;line-height:1.55}
+.churn-scope-note[hidden]{display:none}
