@@ -2,9 +2,10 @@
 declare(strict_types=1);
 
 /*
- * Custos e conversões do Google Ads, consultados na hora no webhook do n8n
- * (workflow "Chili Finance - Google Ads (CAC/CPL)"), como o api.php faz com as invoices.
- * Resposta: linhas por mercado × mês × linha de serviço, com o custo já em USD.
+ * Custos e leads de mídia paga (Google Ads + Meta Ads), consultados na hora no webhook do n8n
+ * (workflow "Chili Finance - Ads (Google + Meta) (CAC/CPL)"), como o api.php faz com as invoices.
+ * Resposta: linhas por plataforma × mercado × mês × linha de serviço, com o custo já em USD.
+ * O dashboard soma as plataformas: CAC e CPL não são separados por origem.
  */
 
 require __DIR__ . '/auth.php';
@@ -15,7 +16,9 @@ header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
 const ADS_MARKETS = ['br', 'mx', 'pa', 'int'];
 const ADS_CATEGORIES = ['seo', 'ppc', 'others', 'unassigned'];
-const ADS_MARKET_LABELS = ['br' => 'Brazil', 'mx' => 'Mexico', 'pa' => 'Panama', 'int' => 'International', 'all' => 'Google Ads'];
+const ADS_SOURCES = ['google', 'meta'];
+const ADS_MARKET_LABELS = ['br' => 'Brazil', 'mx' => 'Mexico', 'pa' => 'Panama', 'int' => 'International'];
+const ADS_SOURCE_LABELS = ['google' => 'Google Ads', 'meta' => 'Meta Ads'];
 
 try {
     $config = require __DIR__ . '/config.php';
@@ -66,10 +69,12 @@ foreach ($data['rows'] as $row) {
     $market = (string) ($row['market'] ?? '');
     $month = (string) ($row['month'] ?? '');
     $category = (string) ($row['category'] ?? 'unassigned');
+    $source = (string) ($row['source'] ?? 'google'); // versões antigas do workflow só tinham Google
     if (!in_array($market, ADS_MARKETS, true) || preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $month) !== 1) {
         continue;
     }
     $rows[] = [
+        'source' => in_array($source, ADS_SOURCES, true) ? $source : 'google',
         'market' => $market,
         'month' => $month,
         'category' => in_array($category, ADS_CATEGORIES, true) ? $category : 'unassigned',
@@ -88,7 +93,10 @@ foreach ((array) ($data['accounts'] ?? []) as $account) {
         continue;
     }
     $market = (string) ($account['market'] ?? '');
+    $platform = (string) ($account['platform'] ?? 'google');
+    $platform = in_array($platform, ADS_SOURCES, true) ? $platform : 'google';
     $item = [
+        'platform' => $platform,
         'market' => $market,
         'customerId' => (string) ($account['customerId'] ?? ''),
         'name' => isset($account['name']) ? (string) $account['name'] : null,
@@ -99,7 +107,8 @@ foreach ((array) ($data['accounts'] ?? []) as $account) {
     ];
     $accounts[] = $item;
     if ($item['configured'] && $item['error'] !== null) {
-        $errors[] = (ADS_MARKET_LABELS[$market] ?? $market) . ': ' . $item['error'];
+        $label = ADS_SOURCE_LABELS[$platform] . (isset(ADS_MARKET_LABELS[$market]) ? ' (' . ADS_MARKET_LABELS[$market] . ')' : '');
+        $errors[] = $label . ': ' . $item['error'];
     }
 }
 if (isset($data['fx']['ok']) && $data['fx']['ok'] === false && !empty($data['fx']['error'])) {

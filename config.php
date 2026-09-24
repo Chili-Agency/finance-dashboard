@@ -76,7 +76,7 @@ return (static function (): array {
             'int' => $env('N8N_WEBHOOK_INT'),
             'pa' => $env('N8N_WEBHOOK_PA'),
             'mx' => $env('N8N_WEBHOOK_MX'),
-            // Opcional: workflow "Chili Finance - Google Ads (CAC/CPL)". Vazio desliga a integração.
+            // Opcional: workflow "Chili Finance - Ads (Google + Meta) (CAC/CPL)". Vazio desliga a integração.
             'ads' => $env('N8N_WEBHOOK_ADS', ''),
         ],
     ];

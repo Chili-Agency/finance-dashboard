@@ -2796,15 +2796,16 @@ document.querySelectorAll('[data-goto-view]').forEach((button) => button.addEven
 }));
 
 // ---- Unit economics ----
-// ATV, ARPA, ALT e LTV saem das invoices do Xero; CAC e CPL usam o Google Ads (via n8n)
+// ATV, ARPA, ALT e LTV saem das invoices do Xero; CAC e CPL usam a mídia paga (Google Ads + Meta Ads, via n8n)
 // e os outros custos de aquisição lançados à mão.
 // Definições:
 //   ATV  = receita / número de invoices no período
 //   ARPA = receita do mês / clientes ativos no mês
 //   ALT  = tempo médio, em meses, entre a primeira e a última invoice dos clientes já perdidos
 //   LTV  = ARPA × ALT (receita; a margem entra na nota do card)
-//   CAC  = (gasto no Google Ads + outros custos de aquisição) / novos clientes
-//   CPL  = gasto no Google Ads / conversões primárias do Google Ads
+//   CAC  = (gasto em Google Ads + Meta Ads + outros custos de aquisição) / novos clientes
+//   CPL  = gasto em Google Ads + Meta Ads / leads (conversões primárias do Google + leads do Meta)
+// As duas plataformas são somadas: nenhum número do painel é separado por origem.
 // Um cliente é considerado perdido após CHURN_GRACE_MONTHS meses sem invoice.
 const CHURN_GRACE_MONTHS = 2;
 
@@ -2814,13 +2815,15 @@ state.unitInputsError = '';
 state.unitEntriesMode = 'all';
 state.clientEntriesMode = 'all';
 const UNIT_ENDPOINT = 'unit-inputs.php';
-// salesMarketingCost guarda os "outros custos de aquisição", somados ao Google Ads no CAC.
+// salesMarketingCost guarda os "outros custos de aquisição", somados à mídia paga no CAC.
 const UNIT_FIELDS = {
     salesMarketingCost: { kind: 'money' },
     newClients: { kind: 'count' },
 };
 
-// ---- Google Ads (workflow n8n "Chili Finance - Google Ads (CAC/CPL)", via ads.php) ----
+// ---- Mídia paga (workflow n8n "Chili Finance - Ads (Google + Meta) (CAC/CPL)", via ads.php) ----
+// Cada linha traz source 'google' ou 'meta'; adsFor() soma todas, sem distinguir a origem.
+const ADS_PLATFORM_LABELS = { google: 'Google Ads', meta: 'Meta Ads' };
 state.ads = { status: 'loading', rows: [], accounts: [], errors: [], fetchedAt: null };
 const ADS_ENDPOINT = 'ads.php';
 
@@ -2844,7 +2847,7 @@ async function loadAds() {
     renderUnitSection();
 }
 
-// Soma o Google Ads de um recorte. Campanhas sem serviço no nome ("unassigned") só entram em All.
+// Soma a mídia paga (Google + Meta) de um recorte. Campanhas sem serviço no nome ("unassigned") só entram em All.
 function adsFor(months, scope = state.scope, category = state.category) {
     if (state.ads.status !== 'ready') return null;
     const wanted = new Set(months);
@@ -3017,7 +3020,7 @@ function unitMetrics() {
     };
 }
 
-// CAC = (Google Ads + outros custos) / novos clientes; CPL = Google Ads / conversões primárias.
+// CAC = (mídia paga + outros custos) / novos clientes; CPL = mídia paga / leads.
 function acquisitionFigures(ads, otherCost, newClients) {
     const adsCost = ads ? ads.cost : null;
     const hasAds = Boolean(ads) && ads.rows > 0;
@@ -3072,7 +3075,7 @@ function renderUnitSection() {
         state: hasValue(metrics.ltv) ? 'good' : 'empty',
     });
     const costParts = [
-        hasValue(metrics.adsCost) ? `Google Ads ${money(metrics.adsCost)}` : null,
+        hasValue(metrics.adsCost) ? `ads ${money(metrics.adsCost)}` : null,
         hasValue(metrics.otherCost) ? `other ${money(metrics.otherCost)}` : null,
     ].filter(Boolean).join(' + ');
     unitCard('cac', {
@@ -3086,11 +3089,11 @@ function renderUnitSection() {
     unitCard('cpl', {
         value: moneyOr(metrics.cpl),
         note: hasValue(metrics.adsCost) && metrics.ads && metrics.ads.rows > 0
-            ? `${money(metrics.adsCost)} in Google Ads over ${plural(Math.round(metrics.conversions), 'primary conversion')}`
-            : adsUnavailableNote('No Google Ads spend in this period'),
+            ? `${money(metrics.adsCost)} in ads over ${plural(Math.round(metrics.conversions), 'lead')}`
+            : adsUnavailableNote('No ad spend in this period'),
         foot: metrics.ads && metrics.ads.unassignedCost > 0
             ? `${money(metrics.ads.unassignedCost)} from campaigns without a service in the name is left out of ${serviceName(state.category)}`
-            : metrics.ads && metrics.ads.missingFx > 0 ? 'Some Google Ads spend has no exchange rate and is left out' : periodLabel,
+            : metrics.ads && metrics.ads.missingFx > 0 ? 'Some ad spend has no exchange rate and is left out' : periodLabel,
         state: hasValue(metrics.cpl) ? 'good' : 'empty',
     });
     const ratio = hasValue(metrics.ltv) && hasValue(metrics.cac) && metrics.cac > 0 ? metrics.ltv / metrics.cac : null;
@@ -3113,10 +3116,10 @@ function renderUnitSection() {
 }
 
 function adsUnavailableNote(fallback) {
-    if (state.ads.status === 'loading') return 'Loading Google Ads…';
-    if (state.ads.status === 'off') return 'Google Ads is not connected yet';
-    if (state.ads.status === 'error') return 'Google Ads could not be loaded';
-    if (!adsAccountsInView().length) return `No Google Ads account set up for ${companyLabels[state.scope] || 'this view'}`;
+    if (state.ads.status === 'loading') return 'Loading ad spend…';
+    if (state.ads.status === 'off') return 'Ad accounts are not connected yet';
+    if (state.ads.status === 'error') return 'Ad spend could not be loaded';
+    if (!adsAccountsInView().length) return `No ad account set up for ${companyLabels[state.scope] || 'this view'}`;
     return fallback;
 }
 
@@ -3124,16 +3127,17 @@ function renderAdsStatus() {
     const node = $('#unit-ads-status');
     if (!node) return;
     const ads = state.ads;
-    if (ads.status === 'loading') { node.textContent = 'Loading Google Ads…'; node.dataset.tone = 'muted'; return; }
-    if (ads.status === 'off') { node.textContent = 'Google Ads is not connected: set N8N_WEBHOOK_ADS in the .env with the webhook of the n8n workflow.'; node.dataset.tone = 'sample'; return; }
-    if (ads.status === 'error') { node.textContent = `Could not load Google Ads: ${ads.errors.join(' · ')}`; node.dataset.tone = 'error'; return; }
+    if (ads.status === 'loading') { node.textContent = 'Loading ad spend…'; node.dataset.tone = 'muted'; return; }
+    if (ads.status === 'off') { node.textContent = 'Ad accounts are not connected: set N8N_WEBHOOK_ADS in the .env with the webhook of the n8n workflow.'; node.dataset.tone = 'sample'; return; }
+    if (ads.status === 'error') { node.textContent = `Could not load ad spend: ${ads.errors.join(' · ')}`; node.dataset.tone = 'error'; return; }
     const configured = ads.accounts.filter((account) => account.configured);
     const loaded = configured.filter((account) => account.ok);
     const markets = loaded.map((account) => (account.market === 'all' ? 'all markets' : companyLabels[account.market] || account.market));
+    const platforms = [...new Set(loaded.map((account) => ADS_PLATFORM_LABELS[account.platform || 'google'] || account.platform))];
     const parts = [
         loaded.length
-            ? `Google Ads connected for ${listNames([...new Set(markets)])}${ads.fetchedAt ? `, fetched ${relativeTime(new Date(ads.fetchedAt).getTime())}` : ''}.`
-            : 'Google Ads is connected, but no account is set up in the n8n workflow yet.',
+            ? `${listNames(platforms)} connected for ${listNames([...new Set(markets)])}${ads.fetchedAt ? `, fetched ${relativeTime(new Date(ads.fetchedAt).getTime())}` : ''}. Spend and leads are added together in CAC and CPL.`
+            : 'The ads workflow is connected, but no Google Ads or Meta Ads account is set up in n8n yet.',
         ads.errors.length ? `Issues: ${ads.errors.join(' · ')}` : '',
     ].filter(Boolean);
     node.textContent = parts.join(' ');
@@ -3148,8 +3152,8 @@ function renderUnitInputStatus() {
     if (state.unitInputsStatus === 'error') { node.textContent = `Could not load saved figures: ${state.unitInputsError}`; node.dataset.tone = 'error'; return; }
     const count = Object.keys(state.unitInputs).length;
     node.textContent = count
-        ? `${plural(count, 'entry')} saved. Other acquisition costs are added to the Google Ads spend in CAC; leave New clients empty to use the count from the invoices.`
-        : 'No other acquisition costs entered. CAC uses only the Google Ads spend until you add them (salaries, tools, other channels).';
+        ? `${plural(count, 'entry')} saved. Other acquisition costs are added to the ad spend (Google + Meta) in CAC; leave New clients empty to use the count from the invoices.`
+        : 'No other acquisition costs entered. CAC uses only the ad spend (Google + Meta) until you add them (salaries, tools, other channels).';
     node.dataset.tone = count ? 'manual' : 'muted';
 }
 
