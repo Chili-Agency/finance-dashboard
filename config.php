@@ -82,6 +82,8 @@ return (static function (): array {
         'fx' => [
             // App ID da Open Exchange Rates. Vazio = usa só o que já está em fx_monthly_rates.
             'oer_app_id' => $env('OER_APP_ID', ''),
+            // Token que o workflow agendado do n8n envia ao fx-refresh.php. Vazio desliga o endpoint.
+            'refresh_token' => $env('FX_REFRESH_TOKEN', ''),
         ],
     ];
 

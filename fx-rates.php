@@ -5,8 +5,9 @@ declare(strict_types=1);
  * Câmbio mensal do dólar guardado na tabela fx_monthly_rates (ver sql/002_fx_monthly_rates.sql).
  *
  * Usa só o latest.json da Open Exchange Rates (plano gratuito, sem histórico):
- *   - mês corrente: grava a cotação do dia e renova no máximo a cada REFRESH_SECONDS.
- *     A última gravada dentro do mês vira a cotação daquele mês.
+ *   - mês corrente: quem grava e renova é o fx-refresh.php, chamado por um Schedule Trigger do
+ *     n8n em poucos dias do mês (inclusive o último). A última gravada no mês vira a cotação dele.
+ *     O dashboard só busca por conta própria se o mês corrente ainda não tiver nenhuma cotação.
  *   - mês que já virou: fica congelado (is_final = 1) e nunca mais é buscado.
  *   - mês sem cotação (antes de começar a gravar): usa o mês gravado mais próximo,
  *     de preferência o anterior; se não houver anterior, o primeiro gravado.
@@ -18,8 +19,9 @@ declare(strict_types=1);
 final class FxRates
 {
     /** Moedas guardadas na tabela. USD entra como referência (sempre 1). */
-    public const CURRENCIES = ['USD', 'BRL', 'MXN', 'PAB'];
-    private const REFRESH_SECONDS = 12 * 60 * 60;
+    public const CURRENCIES = ['USD', 'BRL', 'MXN', 'PAB', 'EUR'];
+    /** Intervalo mínimo entre duas buscas forçadas (execuções manuais repetidas no n8n, por exemplo). */
+    private const MIN_REFRESH_SECONDS = 30 * 60;
     private const LOCK_NAME = 'chili_finance_fx_rates';
     private const LOCK_WAIT_SECONDS = 20;
     private const API = 'https://openexchangerates.org/api/latest.json';
@@ -50,7 +52,8 @@ final class FxRates
     }
 
     /**
-     * Grava/renova a cotação do mês corrente se preciso e carrega as moedas pedidas.
+     * Usado pelo dashboard: busca a cotação só se o mês corrente ainda não tem nenhuma,
+     * e carrega as moedas pedidas.
      * @param list<string> $currencies
      */
     public function load(array $currencies): void
@@ -61,7 +64,7 @@ final class FxRates
         )));
 
         $this->finalizeClosedMonths();
-        $this->refreshCurrentMonth();
+        $this->updateCurrentMonth(false);
         if ($currencies !== []) {
             $this->read($currencies);
         }
@@ -124,29 +127,61 @@ final class FxRates
         return $this->meta === [] ? null : min(array_keys($this->meta));
     }
 
+    /**
+     * Usado pelo fx-refresh.php (agendamento): grava a cotação de agora para o mês corrente,
+     * a menos que ela tenha sido gravada há menos de MIN_REFRESH_SECONDS.
+     * @return array{month:string, fetched:bool, skipped:?string}
+     */
+    public function refresh(): array
+    {
+        $this->finalizeClosedMonths();
+        $fetchesBefore = $this->fetches;
+        $skipped = $this->updateCurrentMonth(true);
+        return ['month' => self::currentMonth(), 'fetched' => $this->fetches > $fetchesBefore && $this->errors === [], 'skipped' => $skipped];
+    }
+
+    /** Cotações gravadas no mês corrente, para conferência. @return list<array<string, mixed>> */
+    public function currentRows(): array
+    {
+        $select = $this->pdo->prepare(
+            "SELECT currency, units_per_usd, DATE_FORMAT(rate_date, '%Y-%m-%d') AS rate_date,
+                    DATE_FORMAT(fetched_at, '%Y-%m-%dT%H:%i:%sZ') AS fetched_at
+               FROM fx_monthly_rates WHERE period_month = ? ORDER BY currency"
+        );
+        $select->execute([self::currentMonth() . '-01']);
+        return array_map(static fn (array $row): array => array_merge($row, ['units_per_usd' => (float) $row['units_per_usd']]), $select->fetchAll(PDO::FETCH_ASSOC));
+    }
+
     private function finalizeClosedMonths(): void
     {
         $this->pdo->prepare('UPDATE fx_monthly_rates SET is_final = 1 WHERE is_final = 0 AND period_month < ?')
             ->execute([self::currentMonth() . '-01']);
     }
 
-    private function refreshCurrentMonth(): void
+    /**
+     * $force = false (dashboard): só busca se o mês corrente não tem cotação.
+     * $force = true (agendamento): busca, salvo se a última foi há menos de MIN_REFRESH_SECONDS.
+     * @return string|null motivo de não ter buscado
+     */
+    private function updateCurrentMonth(bool $force): ?string
     {
         $month = self::currentMonth();
-        if (!$this->currentIsStale($month)) {
-            return;
+        $reason = $this->skipReason($month, $force);
+        if ($reason !== null) {
+            return $reason;
         }
         if ($this->appId === '') {
             $this->errors[] = "OER_APP_ID is not set, so the {$month} rate cannot be fetched.";
-            return;
+            return 'no app id';
         }
 
-        // Evita que duas abas abertas ao mesmo tempo busquem a cotação duas vezes.
+        // Evita duas buscas ao mesmo tempo (agendamento + dashboard, ou duas abas).
         $lock = $this->pdo->prepare('SELECT GET_LOCK(?, ?)');
         $lock->execute([self::LOCK_NAME, self::LOCK_WAIT_SECONDS]);
         $locked = (int) $lock->fetchColumn() === 1;
         try {
-            if ($this->currentIsStale($month)) { // outra requisição pode ter gravado enquanto esperávamos
+            $reason = $this->skipReason($month, $force); // outra requisição pode ter gravado enquanto esperávamos
+            if ($reason === null) {
                 $this->fetchAndStore($month);
             }
         } catch (Throwable $error) {
@@ -157,16 +192,24 @@ final class FxRates
                 $this->pdo->prepare('SELECT RELEASE_LOCK(?)')->execute([self::LOCK_NAME]);
             }
         }
+        return $reason;
     }
 
-    private function currentIsStale(string $month): bool
+    private function skipReason(string $month, bool $force): ?string
     {
         $select = $this->pdo->prepare(
             "SELECT DATE_FORMAT(MIN(fetched_at), '%Y-%m-%d %H:%i:%s') FROM fx_monthly_rates WHERE period_month = ?"
         );
         $select->execute([$month . '-01']);
         $fetchedAt = $select->fetchColumn();
-        return !is_string($fetchedAt) || time() - (int) strtotime($fetchedAt . ' UTC') > self::REFRESH_SECONDS;
+        if (!is_string($fetchedAt)) {
+            return null; // mês ainda sem cotação: busca sempre
+        }
+        if (!$force) {
+            return 'already stored';
+        }
+        $age = time() - (int) strtotime($fetchedAt . ' UTC');
+        return $age < self::MIN_REFRESH_SECONDS ? 'fetched ' . intdiv($age, 60) . ' min ago' : null;
     }
 
     /** @param list<string> $currencies */
