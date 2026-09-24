@@ -79,6 +79,10 @@ return (static function (): array {
             // Opcional: workflow "Chili Finance - Ads (Google + Meta) (CAC/CPL)". Vazio desliga a integração.
             'ads' => $env('N8N_WEBHOOK_ADS', ''),
         ],
+        'fx' => [
+            // App ID da Open Exchange Rates. Vazio = usa só o que já está em fx_monthly_rates.
+            'oer_app_id' => $env('OER_APP_ID', ''),
+        ],
     ];
 
     if ($missing !== []) {

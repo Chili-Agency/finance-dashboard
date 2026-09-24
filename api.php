@@ -2,7 +2,13 @@
 declare(strict_types=1);
 
 require __DIR__ . '/auth.php';
+require __DIR__ . '/fx-rates.php';
 auth_require_api();
+
+// true: cada invoice é convertida pela cotação do mês dela (fx_monthly_rates).
+// false: todas pela cotação do mês corrente (o comportamento antigo, "cotação de hoje").
+const FX_BY_INVOICE_MONTH = true;
+const FX_MONEY_FIELDS = ['SubTotal', 'TotalTax', 'Total', 'AmountDue', 'AmountPaid'];
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -131,7 +137,6 @@ foreach ($requested as $key) {
     $response = fetchJson($company['url']);
     $sourceSeconds[$key] = round(microtime(true) - $startedAt, 1);
     $warnings = [];
-    $unconverted = 0;
 
     if (!$response['ok']) {
         $sourceErrors[$key] = $response['error'];
@@ -155,9 +160,6 @@ foreach ($requested as $key) {
                 $sourceErrors[$key] = 'Xero request failed inside n8n: ' . (string) $invoice['_error'];
                 $errors[] = $company['label'] . ': ' . $sourceErrors[$key];
             }
-            if (($invoice['fxOk'] ?? true) === false) {
-                $warnings['fx'] = 'Live exchange rates unavailable';
-            }
             if (!empty($invoice['accountsError'])) {
                 $warnings['accounts'] = 'Chart of accounts unavailable, SEO/PPC split may be incomplete';
             }
@@ -166,10 +168,6 @@ foreach ($requested as $key) {
         if (!empty($invoice['accountsError'])) {
             $warnings['accounts'] = 'Chart of accounts unavailable, SEO/PPC split may be incomplete';
         }
-        if (isset($invoice['conversion']['ok']) && $invoice['conversion']['ok'] === false) {
-            $unconverted++;
-        }
-
         $type = strtoupper((string) ($invoice['Type'] ?? 'UNKNOWN'));
         $sourceTypeCounts[$key][$type] = ($sourceTypeCounts[$key][$type] ?? 0) + 1;
 
@@ -223,11 +221,10 @@ foreach ($requested as $key) {
     }
 
     $sourceCounts[$key] = count($invoices) - $before;
-    if ($unconverted > 0) {
-        $warnings['fx'] = $unconverted . ' invoice' . ($unconverted === 1 ? '' : 's') . ' converted with the fallback rate';
-    }
     $sourceWarnings[$key] = array_values($warnings);
 }
+
+$fx = applyMonthlyRates($invoices, $sourceWarnings, (string) ($config['fx']['oer_app_id'] ?? ''));
 
 echo json_encode([
     'invoices' => $invoices,
@@ -243,8 +240,114 @@ echo json_encode([
     'sourceTypeCounts' => $sourceTypeCounts,
     'diagnostics' => $diagnostics,
     'categoryCounts' => $categoryCounts,
+    'fx' => $fx,
     'fetchedAt' => gmdate('c'),
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+/**
+ * Converte as invoices para USD com a tabela fx_monthly_rates.
+ * Ordem: cotação mensal do banco → conversão que ainda vier do n8n → taxa fixa de $companies.
+ * Meses anteriores ao início da gravação usam o primeiro mês gravado (ver FxRates::resolve).
+ */
+function applyMonthlyRates(array &$invoices, array &$sourceWarnings, string $appId): array
+{
+    $current = FxRates::currentMonth();
+    $monthOf = static fn (array $invoice): string => FX_BY_INVOICE_MONTH ? (invoiceMonth($invoice) ?? $current) : $current;
+    $currencyOf = static function (array $invoice): string {
+        $code = strtoupper(trim((string) ($invoice['CurrencyCode'] ?? '')));
+        return $code !== '' ? $code : strtoupper((string) ($invoice['companyCurrency'] ?? 'USD'));
+    };
+
+    $rates = new FxRates(auth_db(), $appId);
+    $ready = false;
+    $errors = [];
+    try {
+        $rates->load(array_map($currencyOf, $invoices));
+        $errors = $rates->errors();
+        $ready = true;
+    } catch (Throwable $error) {
+        error_log('[api] fx: ' . $error->getMessage());
+        $errors[] = 'Could not read fx_monthly_rates: ' . $error->getMessage();
+    }
+
+    $fallbackBySource = [];
+    $approximate = 0;
+    foreach ($invoices as &$invoice) {
+        $currency = $currencyOf($invoice);
+        $month = FxRates::clampMonth($monthOf($invoice));
+        $rate = $ready || $currency === 'USD' ? $rates->resolve($month, $currency) : null;
+
+        if ($rate !== null) {
+            $units = $rate['units'];
+            $invoice['amounts_usd'] = convertAmounts($invoice, $units);
+            $invoice['usdRate'] = 1 / $units;
+            $invoice['rateSource'] = $currency === 'USD' ? 'usd' : 'monthly';
+            $invoice['conversion'] = [
+                'ok' => true,
+                'from' => $currency,
+                'to' => 'USD',
+                'rate' => $units,
+                'usdPerUnit' => 1 / $units,
+                'source' => $currency === 'USD' ? 'no-op' : 'fx_monthly_rates',
+                'month' => $month,
+                'rateMonth' => $rate['month'], // pode ser outro mês se o da invoice não foi gravado
+                'rateDate' => $rate['rateDate'] ?: null,
+                'final' => $rate['final'],
+            ];
+            if ($currency !== 'USD' && !$rate['exact']) {
+                $approximate++;
+            }
+            continue;
+        }
+        if (($invoice['rateSource'] ?? '') === 'live') {
+            continue; // o n8n ainda converteu esta (workflow antigo, com o nó de FX)
+        }
+        $invoice['amounts_usd'] = null;
+        $invoice['conversion'] = ['ok' => false, 'from' => $currency, 'to' => 'USD', 'month' => $month, 'reason' => "No {$currency} rate in fx_monthly_rates."];
+        $source = (string) ($invoice['companyKey'] ?? '');
+        $fallbackBySource[$source] = ($fallbackBySource[$source] ?? 0) + 1;
+    }
+    unset($invoice);
+
+    foreach ($fallbackBySource as $source => $count) {
+        $sourceWarnings[$source][] = $count . ' invoice' . ($count === 1 ? '' : 's') . ' converted with the fallback rate';
+    }
+
+    return [
+        'source' => 'fx_monthly_rates',
+        'byInvoiceMonth' => FX_BY_INVOICE_MONTH,
+        'firstStoredMonth' => $ready ? $rates->firstMonth() : null,
+        'apiCalls' => $rates->fetches(),
+        'invoicesWithNearestMonthRate' => $approximate,
+        'fallbackInvoices' => array_sum($fallbackBySource),
+        'errors' => $errors,
+    ];
+}
+
+/** "YYYY-MM" da data da invoice (DateString ISO ou /Date(ms)/ do Xero). */
+function invoiceMonth(array $invoice): ?string
+{
+    $text = (string) ($invoice['DateString'] ?? '');
+    if (preg_match('/^(\d{4})-(\d{2})/', $text, $match) === 1) {
+        return "{$match[1]}-{$match[2]}";
+    }
+    if (preg_match('#^/Date\((-?\d+)#', (string) ($invoice['Date'] ?? ''), $match) === 1) {
+        return gmdate('Y-m', intdiv((int) $match[1], 1000));
+    }
+    return null;
+}
+
+function convertAmounts(array $invoice, float $unitsPerUsd): array
+{
+    $converted = [];
+    foreach (FX_MONEY_FIELDS as $field) {
+        $value = $invoice[$field] ?? null;
+        if ($value !== null && $value !== '' && is_numeric($value)) {
+            $converted[$field] = round((float) $value / $unitsPerUsd, 2);
+        }
+    }
+    return $converted;
+}
 
 function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules, array $lineMarkers, array $otherServiceRules): array
 {
