@@ -9,6 +9,7 @@ declare(strict_types=1);
  */
 
 require __DIR__ . '/auth.php';
+require __DIR__ . '/fx-rates.php';
 auth_require_api();
 
 header('Content-Type: application/json; charset=utf-8');
@@ -86,6 +87,30 @@ foreach ($data['rows'] as $row) {
     ];
 }
 
+// Custo em USD pela cotação do mês de cada linha (fx_monthly_rates; mês não gravado usa o
+// mais próximo). Se não houver cotação, fica o costUsd que o n8n mandou (workflow antigo) ou null.
+$fxErrors = [];
+$fxReady = false;
+$fx = new FxRates(auth_db(), (string) ($config['fx']['oer_app_id'] ?? ''));
+try {
+    $fx->load(array_column($rows, 'currency'));
+    $fxErrors = $fx->errors();
+    $fxReady = true;
+} catch (Throwable $error) {
+    error_log('[ads] fx: ' . $error->getMessage());
+    $fxErrors[] = 'Could not read fx_monthly_rates: ' . $error->getMessage();
+}
+$missingFx = 0;
+foreach ($rows as &$row) {
+    $rate = $fxReady || $row['currency'] === 'USD' ? $fx->resolve($row['month'], $row['currency']) : null;
+    if ($rate !== null) {
+        $row['costUsd'] = round($row['cost'] / $rate['units'], 2);
+    } elseif ($row['costUsd'] === null) {
+        $missingFx++;
+    }
+}
+unset($row);
+
 $accounts = [];
 $errors = [];
 foreach ((array) ($data['accounts'] ?? []) as $account) {
@@ -111,8 +136,8 @@ foreach ((array) ($data['accounts'] ?? []) as $account) {
         $errors[] = $label . ': ' . $item['error'];
     }
 }
-if (isset($data['fx']['ok']) && $data['fx']['ok'] === false && !empty($data['fx']['error'])) {
-    $errors[] = 'Exchange rates: ' . (string) $data['fx']['error'];
+if ($missingFx > 0) {
+    $errors[] = 'Exchange rates: ' . ($fxErrors !== [] ? implode(' ', $fxErrors) : "{$missingFx} row(s) without a rate for their month.");
 }
 
 respond(200, [
