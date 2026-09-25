@@ -152,7 +152,8 @@ function asset(string $path): string
                 <article class="panel">
                     <div class="panel-header"><div><p class="eyebrow">Bridge</p><h3 id="summary-bridge-title">Portfolio bridge</h3></div><span class="panel-meta">USD</span></div>
                     <p class="section-copy summary-chart-copy" id="summary-bridge-copy">What came into and left the recurring base in the selected period.</p>
-                    <div class="summary-chart-wrap"><canvas id="summary-bridge-chart"></canvas><div class="chart-empty is-hidden" id="summary-bridge-empty">No data for this period</div></div>
+                    <div class="bridge" id="summary-bridge"></div>
+                    <div class="table-empty is-hidden" id="summary-bridge-empty">No data for this period</div>
                 </article>
             </section>
 
@@ -350,7 +351,7 @@ function asset(string $path): string
                     <div>
                         <p class="eyebrow">Portfolio health</p>
                         <h2>Retention of existing clients</h2>
-                        <p class="section-copy">How much of the base we started the period with is still billing at the end of it.</p>
+                        <p class="section-copy">How much of each month’s recurring base is still billing the month after, per client. Onboarding fees and new clients’ first 4 months are left out.</p>
                     </div>
                     <div class="filter-stack">
                         <div class="scope-tabs" role="tablist" aria-label="Company scope">
@@ -381,14 +382,14 @@ function asset(string $path): string
                     <article class="stat-card is-negative">
                         <span class="stat-label">Churned value</span>
                         <strong id="ret-churned">—</strong>
-                        <p class="stat-note"><span id="ret-churn-rate">—</span> of the initial base · <span id="ret-churn-note">—</span></p>
+                        <p class="stat-note"><span id="ret-churn-rate">—</span> <span id="ret-churn-rate-label">of the initial base</span> · <span id="ret-churn-note">—</span></p>
                         <p class="stat-scope" id="ret-churn-scope" hidden></p>
                         <button type="button" class="stat-link" id="open-churn-modal" aria-haspopup="dialog" aria-controls="churn-modal" hidden>See clients <span aria-hidden="true">→</span></button>
                     </article>
                     <article class="stat-card is-positive">
                         <span class="stat-label">Upsells &amp; cross-sells</span>
                         <strong id="ret-upsells">—</strong>
-                        <p class="stat-note"><span id="ret-expansion-rate">—</span> expansion · <span id="ret-upsell-note">—</span></p>
+                        <p class="stat-note"><span id="ret-expansion-rate">—</span> <span id="ret-expansion-rate-label">expansion</span> · <span id="ret-upsell-note">—</span></p>
                     </article>
                     <article class="stat-card is-neutral">
                         <span class="stat-label">Active clients</span>
@@ -427,7 +428,7 @@ function asset(string $path): string
                     </div>
                     <div class="table-scroll monthly-scroll">
                         <table class="entries-table">
-                            <thead><tr><th>Month</th><th>Market</th><th>Service</th><th class="align-right" title="Final portfolio of the previous month">Initial base</th><th class="align-right">Churned</th><th class="align-right" title="Initial base minus churn">Retained</th><th class="align-right" title="(Initial base − churn) / initial base">Retention</th><th class="align-right">Target</th><th class="align-right">Upsells</th><th class="align-right" title="MRR of the month; becomes next month's initial base">Final portfolio</th><th class="align-right">Clients lost</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
+                            <thead><tr><th>Month</th><th>Market</th><th>Service</th><th class="align-right" title="Final portfolio of the previous month, without onboarding fees">Initial base</th><th class="align-right">Churned</th><th class="align-right" title="Initial base minus churn">Retained</th><th class="align-right" title="(Initial base − churn) / initial base, against the previous month">Retention</th><th class="align-right">Target</th><th class="align-right">Upsells</th><th class="align-right" title="MRR of the month without onboarding fees; becomes next month's initial base">Final portfolio</th><th class="align-right">Clients lost</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
                             <tbody id="retention-entries-table"></tbody>
                         </table>
                         <div class="table-empty is-hidden" id="retention-entries-empty"></div>
@@ -647,6 +648,7 @@ function asset(string $path): string
                         <tr>
                             <th>Client</th>
                             <th>Market</th>
+                            <th>Month</th>
                             <th>Service lost</th>
                             <th class="align-right" id="churn-col-previous">Previous</th>
                             <th class="align-right" id="churn-col-current">Current</th>
@@ -656,14 +658,14 @@ function asset(string $path): string
                     </thead>
                     <tbody id="churn-table"></tbody>
                     <tfoot id="churn-table-total">
-                        <tr><td colspan="5">Total churned</td><td class="align-right mono"><span class="value-down" id="churn-total-value">—</span></td><td></td></tr>
+                        <tr><td colspan="6">Total churned</td><td class="align-right mono"><span class="value-down" id="churn-total-value">—</span></td><td></td></tr>
                     </tfoot>
                 </table>
                 <div class="table-empty is-hidden" id="churn-table-empty">No client lost value in this period.</div>
             </div>
 
             <footer class="modal-footer">
-                <p class="modal-hint">Lost stopped billing entirely; Downgrade still bills, but less in at least one service line. Values in USD.</p>
+                <p class="modal-hint">Lost stopped billing entirely; Downgrade still bills, but less in at least one service line. Each drop is shown in the month it happened, by client total (moving value between service lines is not a drop). Onboarding fees and new clients’ first 4 months are not churn. Values in USD.</p>
                 <div class="modal-actions">
                     <button type="button" class="button-secondary" data-close-modal>Close</button>
                 </div>
