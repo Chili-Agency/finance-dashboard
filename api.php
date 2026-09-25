@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require __DIR__ . '/auth.php';
 require __DIR__ . '/fx-rates.php';
+require __DIR__ . '/snapshots.php';
 auth_require_api();
 
 // true: cada invoice é convertida pela cotação do mês dela (fx_monthly_rates).
@@ -137,6 +138,17 @@ $categoryCounts = ['seo' => 0, 'ppc' => 0, 'others' => 0, 'other' => 0];
 $sourceErrors = [];
 $sourceWarnings = [];
 $sourceSeconds = [];
+$sourceFetchedAt = [];
+
+// Invoices gravadas pela última atualização (snapshot-refresh.php), não mais o webhook ao vivo.
+try {
+    $snapshots = snapshot_read(auth_db(), array_map(static fn (string $key): string => "invoices_{$key}", array_values(array_filter($requested, static fn ($key) => isset($companies[$key])))));
+} catch (Throwable $error) {
+    error_log('[api] snapshots: ' . $error->getMessage());
+    http_response_code(500);
+    echo json_encode(['invoices' => [], 'errors' => ['Could not read the saved invoices (data_snapshots). Check that sql/004_data_snapshots.sql was run.']]);
+    exit;
+}
 
 foreach ($requested as $key) {
     if (!isset($companies[$key])) {
@@ -145,10 +157,19 @@ foreach ($requested as $key) {
     }
 
     $company = $companies[$key];
-    $startedAt = microtime(true);
-    $response = fetchJson($company['url']);
-    $sourceSeconds[$key] = round(microtime(true) - $startedAt, 1);
+    $snapshot = $snapshots["invoices_{$key}"] ?? null;
     $warnings = [];
+    if ($snapshot === null || $snapshot['body'] === null) {
+        $reason = $snapshot !== null && $snapshot['error'] ? " The last attempt failed: {$snapshot['error']}" : '';
+        $response = ['ok' => false, 'error' => 'No saved data yet. Press Refresh to fetch it from n8n.' . $reason];
+    } else {
+        $response = snapshot_decode_invoices($snapshot['body']);
+        $sourceSeconds[$key] = $snapshot['seconds'];
+        $sourceFetchedAt[$key] = $snapshot['fetchedAt'];
+        if ($snapshot['error'] && $snapshot['errorAt'] && $snapshot['errorAt'] > (string) $snapshot['fetchedAt']) {
+            $warnings['refresh'] = 'Last refresh failed, showing the previous data';
+        }
+    }
 
     if (!$response['ok']) {
         $sourceErrors[$key] = $response['error'];
@@ -252,6 +273,7 @@ echo json_encode([
     'sourceErrors' => (object) $sourceErrors,
     'sourceWarnings' => (object) $sourceWarnings,
     'sourceSeconds' => (object) $sourceSeconds,
+    'sourceFetchedAt' => (object) $sourceFetchedAt,
     'sourceTypeCounts' => $sourceTypeCounts,
     'diagnostics' => $diagnostics,
     'categoryCounts' => $categoryCounts,
@@ -607,58 +629,4 @@ function categoryShares(array $lineWeights, array $categoryKeys, ?callable $filt
     }
 
     return $shares;
-}
-
-function fetchJson(string $url): array
-{
-    $curl = curl_init($url);
-    curl_setopt_array($curl, [
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_CUSTOMREQUEST => 'GET',
-        CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_CONNECTTIMEOUT => 10,
-        CURLOPT_TIMEOUT => 120,
-        CURLOPT_HTTPHEADER => ['Accept: application/json'],
-        CURLOPT_USERAGENT => 'Chili Finance Dashboard/1.0',
-    ]);
-
-    $body = curl_exec($curl);
-    $curlError = curl_error($curl);
-    $status = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
-    curl_close($curl);
-
-    if ($body === false || $curlError !== '') {
-        return ['ok' => false, 'error' => 'Request failed: ' . ($curlError ?: 'unknown error')];
-    }
-
-    if ($status < 200 || $status >= 300) {
-        return ['ok' => false, 'error' => "n8n returned HTTP {$status}"];
-    }
-
-    if (trim((string) $body) === '') {
-        return ['ok' => false, 'error' => "empty response body (HTTP {$status})"];
-    }
-
-    $data = json_decode($body, true);
-
-    if (json_last_error() !== JSON_ERROR_NONE) {
-        $snippet = preg_replace('/\s+/', ' ', substr((string) $body, 0, 200));
-        return ['ok' => false, 'error' => "response is not JSON (HTTP {$status}): {$snippet}"];
-    }
-
-    if (!is_array($data)) {
-        return ['ok' => false, 'error' => 'unexpected JSON scalar: ' . var_export($data, true)];
-    }
-
-    $isList = $data === [] || array_keys($data) === range(0, count($data) - 1);
-
-    if (!$isList) {
-        if (isset($data['message']) || isset($data['error'])) {
-            $detail = (string) ($data['message'] ?? $data['error']);
-            return ['ok' => false, 'error' => "n8n error: {$detail}"];
-        }
-        $data = [$data];
-    }
-
-    return ['ok' => true, 'data' => $data];
 }
