@@ -152,7 +152,8 @@ function asset(string $path): string
                 <article class="panel">
                     <div class="panel-header"><div><p class="eyebrow">Bridge</p><h3 id="summary-bridge-title">Portfolio bridge</h3></div><span class="panel-meta">USD</span></div>
                     <p class="section-copy summary-chart-copy" id="summary-bridge-copy">What came into and left the recurring base in the selected period.</p>
-                    <div class="summary-chart-wrap"><canvas id="summary-bridge-chart"></canvas><div class="chart-empty is-hidden" id="summary-bridge-empty">No data for this period</div></div>
+                    <div class="bridge" id="summary-bridge"></div>
+                    <div class="table-empty is-hidden" id="summary-bridge-empty">No data for this period</div>
                 </article>
             </section>
 

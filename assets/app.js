@@ -2858,61 +2858,58 @@ function renderSummaryPlanChart(data) {
     });
 }
 
+// Ponte da base recorrente: as bases do início e do fim como números nas pontas, e as
+// movimentações como barras divergentes a partir de um eixo central (saídas à esquerda,
+// entradas à direita), na escala da maior movimentação. Barras sobre a base inteira deixavam
+// as movimentações achatadas, porque a base é muito maior do que elas.
 function renderSummaryBridgeChart(period) {
-    const canvas = $('#summary-bridge-chart');
+    const root = $('#summary-bridge');
     const empty = $('#summary-bridge-empty');
     setText('#summary-bridge-title', `Recurring base bridge · ${period.label}`);
     setText('#summary-bridge-copy', period.hasData
         ? `From the ${monthLabel(monthFromKey(period.baseMonth))} portfolio to ${monthLabel(monthFromKey(period.endMonth))}: what came into and left the recurring base.`
         : 'What came into and left the recurring base in the selected period.');
-    if (!canvas || typeof Chart === 'undefined') return;
-    const hasData = period.hasData;
-    if (empty) {
-        empty.textContent = 'No data for this period';
-        empty.classList.toggle('is-hidden', hasData);
-    }
-    canvas.classList.toggle('is-hidden', !hasData);
-    if (state.summaryBridgeChart) { state.summaryBridgeChart.destroy(); state.summaryBridgeChart = null; }
-    if (!hasData) return;
+    if (!root) return;
+    if (empty) empty.classList.toggle('is-hidden', period.hasData);
+    root.hidden = !period.hasData;
+    if (!period.hasData) { root.innerHTML = ''; return; }
 
-    // Barras flutuantes [início, fim]: portfólio do mês anterior ao período, o que entrou,
-    // o que saiu e o portfólio do último mês do período.
     const short = (month) => monthLabel(monthFromKey(month));
-    const steps = [];
-    let cursor = Number(period.base) || 0;
-    steps.push({ label: `${short(period.baseMonth)} base`, range: [0, cursor], color: '#3f4944' });
-    [
-        { label: 'New business', value: period.newBusiness, color: '#57745d' },
-        { label: 'Upsells', value: period.upsells, color: '#7fa487' },
-        { label: 'Reactivated', value: period.reactivated > 0 ? period.reactivated : null, color: '#9dbba3' },
-        { label: 'Churn', value: hasValue(period.churned) ? -period.churned : null, color: colors.authorised },
-        { label: 'Onboarding fees', value: Math.abs(Number(period.onboarding) || 0) >= 1 ? period.onboarding : null, color: '#c9b98f' },
-        { label: 'Other changes', value: period.other || null, color: '#b3b1a8' },
-    ].forEach((step) => {
-        if (!hasValue(step.value)) return;
-        const next = cursor + Number(step.value);
-        steps.push({ label: step.label, range: [cursor, next], color: step.color, delta: Number(step.value) });
-        cursor = next;
-    });
-    steps.push({ label: `${short(period.endMonth)} base`, range: [0, Number(period.end) || 0], color: '#3f4944' });
+    const base = Number(period.base) || 0;
+    const end = Number(period.end) || 0;
+    const net = end - base;
+    const netRate = base ? net / base : null;
+    const optional = (value) => (Math.abs(Number(value) || 0) >= 1 ? Number(value) : null);
+    const flows = [
+        { label: 'New business', hint: 'New clients, including their setup months', value: Number(period.newBusiness) || 0 },
+        { label: 'Upsells', hint: 'Existing clients billing more', value: Number(period.upsells) || 0 },
+        { label: 'Reactivated', hint: 'Clients back after a gap', value: optional(period.reactivated) },
+        { label: 'Churn', hint: 'Lost clients and downgrades', value: hasValue(period.churned) ? -Number(period.churned) : 0 },
+        { label: 'Onboarding fees', hint: 'One-off fees starting or ending', value: optional(period.onboarding), adjust: true },
+        { label: 'Other changes', hint: 'Not tied to a service line', value: optional(period.other), adjust: true },
+    ].filter((flow) => flow.value !== null);
+    const scale = Math.max(...flows.map((flow) => Math.abs(flow.value)), 1);
+    const tone = (value) => (value > 0.5 ? 'is-up' : value < -0.5 ? 'is-down' : 'is-flat');
 
-    state.summaryBridgeChart = new Chart(canvas, {
-        type: 'bar',
-        data: {
-            labels: steps.map((step) => step.label),
-            datasets: [{ label: 'USD', data: steps.map((step) => step.range), backgroundColor: steps.map((step) => step.color), borderWidth: 0, maxBarThickness: 64 }],
-        },
-        options: {
-            ...summaryChartOptions(),
-            plugins: {
-                legend: { display: false },
-                tooltip: { callbacks: { label: (item) => {
-                    const step = steps[item.dataIndex];
-                    return hasValue(step.delta) ? signedMoney(step.delta) : money(step.range[1]);
-                } } },
-            },
-        },
-    });
+    const rows = flows.map((flow) => {
+        const width = Math.abs(flow.value) >= 0.5 ? Math.max((Math.abs(flow.value) / scale) * 50, 0.6) : 0;
+        return `<li class="bridge-row ${tone(flow.value)}${flow.adjust ? ' is-adjust' : ''}">
+            <span class="bridge-label">${escapeHtml(flow.label)}<small>${escapeHtml(flow.hint)}</small></span>
+            <span class="bridge-track" aria-hidden="true">${width ? `<span class="bridge-bar" style="width:${width.toFixed(2)}%"></span>` : ''}</span>
+            <span class="bridge-value">${signedMoney(flow.value)}</span>
+        </li>`;
+    }).join('');
+
+    root.innerHTML = `
+        <div class="bridge-ends">
+            <div class="bridge-end"><span>${escapeHtml(short(period.baseMonth))} base</span><strong>${money(base)}</strong></div>
+            <div class="bridge-link" aria-hidden="true"></div>
+            <div class="bridge-net ${tone(net)}"><span>Net change</span><strong>${signedMoney(net)}</strong><small>${hasValue(netRate) ? `${netRate > 0 ? '+' : netRate < 0 ? '−' : ''}${Math.abs(netRate * 100).toFixed(1)}%` : DASH}</small></div>
+            <div class="bridge-link is-to" aria-hidden="true"></div>
+            <div class="bridge-end is-end"><span>${escapeHtml(short(period.endMonth))} base</span><strong>${money(end)}</strong></div>
+        </div>
+        <div class="bridge-axis" aria-hidden="true"><span></span><span class="bridge-axis-labels"><em>Left the base</em><em>Came in</em></span><span></span></div>
+        <ul class="bridge-rows">${rows}</ul>`;
 }
 
 function summaryChartOptions() {
