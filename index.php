@@ -18,6 +18,7 @@ function asset(string $path): string
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f4f1eb">
+    <meta name="csrf-token" content="<?= htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') ?>">
     <title>Chili Finance</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -47,7 +48,7 @@ function asset(string $path): string
                 <div class="sync-card" id="sync-card" data-state="loading" role="status" aria-live="polite">
                     <div class="sync-head">
                         <span class="sync-dot" aria-hidden="true"></span>
-                        <div><strong id="sync-status">Loading data…</strong><small id="sync-time">Contacting the n8n workflows</small></div>
+                        <div><strong id="sync-status">Loading data…</strong><small id="sync-time">Reading the saved data</small></div>
                     </div>
                     <ul class="sync-sources" id="sync-sources"></ul>
                 </div>
@@ -88,7 +89,7 @@ function asset(string $path): string
                         <label><span>To</span><input type="date" id="date-to"></label>
                         <button class="apply-button" id="apply-date-filter">Apply</button>
                     </div>
-                    <button class="refresh-button" id="refresh-button" title="Refresh invoice data"><span>↻</span> Refresh</button>
+                    <button class="refresh-button" id="refresh-button" title="Fetch the latest invoices and ads from Xero, Google and Meta"><span>↻</span> Refresh</button>
                 </div>
             </header>
 

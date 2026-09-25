@@ -1,7 +1,6 @@
 const state = { invoices: [], sourceTypeCounts: {}, categoryCounts: {}, scope: 'all', category: 'all', period: 'current', customStart: '', customEnd: '', statusChart: null, mrrChart: null };
 const companyLabels = { br: 'Brazil', mx: 'Mexico', pa: 'Panama', int: 'International' };
 const categoryLabels = { seo: 'SEO', ppc: 'PPC', others: 'Others' };
-// Serviços agrupados em Others (api.php › $otherServiceRules), na ordem de prioridade.
 const otherServiceLabels = { smm: 'SMM', marketing: 'Marketing', webdev: 'Web dev' };
 const colors = { paid: '#57745d', late: '#d49b35', open: '#55778a', authorised: '#e84d2c', voided: '#a5a6a0' };
 
@@ -49,8 +48,6 @@ function inCategory(invoice) { return state.category === 'all' || categoryShare(
 function otherServicesOf(invoice) {
     return (invoice.otherServices || []).filter((key) => otherServiceLabels[key]);
 }
-// Célula "Service" das tabelas quando o filtro é Others: o serviço específico e, se a
-// fatura mistura mais de um, a fatia de cada um dentro da parte Others.
 function otherServiceCell(invoice) {
     const services = otherServicesOf(invoice);
     if (!services.length) return `<td class="service-col">${DASH}</td>`;
@@ -63,7 +60,6 @@ function otherServiceCell(invoice) {
     return `<td class="service-col">${pills}</td>`;
 }
 function categoryTag(invoice) {
-    // Others aparece pelo nome do serviço (ex.: "SEO + SMM"), não pelo nome do grupo.
     const list = (invoice.categories || []).flatMap((key) => {
         if (key !== 'others') return [categoryLabels[key]];
         const services = otherServicesOf(invoice).map((service) => otherServiceLabels[service]);
@@ -120,7 +116,7 @@ function invoiceBucket(invoice) {
     return 'open';
 }
 
-const STALE_AFTER_MINUTES = 30;
+const STALE_AFTER_MINUTES = 17 * 24 * 60;
 state.sync = { phase: 'loading', startedAt: Date.now(), finishedAt: null, sources: {}, error: null };
 
 function shortReason(message) {
@@ -156,23 +152,26 @@ function syncSummary() {
     const warned = keys.filter((key) => !sync.sources[key]?.error && sync.sources[key]?.warnings?.length);
     const elapsed = Math.round((Date.now() - sync.startedAt) / 1000);
 
+    if (sync.phase === 'refreshing') {
+        return { tone: 'loading', title: 'Fetching new data…', detail: `Asking n8n for invoices from ${keys.length} Xero companies and ads · ${elapsed}s` };
+    }
     if (sync.phase === 'loading') {
-        return { tone: 'loading', title: sync.finishedAt ? 'Refreshing…' : 'Loading data…', detail: `Asking n8n for invoices from ${keys.length} Xero companies · ${elapsed}s` };
+        return { tone: 'loading', title: 'Loading data…', detail: 'Reading the saved data' };
     }
     if (sync.phase === 'failed') {
         return sync.finishedAt
-            ? { tone: 'error', title: 'Refresh failed', detail: `Still showing data from ${relativeTime(sync.finishedAt)}. ${shortReason(sync.error)}.` }
+            ? { tone: 'error', title: 'Refresh failed', detail: `Still showing data fetched ${relativeTime(sync.dataAt || sync.finishedAt)}. ${shortReason(sync.error)}.` }
             : { tone: 'error', title: 'No connection', detail: `Could not load invoices (${shortReason(sync.error)}). Press Refresh to try again.` };
     }
     if (failed.length === keys.length) {
-        return { tone: 'error', title: 'No data received', detail: 'None of the n8n workflows answered. Press Refresh to try again.' };
+        return { tone: 'error', title: 'No data yet', detail: 'Nothing saved for any company. Press Refresh to fetch it from n8n.' };
     }
-    const updated = `${plural(state.invoices.length, 'invoice')} · updated ${relativeTime(sync.finishedAt)}`;
+    const updated = `${plural(state.invoices.length, 'invoice')} · fetched ${relativeTime(sync.dataAt || sync.finishedAt)}`;
     if (failed.length) {
         return { tone: 'partial', title: `${keys.length - failed.length} of ${keys.length} companies loaded`, detail: `${listNames(failed.map((key) => companyLabels[key]))} missing from totals · ${updated}` };
     }
-    if ((Date.now() - sync.finishedAt) / 60000 > STALE_AFTER_MINUTES) {
-        return { tone: 'stale', title: 'Data may be outdated', detail: `Last updated ${relativeTime(sync.finishedAt)}. Press Refresh for the latest invoices.` };
+    if ((Date.now() - (sync.dataAt || sync.finishedAt)) / 60000 > STALE_AFTER_MINUTES) {
+        return { tone: 'stale', title: 'Data may be outdated', detail: `Last fetched ${relativeTime(sync.dataAt)}. Press Refresh for the latest invoices.` };
     }
     return { tone: warned.length ? 'warn' : 'ok', title: 'All companies up to date', detail: warned.length ? `${updated} · check the flagged ${warned.length === 1 ? 'company' : 'companies'}` : updated };
 }
@@ -197,7 +196,7 @@ function renderSyncStatus() {
             tone: warnings.length ? 'warn' : 'ok',
             value: number(source.count),
             note: warnings[0] || '',
-            title: [`${plural(source.count, 'invoice')}${hasValue(source.seconds) ? ` in ${source.seconds}s` : ''}`, ...warnings].join(' · '),
+            title: [`${plural(source.count, 'invoice')}${source.fetchedAt ? `, fetched ${new Date(source.fetchedAt).toLocaleString()}` : ''}${hasValue(source.seconds) ? ` in ${source.seconds}s` : ''}`, ...warnings].join(' · '),
         };
     });
     const targetsStatus = state.targetInputsStatus;
@@ -255,8 +254,11 @@ async function loadInvoices() {
                 error: sourceErrors[key] || (legacy ? legacy.slice(companyLabels[key].length + 1).trim() : null),
                 warnings: (data.sourceWarnings || {})[key] || [],
                 seconds: (data.sourceSeconds || {})[key],
+                fetchedAt: (data.sourceFetchedAt || {})[key] || null,
             };
         });
+        const fetchedTimes = Object.values(state.sync.sources).map((source) => Date.parse(source.fetchedAt || '')).filter(Number.isFinite);
+        state.sync.dataAt = fetchedTimes.length ? Math.min(...fetchedTimes) : null;
         state.sync.phase = 'done';
         state.sync.error = null;
         state.sync.finishedAt = Date.now();
@@ -294,12 +296,11 @@ async function loadInvoices() {
     }
 }
 
-setInterval(() => { if (state.sync.phase === 'loading' || state.sync.finishedAt) renderSyncStatus(); }, 1000);
+setInterval(() => { if (state.sync.phase === 'loading' || state.sync.phase === 'refreshing' || state.sync.finishedAt) renderSyncStatus(); }, 1000);
 
 function renderMetrics(invoices) {
     const totals = { paid: 0, late: 0, open: 0, paidCount: 0, lateCount: 0, openCount: 0 };
     invoices.forEach((invoice) => { const bucket = invoiceBucket(invoice); if (bucket === 'paid') { totals.paid += amount(invoice); totals.paidCount++; } if (bucket === 'late') { totals.late += amount(invoice); totals.lateCount++; } if (bucket === 'open') { totals.open += amount(invoice); totals.openCount++; } });
-    // O card de atrasados usa a mesma regra da aba Late invoices: saldo em aberto, vencido hoje, qualquer data de emissão.
     const overdue = lateInvoices();
     const overdueCount = overdue.length;
     $('#paid-total').textContent = money(totals.paid); $('#late-total').textContent = money(overdue.reduce((sum, item) => sum + item.balance, 0)); $('#open-total').textContent = money(totals.open);
@@ -420,7 +421,36 @@ $('#apply-date-filter').addEventListener('click', () => {
     $('#error-notice').classList.add('is-hidden');
     renderAll();
 });
-$('#refresh-button').addEventListener('click', () => { loadInvoices(); if (typeof loadAds === 'function') loadAds(); });
+async function refreshData() {
+    if (state.sync.inFlight) return;
+    state.sync.phase = 'refreshing';
+    state.sync.inFlight = true;
+    state.sync.startedAt = Date.now();
+    $('#refresh-button').disabled = true;
+    renderSyncStatus();
+    let problem = null;
+    try {
+        const response = redirectIfSignedOut(await fetch('snapshot-refresh.php', {
+            method: 'POST',
+            cache: 'no-store',
+            headers: { 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
+        }));
+        const body = await response.json().catch(() => null);
+        if (!response.ok) problem = body && (body.errors?.length ? body.errors.join(' · ') : body.error) || `The server answered HTTP ${response.status}`;
+    } catch (error) {
+        problem = error.message;
+    }
+    state.sync.inFlight = false;
+    await Promise.all([loadInvoices(), typeof loadAds === 'function' ? loadAds() : null]);
+    if (problem) {
+        const notice = $('#error-notice');
+        notice.classList.remove('is-info');
+        notice.textContent = `Part of the refresh failed, so some figures still use the previous data. ${problem}`;
+        notice.classList.remove('is-hidden');
+    }
+}
+
+$('#refresh-button').addEventListener('click', refreshData);
 document.querySelectorAll('.scope-tab').forEach((button) => button.addEventListener('click', () => { state.scope = button.dataset.scope; document.querySelectorAll('.scope-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.scope === state.scope)); renderAll(); }));
 document.querySelectorAll('.category-tab').forEach((button) => button.addEventListener('click', () => { state.category = button.dataset.category; document.querySelectorAll('.category-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.category === state.category)); renderAll(); }));
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => { document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('is-active')); button.classList.add('is-active'); document.querySelectorAll('.view').forEach((view) => view.classList.remove('is-visible')); $(`#${button.dataset.view}-view`).classList.add('is-visible'); $('#page-title').textContent = button.dataset.title || button.textContent.trim(); }));
@@ -522,7 +552,6 @@ const plural = (count, word) => `${number(count)} ${count === 1 ? word : /[^aeio
 
 function setText(selector, value) { const node = $(selector); if (node) node.textContent = value; }
 
-
 function contactKey(invoice) { return invoice.Contact?.ContactID || invoice.Contact?.Name || 'unknown-contact'; }
 function isBillable(invoice) { return isRevenue(invoice) && !EXCLUDED_STATUSES.includes(normalStatus(invoice)); }
 function inScopeBillable() { return state.invoices.filter((invoice) => isBillable(invoice) && (state.scope === 'all' || invoice.companyKey === state.scope)); }
@@ -534,8 +563,6 @@ function lineAmount(invoice, line) {
     if (!shares) return line === 'other' ? fullAmount(invoice) : 0;
     return fullAmount(invoice) * (Number(shares[line]) || 0);
 }
-// Onboarding fee (primeiras parcelas de um cliente) não é receita recorrente: a retenção usa
-// só o valor recorrente, para o fim da fee não aparecer como downgrade. O Total MRR não muda.
 function onboardingLineAmount(invoice, line) {
     const share = Number(invoice.onboardingShares?.[line]) || 0;
     return share ? fullAmount(invoice) * share : 0;
@@ -549,11 +576,6 @@ function onboardingAmount(invoice) {
     return share ? fullAmount(invoice) * share : 0;
 }
 function recurringAmount(invoice) { return amount(invoice) - onboardingAmount(invoice); }
-// Período de implantação: nos primeiros meses de um cliente novo o valor varia por contrato
-// (onboarding fee diluída nas 3 primeiras parcelas, serviços entrando em meses diferentes,
-// meses pagos adiantados). As mudanças do 2º ao 4º mês (1→2, 2→3, 3→4) não são churn nem
-// upsell: entram como novo negócio. O cliente passa a contar na retenção a partir do 5º mês.
-// Exceção: quem para de faturar nesse período e não volta mais continua sendo churn (Lost).
 const SETUP_MONTHS = 3;
 const monthsApart = (from, to) => (to.getFullYear() - from.getFullYear()) * 12 + to.getMonth() - from.getMonth();
 function upsellAmount(invoice, line) {
@@ -599,7 +621,6 @@ function scorecardWindows(invoices) {
         label = monthLabel(start);
     }
 
-    // Sem início e fim (ex.: "All available"), a comparação usa só o último mês com invoices.
     const current = { start, end, label, latestOnly: !bounds.start || !bounds.end };
     const previous = previousWindowOf(current);
     return { current, previous, beforePrevious: previousWindowOf(previous) };
@@ -637,8 +658,6 @@ function monthlyHistory(invoices, until) {
     }));
 }
 
-// Dados pré-calculados de um recorte (mercado + serviço): usados pelo scorecard e pelas tabelas mensais.
-// Depende de state.scope / state.category, como o resto do scorecard.
 function metricContext(invoices) {
     const everyLine = inScopeBillable();
     const byMonth = groupByMonth(invoices);
@@ -661,18 +680,15 @@ function metricContext(invoices) {
     return { invoices, everyLine, byMonth, everyByMonth, firstSeen, billedMonths, lastBilled, datasetStart };
 }
 
-// Cliente novo ainda em implantação no mês `month`? (ver SETUP_MONTHS)
 function isInSetup(ctx, key, month) {
     const first = ctx.firstSeen.get(key);
     if (!first || !ctx.datasetStart) return false;
     const firstMonth = new Date(first.getFullYear(), first.getMonth(), 1);
-    // Quem já fatura no primeiro mês dos dados pode ser cliente antigo: não dá para saber o início.
     if (monthKey(firstMonth) <= monthKey(ctx.datasetStart)) return false;
     const index = monthsApart(firstMonth, month);
     return index >= 1 && index <= SETUP_MONTHS;
 }
 
-// Parou de faturar neste mês e não voltou em nenhum mês seguinte (até o fim dos dados)?
 function stoppedForGood(ctx, key, month) {
     const last = ctx.lastBilled.get(key);
     return !last || last < monthKey(month);
@@ -690,7 +706,6 @@ function groupByMonth(invoices) {
     return map;
 }
 
-// Mês fechado usa o índice por mês; janelas personalizadas filtram a lista inteira.
 function invoicesInWindow(list, buckets, window) {
     if (isCalendarMonth(window.start, window.end)) return buckets.get(monthKey(window.start)) || [];
     return list.filter((invoice) => inWindow(invoiceDate(invoice), window));
@@ -723,18 +738,13 @@ function measureWindow(ctx, windows, meta) {
         : meta.markedFirstMonth > 0 ? 'marker'
             : historyAvailable ? 'history' : 'unavailable';
 
-    // Portfólio inicial = portfólio final (recorrente) do período anterior: o MRR do mês
-    // anterior sem as onboarding fees e sem clientes em implantação.
     let initial = previous.reduce((sum, invoice) => sum + recurringAmount(invoice), 0);
     const onboardingInBase = previous.reduce((sum, invoice) => sum + onboardingAmount(invoice), 0);
     const month = windows.current.start;
     const monthly = isCalendarMonth(windows.current.start, windows.current.end);
     let churned = 0;
     let expansion = 0;
-    // Variação das onboarding fees de clientes da base (negativa quando a fee acaba). Fica fora
-    // do churn; só serve para a ponte do Overview fechar com o MRR.
     let onboardingChange = 0;
-    // Variação de clientes em implantação (entra como novo negócio na ponte).
     let setupChange = 0;
     const setupClients = new Set();
     const churnedClients = meta.collectClients ? [] : null;
@@ -758,8 +768,6 @@ function measureWindow(ctx, windows, meta) {
         });
         const lost = beforeTotal > 0 && Math.abs(afterTotal) < 0.005;
 
-        // Cliente em implantação: fica fora da retenção (base, churn e upsell), salvo se parou
-        // de faturar de vez.
         if (monthly && isInSetup(ctx, key, month) && !(lost && stoppedForGood(ctx, key, month))) {
             initial -= beforeTotal;
             setupChange += afterTotal - beforeTotal;
@@ -767,8 +775,6 @@ function measureWindow(ctx, windows, meta) {
             return;
         }
 
-        // Churn e upsell pelo total do cliente, não por linha de serviço: se o valor só mudou de
-        // linha (SEO → Unclassified, WEB → SEO + PPC), o total não caiu e não é downgrade.
         const delta = afterTotal - beforeTotal;
         const up = Math.max(delta, 0, tagged);
         const clientChurn = up - delta;
@@ -789,7 +795,6 @@ function measureWindow(ctx, windows, meta) {
     currentByContact.forEach((value, key) => {
         if (baseContacts.has(key)) return;
         if (newContacts.has(key)) { newBusiness += value; meta.newClients += 1; return; }
-        // Volta dentro da implantação (ex.: meses pagos adiantados): não é reativação.
         if (monthly && isInSetup(ctx, key, month)) { setupChange += value; setupClients.add(key); return; }
         reactivated += value;
     });
@@ -803,7 +808,6 @@ function measureWindow(ctx, windows, meta) {
         initial,
         churned,
         expansion,
-        // Retenção = (portfólio inicial − churn) / portfólio inicial. Upsells ficam de fora.
         retained: initial - churned,
         onboardingInBase,
         onboardingChange,
@@ -812,17 +816,11 @@ function measureWindow(ctx, windows, meta) {
         newBusiness,
         reactivated,
         totalMrr: current.reduce((sum, invoice) => sum + amount(invoice), 0),
-        // Portfólio final da retenção: MRR sem onboarding fees (vira o inicial do mês seguinte).
         recurringMrr: current.reduce((sum, invoice) => sum + recurringAmount(invoice), 0),
         invoiceCount: current.length,
     };
 }
 
-// Retenção do período do seletor, sempre mês contra o mês anterior. Num mês só, é a
-// comparação com o mês anterior. Em vários meses, cada mês é medido contra o anterior e a
-// taxa do período é a média desses meses ponderada pela base (Σ retido / Σ base inicial);
-// churn e upsells em dólar são a soma dos meses (mesma regra da ponte do Overview).
-// Datas personalizadas que não começam no dia 1 entram pelo mês inteiro.
 function retentionOverWindow(ctx, window) {
     const lastBilled = [...ctx.byMonth.keys()].sort().pop();
     let months = monthKeysBetween(window.start, window.end);
@@ -852,20 +850,16 @@ function retentionOverWindow(ctx, window) {
         if (m.hasBase && m.initial > 0) {
             monthly.push({ key, label: current.label, initial: m.initial, churned: m.churned, expansion: m.expansion, retained: m.retained, rate: share(m.retained, m.initial) });
         }
-        // Cada queda é um evento do mês em que aconteceu (mês contra o anterior), com os
-        // valores desses dois meses. Um cliente pode ter um downgrade num mês e sair em outro.
         (meta.churnedClients || []).forEach((item) => events.push({ ...item, month: key }));
         setupMonths.push({ clients: meta.setupClients, change: m.setupChange });
     });
 
-    // Clientes que pararam de faturar e voltaram até o fim do período.
     const endTotals = totalsByContact(invoicesInWindow(ctx.invoices, ctx.byMonth, endWindow));
     const endKey = monthKey(endWindow.start);
     const churnedClients = describeChurnedClients(events, ctx, { current: endWindow })
         .map((item) => ({ ...item, returned: item.lost && item.month < endKey && Math.abs(endTotals.get(item.key) || 0) >= 0.005 }))
         .sort((a, b) => b.month.localeCompare(a.month) || b.churned - a.churned || a.name.localeCompare(b.name));
 
-    // Taxa ponderada pela base de cada mês: meses com base maior pesam mais.
     const pooled = (field) => monthly.reduce((sum, row) => sum + row[field], 0);
     const pooledInitial = pooled('initial');
     const rate = pooledInitial > 0 ? pooled('retained') / pooledInitial : null;
@@ -942,9 +936,6 @@ function buildScorecard() {
     meta.previousLabel = retention.baseLabel;
     meta.retentionEndLabel = retention.endLabel;
     meta.retentionMonths = retention.months;
-    // Downgrade é um evento do mês: só aparece quando o período escolhido contém esse mês.
-    // Em "All available" nenhum mês foi escolhido (a comparação usa o último mês com
-    // invoices), então os downgrades ficam fora da lista; o valor continua no churn do card.
     const hiddenDowngrades = meta.latestOnly ? retention.churnedClients.filter((item) => !item.lost) : [];
     meta.churnedClients = meta.latestOnly ? retention.churnedClients.filter((item) => item.lost) : retention.churnedClients;
     meta.hiddenDowngrades = hiddenDowngrades.length
@@ -1019,7 +1010,6 @@ function targetBlock({ caption, value, target, note, lowerIsBetter = false, form
 function renderRetentionSection() {
     const data = state.scorecard.retention || {};
     const meta = state.scorecardMeta || {};
-    // Retido = portfólio inicial − churn (upsells não entram na retenção).
     const retained = hasValue(data.retained)
         ? Number(data.retained)
         : hasValue(data.initialPortfolio) && hasValue(data.churned)
@@ -1028,7 +1018,6 @@ function renderRetentionSection() {
     const onboardingNote = meta.onboardingInBase > 0.005 ? ` · ${money(meta.onboardingInBase)} of onboarding fees left out` : '';
     const baseHint = `${meta.previousLabel ? `Final portfolio of ${meta.previousLabel}` : 'Final portfolio of the previous month'}${onboardingNote}`;
     const summed = !meta.latestOnly && meta.retentionMonths > 1;
-    // Taxas sempre mês contra o mês anterior; em vários meses, a média ponderada pela base.
     const churnRate = hasValue(data.churnRate) ? data.churnRate : share(data.churned, data.initialPortfolio);
     const expansionRate = hasValue(data.expansionRate) ? data.expansionRate : share(data.upsells, data.initialPortfolio);
 
@@ -1074,8 +1063,6 @@ function renderRetentionSection() {
         </div>
     `).join('');
 
-    // Retenção = (portfólio inicial − churn) / portfólio inicial, sempre contra o mês anterior.
-    // Em vários meses: média dos meses ponderada pela base (Σ retido / Σ base inicial).
     const retentionRate = hasValue(data.rate) ? data.rate : share(retained, data.initialPortfolio);
     const netRate = hasValue(data.netRate) ? data.netRate : hasValue(retained) ? share(retained + Number(data.upsells || 0), data.initialPortfolio) : null;
     const monthly = Array.isArray(meta.retentionMonthly) ? meta.retentionMonthly : [];
@@ -1102,9 +1089,6 @@ function upsellNote(meta) {
     return parts.length ? parts.join(' · ') : 'Measured by value change';
 }
 
-// ---- Clientes que geraram churn no período (modal do card "Churned value") ----
-// Mesma regra do card: cliente da base do período anterior cuja receita caiu em alguma
-// linha de serviço. "Lost" parou de faturar por completo; "Downgrade" continua, mas menor.
 const SERVICE_LINE_LABELS = { ...categoryLabels, other: 'Unclassified' };
 
 function describeChurnedClients(list, ctx, windows) {
@@ -1128,7 +1112,6 @@ const churnModal = $('#churn-modal');
 
 function renderChurnModal() {
     const meta = state.scorecardMeta || {};
-    // Uma linha por queda: cliente × mês em que ela aconteceu (mês contra o anterior).
     const events = Array.isArray(meta.churnedClients) ? meta.churnedClients : [];
     const total = events.reduce((sum, item) => sum + item.churned, 0);
     const clientCount = new Set(events.map((item) => item.key)).size;
@@ -1377,8 +1360,6 @@ function selectedSingleMonth() {
     return start && end && isCalendarMonth(start, end) ? start : null;
 }
 
-// COGS e margem de um mês. Cascata igual à dos targets:
-// 1) lançamento exato; 2) soma de SEO + PPC do mesmo mercado; 3) na visão Global, soma dos mercados.
 function marginEntryFor(month, invoices, scope = state.scope, category = state.category) {
     const exact = state.marginInputs[marginInputKey(month, scope, category)];
     if (exact) return exact;
@@ -1397,7 +1378,6 @@ function marginEntryFor(month, invoices, scope = state.scope, category = state.c
     return null;
 }
 
-// Receita faturada de uma parte (mercado + serviço) no mês: é o peso das margens.
 function marginPartRevenue(monthInvoices, part) {
     return monthInvoices.reduce((total, invoice) => {
         if (part.scope !== 'all' && invoice.companyKey !== part.scope) return total;
@@ -1995,11 +1975,6 @@ targetsForm.addEventListener('submit', async (event) => {
     }
 });
 
-// ---- Tabelas mensais (MRR, Retention, Targets) ----
-// Uma linha por mês × mercado × serviço, calculada a partir das invoices,
-// com a mesma lógica do scorecard. O resultado fica em cache até as
-// invoices ou os targets mudarem.
-
 state.monthlyRows = null;
 state.monthlyModes = { mrr: 'all', retention: 'all', targets: 'all' };
 
@@ -2073,7 +2048,6 @@ function buildMonthlyRows() {
                     churned: m.hasBase ? m.churned : null,
                     upsells: m.hasBase ? m.expansion : null,
                     retained: m.hasBase ? m.retained : null,
-                    // Portfólio final do mês = MRR do mês sem onboarding fees; é o inicial do mês seguinte.
                     final: m.recurringMrr,
                     onboardingChange: m.hasBase ? m.onboardingChange : null,
                     setupChange: m.setupChange,
@@ -2213,17 +2187,6 @@ Object.entries(MONTHLY_TABLES).forEach(([name, config]) => {
     });
 });
 
-// ---- Late invoices ----
-// Encargos por atraso.
-// Brasil: regra fixa do contrato, definida abaixo.
-// México, Panamá e International: vêm da tabela late_charge_rules (botão "Edit rates" na aba).
-// Mercado sem taxa salva não tem encargo aplicado, e a aba avisa.
-//   lateFee          multa única sobre o saldo em aberto (0.02 = 2%)
-//   monthlyInterest  juros simples ao mês, pro rata por dia, contados desde o vencimento (0.01 = 1% a.m.)
-//   graceDays        dias de carência: até aqui, nenhum encargo é cobrado
-// Um mercado sem entrada própria usa o "default".
-//   correction       índices de correção monetária; com mais de um, vale o maior acumulado no atraso
-// Ordem: o saldo é corrigido primeiro; multa e juros incidem sobre o saldo corrigido.
 const LATE_CHARGE_RULES = {
     default: { lateFee: 0, monthlyInterest: 0, graceDays: 0, correction: [] },
     br: { lateFee: 0.10, monthlyInterest: 0.01, graceDays: 0, correction: ['igpm', 'ipca'] },
@@ -2263,7 +2226,6 @@ function lateRuleLabel(rule) {
     return rule.graceDays ? `${label} after ${plural(rule.graceDays, 'day')}` : label;
 }
 
-// Saldo em aberto em USD (já considera pagamentos parciais), na fatia do serviço selecionado.
 function outstandingUsd(invoice) {
     const usd = invoice.amounts_usd;
     const converted = usd && usd.AmountDue !== null && usd.AmountDue !== undefined && Number.isFinite(Number(usd.AmountDue))
@@ -2283,8 +2245,6 @@ function originalBalance(invoice) {
     }
 }
 
-// Fator acumulado de um índice entre o vencimento e hoje, pro rata die dentro de cada mês.
-// Meses ainda sem índice publicado entram como zero e são sinalizados.
 function indexFactor(series, from, to) {
     let factor = 1;
     let pending = false;
@@ -2308,7 +2268,6 @@ function correctionFor(rule, due, today) {
         .map((key) => ({ key, ...indexFactor(state.brIndices.series[key], due, today) }));
     if (!options.length) return { factor: 1, index: null, pending: false, unavailable: true };
     const best = options.reduce((top, option) => (option.factor > top.factor ? option : top));
-    // Deflação não reduz a dívida: sem correção negativa.
     return {
         factor: Math.max(1, best.factor),
         index: best.factor > 1 ? INDEX_LABELS[best.key] : null,
@@ -2481,7 +2440,6 @@ function renderLate() {
     empty.classList.toggle('is-hidden', items.length > 0);
 }
 
-// Por mercado sempre mostra os quatro, mesmo com um mercado selecionado (os outros ficam apagados).
 function lateInvoicesByMarket(itemsInView) {
     if (state.scope === 'all') {
         return itemsInView.reduce((map, item) => {
@@ -2493,11 +2451,6 @@ function lateInvoicesByMarket(itemsInView) {
     }
     return withView('all', state.category, () => lateInvoicesByMarket(lateInvoices()));
 }
-
-// ---- Overview ----
-// Plano contra realizado do ano selecionado, numa tela só.
-// Tudo vem das linhas mensais (buildMonthlyRows) e dos inputs manuais de COGS/margem,
-// então os números batem com as abas de origem.
 
 state.summaryPlanChart = null;
 state.summaryBridgeChart = null;
@@ -2557,7 +2510,6 @@ function summaryData() {
         };
     });
 
-    // O ano "até agora": vai até o último mês com receita registrada.
     let lastIndex = -1;
     months.forEach((entry, index) => { if (hasValue(entry.actual) && entry.actual > 0) lastIndex = index; });
     const elapsed = lastIndex >= 0 ? months.slice(0, lastIndex + 1) : [];
@@ -2571,9 +2523,6 @@ function summaryData() {
     const revenue = totalOf('actual');
     const cogs = totalOf('cogs');
 
-    // Custo e margem só fecham nos meses com COGS lançado. O mês corrente costuma ter
-    // receita antes de ter COGS: somar a receita ou o orçamento dele inflaria a margem
-    // acumulada e a sobra de orçamento.
     const costed = elapsed.filter((entry) => hasValue(entry.cogs));
     const sumOver = (rows, field) => {
         const filled = rows.filter((entry) => hasValue(entry[field]));
@@ -2598,10 +2547,8 @@ function summaryData() {
             churned: totalOf('churned'),
             upsells: totalOf('upsells'),
             cogs,
-            // Orçamento comparável: só dos meses que já têm COGS.
             cogsTarget: sumOver(costed, 'cogsTarget'),
             bonusPool: totalOf('bonusPool'),
-            // Margem do ano pela receita e pelo COGS acumulados dos mesmos meses, não pela média das margens mensais.
             margin: hasValue(costedRevenue) && hasValue(cogs) && costedRevenue !== 0 ? (costedRevenue - cogs) / costedRevenue : null,
         },
     };
@@ -2642,7 +2589,6 @@ function renderOverview() {
             ? `${plural(latest.clients, 'client')} active${data.firstWithClients && data.firstWithClients !== latest ? `, from ${number(data.firstWithClients.clients)} in ${monthOf(data.firstWithClients)}` : ''}`
             : DASH,
     });
-    // Último mês com margem, que pode ser anterior ao último mês com receita.
     const marginMonth = data.latestMargin;
     const pending = marginMonth && latest && marginMonth !== latest ? ` · ${monthOf(latest)} has no COGS yet` : '';
     summaryCard('margin', {
@@ -2693,7 +2639,6 @@ function renderSummaryMatrix(data) {
     note.dataset.tone = missing.length ? 'sample' : 'muted';
 }
 
-// Verde acima da meta, vermelho abaixo; para COGS a lógica se inverte.
 function summaryTone(row, entry) {
     if (!row.tone) return '';
     const pairs = { ratio: [entry.attainment, 1], retention: [entry.retention, entry.retentionTarget], margin: [entry.margin, entry.marginTarget], cogs: [entry.cogsTarget, entry.cogs] };
@@ -2702,10 +2647,6 @@ function summaryTone(row, entry) {
     return Number(value) >= Number(reference) ? 'cell-up' : 'cell-down';
 }
 
-// ---- Health e ponte da base recorrente: seguem o período do seletor ----
-// Os dois blocos usam os meses (calendário) que o período cobre. A base de partida é o
-// portfólio (MRR) do mês anterior ao início do período; a de chegada, o do último mês.
-// Datas personalizadas que não começam no dia 1 entram pelo mês inteiro.
 function summaryRow(name, month) {
     if (!month) return null;
     if (!state.monthlyRows) state.monthlyRows = buildMonthlyRows();
@@ -2713,8 +2654,6 @@ function summaryRow(name, month) {
         .find((row) => row.month === month && row.scope === state.scope && row.category === state.category) || null;
 }
 
-// Meses com faturamento nesta visão (mercado + serviço). O período é recortado até o último
-// deles: um mês ainda sem invoices não é lido como se a base inteira tivesse saído.
 function summaryPeriodMonths() {
     if (!state.monthlyRows) state.monthlyRows = buildMonthlyRows();
     const available = [...new Set((state.monthlyRows.mrr || [])
@@ -2752,7 +2691,6 @@ function summaryPeriod() {
     const baseRow = summaryRow('mrr', baseMonth);
     const endRow = summaryRow('mrr', endMonth);
 
-    // Soma um campo nos meses do período; null quando nenhum mês tem o dado.
     const sumOf = (name, field) => {
         const values = months.map((month) => summaryRow(name, month)).filter((row) => row && hasValue(row[field]));
         return values.length ? values.reduce((total, row) => total + Number(row[field]), 0) : null;
@@ -2763,7 +2701,6 @@ function summaryPeriod() {
 
     const base = baseRow ? baseRow.mrr : 0;
     const end = endRow ? endRow.mrr : 0;
-    // Novo negócio = clientes no 1º mês + variação dos clientes ainda em implantação.
     const firstMonths = sumOf('mrr', 'newBusiness');
     const setup = sumOf('retention', 'setupChange');
     const flows = {
@@ -2771,7 +2708,6 @@ function summaryPeriod() {
         upsells: sumOf('retention', 'upsells'),
         reactivated: sumOf('retention', 'reactivated'),
         churned: sumOf('retention', 'churned'),
-        // Onboarding fees de clientes da base que começaram ou acabaram (não é churn).
         onboarding: sumOf('retention', 'onboardingChange'),
     };
     const explained = base
@@ -2780,7 +2716,6 @@ function summaryPeriod() {
         + (flows.reactivated || 0)
         - (flows.churned || 0)
         + (flows.onboarding || 0);
-    // Diferença que as linhas de serviço não explicam (ex.: rateio de categorias que não fecha 100%).
     const other = Math.abs(end - explained) >= 1 ? end - explained : 0;
     const hasData = months.some((month) => summaryRow('mrr', month) || summaryRow('retention', month)) || Boolean(baseRow);
 
@@ -2858,10 +2793,6 @@ function renderSummaryPlanChart(data) {
     });
 }
 
-// Ponte da base recorrente: as bases do início e do fim como números nas pontas, e as
-// movimentações como barras divergentes a partir de um eixo central (saídas à esquerda,
-// entradas à direita), na escala da maior movimentação. Barras sobre a base inteira deixavam
-// as movimentações achatadas, porque a base é muito maior do que elas.
 function renderSummaryBridgeChart(period) {
     const root = $('#summary-bridge');
     const empty = $('#summary-bridge-empty');
@@ -2933,18 +2864,6 @@ document.querySelectorAll('[data-goto-view]').forEach((button) => button.addEven
     if (target) target.click();
 }));
 
-// ---- Unit economics ----
-// ATV, ARPA, ALT e LTV saem das invoices do Xero; CAC e CPL usam a mídia paga (Google Ads + Meta Ads, via n8n)
-// e os outros custos de aquisição lançados à mão.
-// Definições:
-//   ATV  = receita / número de invoices no período
-//   ARPA = receita do mês / clientes ativos no mês
-//   ALT  = tempo médio, em meses, entre a primeira e a última invoice dos clientes já perdidos
-//   LTV  = ARPA × ALT (receita; a margem entra na nota do card)
-//   CAC  = (gasto em Google Ads + Meta Ads + outros custos de aquisição) / novos clientes
-//   CPL  = gasto em Google Ads + Meta Ads / leads (conversões primárias do Google + leads do Meta)
-// As duas plataformas são somadas: nenhum número do painel é separado por origem.
-// Um cliente é considerado perdido após CHURN_GRACE_MONTHS meses sem invoice.
 const CHURN_GRACE_MONTHS = 2;
 
 state.unitInputs = {};
@@ -2953,14 +2872,11 @@ state.unitInputsError = '';
 state.unitEntriesMode = 'all';
 state.clientEntriesMode = 'all';
 const UNIT_ENDPOINT = 'unit-inputs.php';
-// salesMarketingCost guarda os "outros custos de aquisição", somados à mídia paga no CAC.
 const UNIT_FIELDS = {
     salesMarketingCost: { kind: 'money' },
     newClients: { kind: 'count' },
 };
 
-// ---- Mídia paga (workflow n8n "Chili Finance - Ads (Google + Meta) (CAC/CPL)", via ads.php) ----
-// Cada linha traz source 'google' ou 'meta'; adsFor() soma todas, sem distinguir a origem.
 const ADS_PLATFORM_LABELS = { google: 'Google Ads', meta: 'Meta Ads' };
 state.ads = { status: 'loading', rows: [], accounts: [], errors: [], fetchedAt: null };
 const ADS_ENDPOINT = 'ads.php';
@@ -2985,7 +2901,6 @@ async function loadAds() {
     renderUnitSection();
 }
 
-// Soma a mídia paga (Google + Meta) de um recorte. Campanhas sem serviço no nome ("unassigned") só entram em All.
 function adsFor(months, scope = state.scope, category = state.category) {
     if (state.ads.status !== 'ready') return null;
     const wanted = new Set(months);
@@ -3005,7 +2920,6 @@ function adsFor(months, scope = state.scope, category = state.category) {
 }
 
 function adsAccountsInView(scope = state.scope) {
-    // market "all": uma conta só, dividida por país no n8n; vale para qualquer mercado.
     return state.ads.accounts.filter((account) => account.configured && (scope === 'all' || account.market === 'all' || account.market === scope));
 }
 
@@ -3051,7 +2965,6 @@ function exactUnit(month, scope, category) {
     return state.unitInputs[marginInputKey(month, scope, category)] || null;
 }
 
-// Combina somando: custos, leads e novos clientes são aditivos entre serviços e mercados.
 function combineUnit(entries) {
     const parts = entries.filter(Boolean);
     if (!parts.length) return null;
@@ -3077,9 +2990,6 @@ function resolveUnit(month, scope, category) {
     return null;
 }
 
-// ---- Ciclo de vida por cliente ----
-// Esquerda censurada: o n8n só traz invoices a partir de jan/2025, então quem já era
-// cliente antes disso tem a data de início truncada e fica fora da média do ALT.
 function clientLifetimes() {
     const invoices = scopedInvoices();
     const today = startOfToday();
@@ -3105,7 +3015,7 @@ function clientLifetimes() {
 
     const cutoff = new Date(today.getFullYear(), today.getMonth() - CHURN_GRACE_MONTHS, 1);
     return [...clients.values()].map((entry) => {
-        const lifetime = monthKeysBetween(entry.first, entry.last).length; // meses de calendário, ponta a ponta
+        const lifetime = monthKeysBetween(entry.first, entry.last).length;
         const active = monthKey(entry.last) === currentMonth || entry.last >= cutoff;
         return {
             ...entry,
@@ -3158,7 +3068,6 @@ function unitMetrics() {
     };
 }
 
-// CAC = (mídia paga + outros custos) / novos clientes; CPL = mídia paga / leads.
 function acquisitionFigures(ads, otherCost, newClients) {
     const adsCost = ads ? ads.cost : null;
     const hasAds = Boolean(ads) && ads.rows > 0;
@@ -3373,7 +3282,6 @@ function renderClientTable(clients) {
     empty.classList.toggle('is-hidden', rows.length > 0);
 }
 
-// ---- Formulário ----
 function fillUnitValues(entry) {
     Object.keys(UNIT_FIELDS).forEach((name) => {
         const value = entry ? entry[name] : null;
@@ -3482,7 +3390,6 @@ if (unitForm) {
     });
 }
 
-// ---- Taxas de encargos editáveis (México, Panamá, International) ----
 const rulesForm = $('#rules-form');
 const rulesModal = $('#rules-modal');
 
@@ -3635,9 +3542,6 @@ if (rulesForm) {
     });
 }
 
-// ---- Importação da planilha de metas (Overview) ----
-// O servidor lê o .xlsx duas vezes: uma para a prévia (nada é gravado) e outra na
-// confirmação, que grava tudo numa transação em mrr_targets e margin_inputs.
 const IMPORT_ENDPOINT = 'sheet-import.php';
 const IMPORT_MAX_BYTES = 10 * 1024 * 1024;
 const IMPORT_COLUMNS = [
@@ -3668,8 +3572,6 @@ async function importRequest(options = {}) {
     return body;
 }
 
-// Status do botão: vem das próprias tabelas mrr_targets e margin_inputs (campo enteredAt),
-// então funciona igual para figuras importadas ou digitadas no modal.
 function renderImportStatus() {
     const node = $('#import-status');
     if (!node) return;
@@ -3837,7 +3739,7 @@ if (importModal && importForm) {
 
     fileInput.addEventListener('change', () => {
         const file = fileInput.files && fileInput.files[0];
-        fileInput.value = ''; // permite escolher o mesmo arquivo de novo depois de corrigi-lo
+        fileInput.value = '';
         previewImport(file || null);
     });
 

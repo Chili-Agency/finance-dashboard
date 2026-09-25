@@ -2,14 +2,15 @@
 declare(strict_types=1);
 
 /*
- * Custos e leads de mídia paga (Google Ads + Meta Ads), consultados na hora no webhook do n8n
- * (workflow "Chili Finance - Ads (Google + Meta) (CAC/CPL)"), como o api.php faz com as invoices.
+ * Custos e leads de mídia paga (Google Ads + Meta Ads) do workflow "Chili Finance - Ads (Google + Meta)
+ * (CAC/CPL)", lidos da última atualização gravada em data_snapshots (ver snapshots.php).
  * Resposta: linhas por plataforma × mercado × mês × linha de serviço, com o custo já em USD.
  * O dashboard soma as plataformas: CAC e CPL não são separados por origem.
  */
 
 require __DIR__ . '/auth.php';
 require __DIR__ . '/fx-rates.php';
+require __DIR__ . '/snapshots.php';
 auth_require_api();
 
 header('Content-Type: application/json; charset=utf-8');
@@ -33,33 +34,19 @@ if ($url === '') {
     respond(200, ['configured' => false, 'rows' => [], 'accounts' => [], 'errors' => []]);
 }
 
-$startedAt = microtime(true);
-$curl = curl_init($url);
-curl_setopt_array($curl, [
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_FOLLOWLOCATION => true,
-    CURLOPT_CONNECTTIMEOUT => 10,
-    CURLOPT_TIMEOUT => 120,
-    CURLOPT_HTTPHEADER => ['Accept: application/json'],
-    CURLOPT_USERAGENT => 'Chili Finance Dashboard/1.0',
-]);
-$raw = curl_exec($curl);
-$status = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
-$curlError = curl_error($curl);
-curl_close($curl);
-
-if ($raw === false || $curlError !== '') {
-    fail('Could not reach n8n (' . ($curlError ?: 'unknown error') . ').');
+// Ads gravados pela última atualização (snapshot-refresh.php), não mais o webhook ao vivo.
+try {
+    $snapshot = snapshot_read(auth_db(), ['ads'])['ads'] ?? null;
+} catch (Throwable $error) {
+    error_log('[ads] snapshots: ' . $error->getMessage());
+    fail('Could not read the saved ads data (data_snapshots). Check that sql/004_data_snapshots.sql was run.');
 }
-if ($status < 200 || $status >= 300) {
-    fail("n8n answered HTTP {$status}.");
+if ($snapshot === null || $snapshot['body'] === null) {
+    fail('No saved ads data yet. Press Refresh to fetch it from n8n.' . ($snapshot !== null && $snapshot['error'] ? " The last attempt failed: {$snapshot['error']}" : ''));
 }
-$data = json_decode((string) $raw, true);
-if (is_array($data) && isset($data[0]) && is_array($data[0]) && !isset($data['rows'])) {
-    $data = $data[0]; // "Respond to Webhook" com allIncomingItems devolve uma lista
-}
-if (!is_array($data) || !isset($data['rows']) || !is_array($data['rows'])) {
-    fail('n8n returned an unexpected response.');
+$data = snapshot_decode_ads($snapshot['body']);
+if ($data === null) {
+    fail('The saved ads data is not in the expected format. Press Refresh to fetch it again.');
 }
 
 $rows = [];
@@ -136,6 +123,9 @@ foreach ((array) ($data['accounts'] ?? []) as $account) {
         $errors[] = $label . ': ' . $item['error'];
     }
 }
+if ($snapshot['error'] && $snapshot['errorAt'] && $snapshot['errorAt'] > (string) $snapshot['fetchedAt']) {
+    $errors[] = "Last ads refresh failed ({$snapshot['error']}); showing data fetched {$snapshot['fetchedAt']}.";
+}
 if ($missingFx > 0) {
     $errors[] = 'Exchange rates: ' . ($fxErrors !== [] ? implode(' ', $fxErrors) : "{$missingFx} row(s) without a rate for their month.");
 }
@@ -145,8 +135,8 @@ respond(200, [
     'rows' => $rows,
     'accounts' => $accounts,
     'errors' => $errors,
-    'fetchedAt' => (string) ($data['fetchedAt'] ?? gmdate('Y-m-d\TH:i:s\Z')),
-    'seconds' => round(microtime(true) - $startedAt, 1),
+    'fetchedAt' => (string) ($snapshot['fetchedAt'] ?? ($data['fetchedAt'] ?? '')),
+    'seconds' => $snapshot['seconds'],
 ]);
 
 function number(mixed $value): ?float
