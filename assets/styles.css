@@ -380,7 +380,7 @@ table.shows-service .service-col{display:table-cell}
 .modal.is-wide{width:min(980px,calc(100vw - 32px))}
 .churn-summary{margin:14px 0 0;font:500 11px 'DM Mono',monospace;color:var(--ink)}
 .churn-scroll{max-height:min(58vh,520px);margin-top:14px}
-.churn-table{min-width:760px}
+.churn-table{min-width:840px}
 .churn-table thead th{position:sticky;top:0;background:var(--panel);z-index:1}
 .churn-table tfoot td{font-weight:700;border-bottom:0;border-top:1px solid var(--line)}
 .status-pill.is-lost{background:#fae2dc;color:var(--red-deep)}
