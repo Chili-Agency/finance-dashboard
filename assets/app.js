@@ -402,7 +402,7 @@ function monthSeries() {
 function renderMrr() { const series = monthSeries(); const selectedInvoices = filteredInvoices().filter(isBillable); const selected = selectedInvoices.reduce((sum, invoice) => sum + amount(invoice), 0); $('#mrr-total').textContent = money(selected); $('#mrr-label').textContent = periodBounds().label; if (state.mrrChart) state.mrrChart.destroy(); state.mrrChart = new Chart($('#mrr-chart'), { type: 'bar', data: { labels: series.labels, datasets: [{ data: series.values, backgroundColor: series.values.map((_, index) => index === series.values.length - 1 ? colors.authorised : '#d9d8d0'), borderRadius: 2, barPercentage: .58 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => ` ${money(context.raw)}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 10 } } }, y: { beginAtZero: true, grid: { color: '#e5e3dc' }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 9 }, callback: (value) => money(value) } } } } }); $('#mrr-empty').classList.toggle('is-hidden', series.values.length > 0); $('#mrr-breakdown').innerHTML = Object.entries(companyLabels).map(([key, label]) => { const total = selectedInvoices.filter((invoice) => invoice.companyKey === key).reduce((sum, invoice) => sum + amount(invoice), 0); const dimmed = state.scope !== 'all' && state.scope !== key; return `<div class="breakdown-item${dimmed ? ' is-dimmed' : ''}"><span>${label}</span><strong>${money(total)}</strong></div>`; }).join(''); }
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[character])); }
-function renderAll() { renderInvoices(); renderLate(); renderMrr(); renderScorecard(); syncViewToUrl(); }
+function renderAll() { renderInvoices(); renderLate(); renderMrr(); renderScorecard(); if (typeof renderSales === 'function') renderSales(); syncViewToUrl(); }
 
 $('#period-select').addEventListener('change', (event) => { state.period = event.target.value; state.periodFromUrl = true; $('#date-range').hidden = state.period !== 'custom'; renderAll(); });
 $('#date-from').addEventListener('input', (event) => { state.customStart = event.target.value; });
@@ -436,12 +436,13 @@ async function refreshData() {
             headers: { 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
         }));
         const body = await response.json().catch(() => null);
+        state.lastRefresh = body;
         if (!response.ok) problem = body && (body.errors?.length ? body.errors.join(' · ') : body.error) || `The server answered HTTP ${response.status}`;
     } catch (error) {
         problem = error.message;
     }
     state.sync.inFlight = false;
-    await Promise.all([loadInvoices(), typeof loadAds === 'function' ? loadAds() : null]);
+    await Promise.all([loadInvoices(), typeof loadAds === 'function' ? loadAds() : null, typeof loadSales === 'function' ? loadSales() : null]);
     if (problem) {
         const notice = $('#error-notice');
         notice.classList.remove('is-info');
@@ -2899,20 +2900,20 @@ async function loadAds() {
         state.ads = { status: 'error', rows: [], accounts: [], errors: [error.message], fetchedAt: null };
     }
     renderUnitSection();
+    if (typeof renderSales === 'function') renderSales();
 }
 
-function adsFor(months, scope = state.scope, category = state.category) {
+// Ad spend não é separado por linha de serviço (as campanhas não dizem se são SEO ou PPC):
+// entra inteiro em qualquer filtro de serviço. Só o mercado filtra.
+function adsFor(months, scope = state.scope) {
     if (state.ads.status !== 'ready') return null;
     const wanted = new Set(months);
-    const totals = { cost: 0, conversions: 0, unassignedCost: 0, missingFx: 0, rows: 0 };
+    const totals = { cost: 0, conversions: 0, missingFx: 0, rows: 0, bySource: { google: 0, meta: 0 } };
     state.ads.rows.forEach((row) => {
         if (!wanted.has(row.month) || (scope !== 'all' && row.market !== scope)) return;
-        if (category !== 'all' && row.category !== category) {
-            if (row.category === 'unassigned' && hasValue(row.costUsd)) totals.unassignedCost += Number(row.costUsd);
-            return;
-        }
         if (!hasValue(row.costUsd)) { totals.missingFx += 1; return; }
         totals.cost += Number(row.costUsd);
+        totals.bySource[row.source === 'meta' ? 'meta' : 'google'] += Number(row.costUsd);
         totals.conversions += Number(row.conversions) || 0;
         totals.rows += 1;
     });
@@ -3032,12 +3033,18 @@ function unitMetrics() {
     const window = { start: start || new Date(1970, 0, 1), end: end || new Date(9999, 11, 31) };
     const invoices = scopedInvoices().filter((invoice) => inWindow(invoiceDate(invoice), window));
     const revenue = invoices.reduce((total, invoice) => total + amount(invoice), 0);
-    const months = monthKeysBetween(window.start < new Date(1990, 0, 1) ? (invoices.length ? invoiceDate(invoices[0]) : startOfToday()) : window.start, window.end > new Date(9000, 0, 1) ? startOfToday() : window.end);
+    // Sem início no período ("All available"): começa na invoice mais antiga do mercado, em qualquer
+    // serviço, para o custo de ads cobrir os mesmos meses em todos os filtros de serviço.
+    const earliest = inScopeBillable().reduce((first, invoice) => { const date = invoiceDate(invoice); return date && (!first || date < first) ? date : first; }, null);
+    const months = monthKeysBetween(window.start < new Date(1990, 0, 1) ? (earliest || startOfToday()) : window.start, window.end > new Date(9000, 0, 1) ? startOfToday() : window.end);
 
     const inputs = combineUnit(months.map((month) => resolveUnit(month, state.scope, state.category))) || {};
     const meta = state.scorecardMeta || {};
     const scorecard = state.scorecard || {};
-    const newClients = hasValue(inputs.newClients) ? inputs.newClients : (hasValue(meta.newClients) ? meta.newClients : null);
+    // Com o período inteiro ("All available") o resumo principal olha só o último mês; aqui os
+    // clientes novos precisam cobrir o mesmo período do custo de ads.
+    const fromInvoices = start && end ? meta.newClients : newClientsInWindow(window);
+    const newClients = hasValue(inputs.newClients) ? inputs.newClients : (hasValue(fromInvoices) ? fromInvoices : null);
 
     const clients = clientLifetimes();
     const churned = clients.filter((client) => !client.active && !client.leftCensored);
@@ -3068,7 +3075,32 @@ function unitMetrics() {
     };
 }
 
-function acquisitionFigures(ads, otherCost, newClients) {
+// Clientes cuja primeira invoice (em qualquer linha de serviço do mercado) cai na janela e que
+// faturam na visão atual. Quem já aparece no primeiro mês do histórico fica de fora: provavelmente
+// já era cliente antes de o histórico começar.
+function newClientsInWindow(window) {
+    const firstSeen = new Map();
+    inScopeBillable().forEach((invoice) => {
+        const date = invoiceDate(invoice);
+        if (!date) return;
+        const key = contactKey(invoice);
+        const known = firstSeen.get(key);
+        if (!known || date < known) firstSeen.set(key, date);
+    });
+    if (!firstSeen.size) return null;
+    const historyStart = monthKey(new Date(Math.min(...[...firstSeen.values()].map((date) => date.getTime()))));
+    const inView = new Set(scopedInvoices().filter((invoice) => inWindow(invoiceDate(invoice), window)).map(contactKey));
+    let count = 0;
+    firstSeen.forEach((date, key) => {
+        if (inView.has(key) && inWindow(date, window) && monthKey(date) > historyStart) count += 1;
+    });
+    return count;
+}
+
+// O gasto de ads não é separado por serviço (as campanhas não dizem se são SEO ou PPC). Num filtro
+// de serviço, o CAC dividiria o gasto de todos os anúncios pelos clientes de um serviço só, por isso
+// ele só existe na visão de todos os serviços. Gasto e CPL continuam aparecendo em qualquer filtro.
+function acquisitionFigures(ads, otherCost, newClients, category = state.category) {
     const adsCost = ads ? ads.cost : null;
     const hasAds = Boolean(ads) && ads.rows > 0;
     const other = hasValue(otherCost) ? Number(otherCost) : null;
@@ -3079,7 +3111,7 @@ function acquisitionFigures(ads, otherCost, newClients) {
         conversions: ads ? ads.conversions : null,
         otherCost: other,
         acquisitionCost,
-        cac: hasValue(acquisitionCost) && hasValue(newClients) && newClients > 0 ? acquisitionCost / newClients : null,
+        cac: category === 'all' && hasValue(acquisitionCost) && hasValue(newClients) && newClients > 0 ? acquisitionCost / newClients : null,
         cpl: hasAds && ads.conversions > 0 ? adsCost / ads.conversions : null,
     };
 }
@@ -3121,16 +3153,23 @@ function renderUnitSection() {
         foot: hasValue(metrics.ltv) && hasValue(metrics.margin) ? `${moneyOr(metrics.ltv * metrics.margin)} at the ${percentOr(metrics.margin)} margin entered` : 'Enter a margin to see it net of COGS',
         state: hasValue(metrics.ltv) ? 'good' : 'empty',
     });
+    const adsBySource = metrics.ads && metrics.ads.rows > 0 ? metrics.ads.bySource : null;
     const costParts = [
-        hasValue(metrics.adsCost) ? `ads ${money(metrics.adsCost)}` : null,
+        adsBySource ? `Google Ads ${money(adsBySource.google)}` : null,
+        adsBySource ? `Meta Ads ${money(adsBySource.meta)}` : null,
         hasValue(metrics.otherCost) ? `other ${money(metrics.otherCost)}` : null,
     ].filter(Boolean).join(' + ');
+    const byService = state.category !== 'all';
     unitCard('cac', {
         value: moneyOr(metrics.cac),
-        note: hasValue(metrics.acquisitionCost)
+        note: byService
+            ? `Shown only for All services: ad spend isn't split by ${serviceName(state.category)} or any other service`
+            : hasValue(metrics.acquisitionCost)
             ? `${moneyOr(metrics.acquisitionCost)} over ${hasValue(metrics.newClients) && metrics.newClients > 0 ? plural(metrics.newClients, 'new client') : 'no new clients'}`
             : adsUnavailableNote('No acquisition cost for this period'),
-        foot: `${costParts ? `${costParts} · ` : ''}${metrics.newClientsFromInvoices ? 'new clients from the invoices' : 'new clients entered by hand'}`,
+        foot: byService
+            ? (costParts ? `${costParts}, for every service` : adsUnavailableNote('No acquisition cost for this period'))
+            : `${costParts ? `${costParts} · ` : ''}${metrics.newClientsFromInvoices ? 'new clients from the invoices' : 'new clients entered by hand'}`,
         state: hasValue(metrics.cac) ? 'good' : 'empty',
     });
     unitCard('cpl', {
@@ -3138,16 +3177,16 @@ function renderUnitSection() {
         note: hasValue(metrics.adsCost) && metrics.ads && metrics.ads.rows > 0
             ? `${money(metrics.adsCost)} in ads over ${plural(Math.round(metrics.conversions), 'lead')}`
             : adsUnavailableNote('No ad spend in this period'),
-        foot: metrics.ads && metrics.ads.unassignedCost > 0
-            ? `${money(metrics.ads.unassignedCost)} from campaigns without a service in the name is left out of ${serviceName(state.category)}`
-            : metrics.ads && metrics.ads.missingFx > 0 ? 'Some ad spend has no exchange rate and is left out' : periodLabel,
+        foot: metrics.ads && metrics.ads.missingFx > 0 ? 'Some ad spend has no exchange rate and is left out'
+            : state.category !== 'all' ? `Ad spend and leads of every service, not only ${serviceName(state.category)}` : periodLabel,
         state: hasValue(metrics.cpl) ? 'good' : 'empty',
     });
     const ratio = hasValue(metrics.ltv) && hasValue(metrics.cac) && metrics.cac > 0 ? metrics.ltv / metrics.cac : null;
     unitCard('ratio', {
         value: hasValue(ratio) ? `${ratio.toFixed(1)}×` : DASH,
         note: 'How much a client returns for each dollar spent to win them',
-        foot: hasValue(ratio) ? (ratio >= 3 ? 'At or above the usual 3× benchmark' : 'Below the usual 3× benchmark') : 'Needs LTV and CAC',
+        foot: hasValue(ratio) ? (ratio >= 3 ? 'At or above the usual 3× benchmark' : 'Below the usual 3× benchmark')
+            : state.category !== 'all' ? 'Needs CAC, shown only for All services' : 'Needs LTV and CAC',
         state: hasValue(ratio) ? (ratio >= 3 ? 'good' : 'behind') : 'empty',
     });
     unitCard('clients', {
@@ -3214,7 +3253,7 @@ function unitMonthlyRows() {
             atv: row.invoices ? row.mrr / row.invoices : null,
             arpa: row.clients ? row.mrr / row.clients : null,
             newClients,
-            ...acquisitionFigures(adsFor([row.month], row.scope, row.category), input?.salesMarketingCost, newClients),
+            ...acquisitionFigures(adsFor([row.month], row.scope), input?.salesMarketingCost, newClients, row.category),
             hasExactInput: Boolean(exactUnit(row.month, row.scope, row.category)),
         };
     });

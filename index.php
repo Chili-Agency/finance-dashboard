@@ -36,6 +36,7 @@ function asset(string $path): string
             <p class="eyebrow">Workspace</p>
             <nav class="main-nav" aria-label="Main navigation">
                 <button class="nav-item is-active" data-view="overview" data-title="Overview"><span class="nav-icon">◍</span>Overview</button>
+                <button class="nav-item" data-view="sales" data-title="Sales"><span class="nav-icon">◆</span>Sales</button>
                 <button class="nav-item" data-view="invoices" data-title="Invoices"><span class="nav-icon">◒</span>Invoices</button>
                 <button class="nav-item" data-view="late" data-title="Late invoices"><span class="nav-icon">◔</span>Late invoices</button>
                 <button class="nav-item" data-view="unit" data-title="Unit economics"><span class="nav-icon">◈</span>Unit economics</button>
@@ -89,7 +90,7 @@ function asset(string $path): string
                         <label><span>To</span><input type="date" id="date-to"></label>
                         <button class="apply-button" id="apply-date-filter">Apply</button>
                     </div>
-                    <button class="refresh-button" id="refresh-button" title="Fetch the latest invoices and ads from Xero, Google and Meta"><span>↻</span> Refresh</button>
+                    <button class="refresh-button" id="refresh-button" title="Fetch the latest invoices, ads and sales from Xero, Google, Meta and HubSpot"><span>↻</span> Refresh</button>
                 </div>
             </header>
 
@@ -156,6 +157,87 @@ function asset(string $path): string
                     <div class="bridge" id="summary-bridge"></div>
                     <div class="table-empty is-hidden" id="summary-bridge-empty">No data for this period</div>
                 </article>
+            </section>
+
+            <section class="view" id="sales-view" aria-labelledby="page-title">
+                <div class="section-intro">
+                    <div>
+                        <p class="eyebrow">Sales team</p>
+                        <h2>Pipeline, wins and the work behind them</h2>
+                        <p class="section-copy">Deals, leads, calls and meetings from HubSpot. Ad spend from Google Ads and Meta Ads, in USD.</p>
+                        <div class="manual-input-bar">
+                            <button type="button" class="input-button" id="open-sales-target-modal" aria-haspopup="dialog" aria-controls="sales-target-modal"><span aria-hidden="true">+</span> Set sales target</button>
+                            <p class="manual-input-status" id="sales-status" data-tone="muted" aria-live="polite"></p>
+                        </div>
+                    </div>
+                    <div class="filter-stack">
+                        <div class="scope-tabs" role="tablist" aria-label="Company scope">
+                            <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
+                            <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
+                            <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
+                            <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
+                            <button class="scope-tab" data-scope="int" role="tab">International</button>
+                        </div>
+                        <div class="category-filter">
+                            <span>Service</span>
+                            <div class="category-tabs" role="tablist" aria-label="Service line">
+                                <button class="category-tab is-active" data-category="all" role="tab">All</button>
+                                <button class="category-tab" data-category="seo" role="tab">SEO</button>
+                                <button class="category-tab" data-category="ppc" role="tab">PPC</button>
+                                <button class="category-tab" data-category="others" role="tab" title="SMM, Marketing and Web dev">Others</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sales-kpis">
+                    <article class="metric-card sales-kpi" id="sales-revenue-card"><span class="metric-label">Revenue</span><strong id="sales-revenue">—</strong><p id="sales-revenue-note">—</p></article>
+                    <article class="metric-card sales-kpi" id="sales-deals-card"><span class="metric-label">Deals closed</span><strong id="sales-deals">—</strong><p id="sales-deals-note">—</p></article>
+                    <article class="metric-card sales-kpi" id="sales-growth-card"><span class="metric-label">Growth</span><strong id="sales-growth">—</strong><p id="sales-growth-note">—</p></article>
+                    <article class="metric-card sales-kpi summary-card" id="sales-target-card" data-state="empty"><span class="metric-label">To target</span><strong id="sales-target">—</strong><div class="summary-bar"><span id="sales-target-bar"></span></div><p id="sales-target-note">—</p></article>
+                    <article class="metric-card sales-kpi summary-card" id="sales-quarter-card" data-state="empty"><span class="metric-label" id="sales-quarter-label">Quarter to date</span><strong id="sales-quarter">—</strong><div class="summary-bar"><span id="sales-quarter-bar"></span></div><p id="sales-quarter-note">—</p></article>
+                </div>
+
+                <article class="panel sales-funnel-panel">
+                    <div class="panel-header"><div><p class="eyebrow">Funnel</p><h3>From lead to closed deal</h3></div><span class="panel-meta" id="sales-funnel-meta">Selected period</span></div>
+                    <div class="sales-funnel" id="sales-funnel"></div>
+                    <div class="sales-funnel-rates" id="sales-funnel-rates"></div>
+                </article>
+
+                <div class="split-grid">
+                    <article class="panel"><div class="panel-header"><div><p class="eyebrow">Revenue</p><h3>By market</h3></div><span class="panel-meta">Won deals</span></div><div class="sales-bars" id="sales-by-market"></div></article>
+                    <article class="panel"><div class="panel-header"><div><p class="eyebrow">Revenue</p><h3>By salesperson</h3></div><span class="panel-meta">Deal owner</span></div><div class="sales-bars" id="sales-by-owner"></div></article>
+                </div>
+
+                <div class="split-grid">
+                    <article class="panel"><div class="panel-header"><div><p class="eyebrow">Plan</p><h3>Revenue against target</h3></div><span class="panel-meta">Last 6 months</span></div><div class="sales-chart-wrap"><canvas id="sales-trend-chart"></canvas><div class="chart-empty is-hidden" id="sales-trend-empty">No won deals in these months</div></div></article>
+                    <article class="panel"><div class="panel-header"><div><p class="eyebrow">Marketing</p><h3>Ad spend by month</h3></div><span class="panel-meta">Google + Meta</span></div><div class="sales-chart-wrap"><canvas id="sales-spend-chart"></canvas><div class="chart-empty is-hidden" id="sales-spend-empty">No ad spend in these months</div></div></article>
+                </div>
+
+                <div class="split-grid is-wide-left">
+                    <article class="panel table-panel">
+                        <div class="panel-header"><div><p class="eyebrow">Acquisition</p><h3>Leads and cost per lead by channel</h3></div><span class="panel-meta">Original source</span></div>
+                        <div class="table-scroll"><table class="sales-channel-table"><thead><tr><th>Channel</th><th class="align-right">Leads</th><th class="align-right">Spend</th><th class="align-right">CPL</th></tr></thead><tbody id="sales-channels"></tbody><tfoot id="sales-channels-total"></tfoot></table></div>
+                        <p class="manual-input-status" data-tone="muted">Leads are HubSpot contacts by original source. Spend exists only for Google Ads and Meta Ads.</p>
+                    </article>
+                    <article class="panel">
+                        <div class="panel-header"><div><p class="eyebrow">Acquisition</p><h3>Leads by market</h3></div></div>
+                        <div class="sales-bars" id="sales-leads-market"></div>
+                        <div class="sales-spend-total"><span>Ad spend in the period</span><strong id="sales-spend-total">—</strong></div>
+                    </article>
+                </div>
+
+                <div class="split-grid">
+                    <article class="panel"><div class="panel-header"><div><p class="eyebrow">Activity</p><h3>Calls by person</h3></div><span class="panel-meta" id="sales-calls-meta">—</span></div><div class="sales-bars is-activity" id="sales-calls"></div></article>
+                    <article class="panel"><div class="panel-header"><div><p class="eyebrow">Activity</p><h3>Meetings by person</h3></div><span class="panel-meta" id="sales-meetings-meta">—</span></div><div class="sales-bars is-activity" id="sales-meetings"></div></article>
+                </div>
+
+                <div class="scorecard-grid">
+                    <article class="stat-card is-positive"><span class="stat-label">Close rate</span><strong id="sales-close-rate">—</strong><p class="stat-note" id="sales-close-rate-note">—</p></article>
+                    <article class="stat-card is-neutral"><span class="stat-label">Time to close</span><strong id="sales-cycle">—</strong><p class="stat-note" id="sales-cycle-note">—</p></article>
+                    <article class="stat-card is-warning"><span class="stat-label">Lead to MQL</span><strong id="sales-lead-mql">—</strong><p class="stat-note" id="sales-lead-mql-note">—</p></article>
+                    <article class="stat-card"><span class="stat-label">Deals won per month</span><strong id="sales-velocity">—</strong><p class="stat-note" id="sales-velocity-note">—</p></article>
+                </div>
             </section>
 
             <section class="view" id="invoices-view" aria-labelledby="page-title">
@@ -923,7 +1005,61 @@ function asset(string $path): string
             </footer>
         </form>
     </dialog>
+    <dialog class="modal" id="sales-target-modal" aria-labelledby="sales-target-modal-title">
+        <form class="modal-form" id="sales-target-form" novalidate>
+            <header class="modal-header">
+                <div>
+                    <p class="eyebrow">Manual input</p>
+                    <h2 id="sales-target-modal-title">Sales target</h2>
+                </div>
+                <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+            </header>
+            <p class="modal-copy">Revenue the team should close in won deals for one month, market and service line, in USD. Global and All add up the markets and services when there is no entry of their own.</p>
+
+            <fieldset class="form-group">
+                <legend>Applies to</legend>
+                <div class="form-grid is-three">
+                    <label class="field"><span>Month</span><input type="month" name="month" autofocus></label>
+                    <label class="field"><span>Market</span>
+                        <select name="scope">
+                            <option value="all">Global</option>
+                            <option value="br">Brazil</option>
+                            <option value="mx">Mexico</option>
+                            <option value="pa">Panama</option>
+                            <option value="int">International</option>
+                        </select>
+                    </label>
+                    <label class="field"><span>Service</span>
+                        <select name="category">
+                            <option value="all">All</option>
+                            <option value="seo">SEO</option>
+                            <option value="ppc">PPC</option>
+                            <option value="others">Others (SMM, Marketing, Web dev)</option>
+                        </select>
+                    </label>
+                </div>
+            </fieldset>
+
+            <fieldset class="form-group">
+                <legend>Target</legend>
+                <div class="form-grid">
+                    <label class="field"><span>Revenue target</span><div class="input-affix"><i>$</i><input type="number" name="revenueTarget" min="0" step="0.01" inputmode="decimal" required></div></label>
+                </div>
+            </fieldset>
+
+            <p class="form-error" id="sales-target-error" role="alert" hidden></p>
+
+            <footer class="modal-footer">
+                <p class="modal-hint" id="sales-target-hint"></p>
+                <div class="modal-actions">
+                    <button type="button" class="button-secondary" data-close-modal>Cancel</button>
+                    <button type="submit" class="button-primary" id="sales-target-submit">Save target</button>
+                </div>
+            </footer>
+        </form>
+    </dialog>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     <script src="<?= asset('assets/app.js') ?>"></script>
+    <script src="<?= asset('assets/sales.js') ?>"></script>
 </body>
 </html>

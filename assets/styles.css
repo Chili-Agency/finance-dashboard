@@ -451,3 +451,46 @@ table.shows-service .service-col{display:table-cell}
 .summary-grid .chart-panel .summary-chart-wrap{overflow:hidden}
 .health-value{white-space:nowrap}
 .health-label{min-width:0}
+/* Sales (HubSpot) */
+.sales-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;margin-bottom:18px}
+.sales-kpi{min-height:140px;border-top-color:var(--ink)}
+.sales-kpi strong{font-size:27px;margin:16px 0 8px}
+.sales-kpi p{line-height:1.5}
+.sales-kpi .summary-bar{margin:2px 0 9px}
+.sales-funnel-panel{margin-bottom:18px}
+.sales-funnel{display:grid;grid-template-columns:1.45fr 1.15fr .9fr .75fr;min-height:88px;margin-top:22px}
+.funnel-stage{display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;padding:14px 22px 14px 30px;margin-right:-12px;clip-path:polygon(0 0,calc(100% - 18px) 0,100% 50%,calc(100% - 18px) 100%,0 100%,18px 50%)}
+.funnel-stage:first-child{padding-left:20px;clip-path:polygon(0 0,calc(100% - 18px) 0,100% 50%,calc(100% - 18px) 100%,0 100%)}
+.funnel-stage strong{font-size:30px;letter-spacing:-.05em;line-height:1}
+.funnel-stage span,.funnel-outcomes span{font:500 9px 'DM Mono',monospace;letter-spacing:.12em;text-transform:uppercase;opacity:.85}
+.funnel-stage span{margin-top:7px}
+.funnel-stage.is-leads{background:var(--blue)}
+.funnel-stage.is-mql{background:var(--green)}
+.funnel-stage.is-sql{background:var(--yellow)}
+.funnel-outcomes{display:grid;grid-template-rows:1fr 1fr;gap:4px;margin-left:22px}
+.funnel-outcomes div{display:flex;align-items:center;justify-content:center;gap:9px;color:#fff;padding:6px 10px}
+.funnel-outcomes strong{font-size:20px;letter-spacing:-.04em}
+.funnel-outcomes .is-won{background:var(--green)}
+.funnel-outcomes .is-lost{background:var(--red)}
+.sales-funnel-rates{display:flex;flex-wrap:wrap;justify-content:center;gap:10px 30px;margin-top:17px;color:var(--muted);font:500 10px 'DM Mono',monospace}
+.sales-funnel-rates strong{color:var(--ink);font-weight:600}
+.sales-bars{display:grid;gap:15px;margin-top:20px}
+.sales-bar-head{display:flex;align-items:baseline;gap:10px;margin-bottom:7px}
+.sales-bar-head span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}
+.sales-bar-head strong{font:600 12px 'DM Mono',monospace}
+.sales-bar-head small{min-width:58px;text-align:right;color:var(--muted);font:400 9px 'DM Mono',monospace}
+.sales-bar-track{height:5px;background:#e6e5df}
+.sales-bar-track span{display:block;height:100%;min-width:2px}
+.sales-bars.is-activity .sales-bar-track{height:12px}
+.sales-empty{margin:0;padding:22px 0;color:var(--muted);font:500 11px 'DM Mono',monospace}
+.sales-chart-wrap{position:relative;height:270px;margin-top:16px}
+.sales-channel-table{min-width:420px}
+.sales-channel-table td{padding-top:12px;padding-bottom:12px}
+.sales-channel-table tfoot td{font-weight:700;border-top:1px solid var(--line);border-bottom:0}
+.table-panel .sales-channel-table + p,.table-panel .table-scroll + .manual-input-status{margin-top:12px}
+.channel-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:9px;vertical-align:1px}
+.sales-spend-total{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-top:24px;padding:15px 16px;background:var(--paper)}
+.sales-spend-total span{color:var(--muted);font:500 9px 'DM Mono',monospace;letter-spacing:.1em;text-transform:uppercase}
+.sales-spend-total strong{font-size:21px;letter-spacing:-.04em}
+@media(max-width:1280px){.sales-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:700px){.sales-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.sales-funnel{grid-template-columns:1fr;gap:4px}.funnel-stage,.funnel-stage:first-child{clip-path:none;margin:0;padding:12px}.funnel-outcomes{grid-template-columns:1fr 1fr;grid-template-rows:auto;margin:4px 0 0}.sales-chart-wrap{height:230px}}
