@@ -1,3 +1,5 @@
+// Perfil do usuário (index.php): sem manual_inputs, os modais de inserção manual não abrem.
+const CAN_MANUAL_INPUTS = document.body.dataset.manualInputs !== 'off';
 const state = { invoices: [], sourceTypeCounts: {}, categoryCounts: {}, scope: 'all', category: 'all', period: 'current', customStart: '', customEnd: '', statusChart: null, mrrChart: null };
 const companyLabels = { br: 'Brazil', mx: 'Mexico', pa: 'Panama', int: 'International' };
 const categoryLabels = { seo: 'SEO', ppc: 'PPC', others: 'Others' };
@@ -1594,6 +1596,7 @@ function showMarginError(message, field) {
 }
 
 function openMarginModal(entry = null) {
+    if (!CAN_MANUAL_INPUTS) return;
     const meta = state.scorecardMeta || {};
     marginForm.reset();
     showMarginError('');
@@ -1908,6 +1911,7 @@ function loadTargetEntryIntoForm() {
 }
 
 function openTargetsModal(entry = null) {
+    if (!CAN_MANUAL_INPUTS) return;
     const targets = (state.scorecardMeta || {}).targets;
     targetsForm.reset();
     showTargetError('');
@@ -3344,6 +3348,7 @@ function showUnitError(message, field) {
 }
 
 function openUnitModal(entry = null) {
+    if (!CAN_MANUAL_INPUTS) return;
     unitForm.reset();
     showUnitError('');
     unitForm.elements.month.value = entry ? entry.month : monthKey(selectedSingleMonth() || new Date());
@@ -3503,6 +3508,7 @@ function showRulesError(message, field) {
 }
 
 function openRulesModal() {
+    if (!CAN_MANUAL_INPUTS) return;
     rulesForm.reset();
     showRulesError('');
     EDITABLE_RULE_SCOPES.forEach((key) => {
@@ -3664,6 +3670,7 @@ function resetImport() {
 }
 
 function openImportModal() {
+    if (!CAN_MANUAL_INPUTS) return;
     resetImport();
     importModal.showModal();
 }

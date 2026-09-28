@@ -21,6 +21,8 @@ try {
             respond(200, ['rules' => array_map('toRule', $pdo->query(SELECT_RULES . ' ORDER BY scope')->fetchAll())]);
 
         case 'POST':
+
+            auth_require_permission($currentUser, 'manual_inputs');
             $input = json_decode((string) file_get_contents('php://input'), true);
             if (!is_array($input) || !isset($input['rules']) || !is_array($input['rules']) || $input['rules'] === []) {
                 respond(400, ['error' => 'Send the rates as { "rules": [...] }.']);

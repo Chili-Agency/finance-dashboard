@@ -30,6 +30,8 @@ try {
             respond(200, ['entries' => array_map('toEntry', $rows)]);
 
         case 'POST':
+
+            auth_require_permission($currentUser, 'sales_targets');
             if (!auth_check_csrf($_SERVER['HTTP_X_CSRF_TOKEN'] ?? null)) {
                 respond(403, ['error' => 'This page expired. Reload it and try again.']);
             }

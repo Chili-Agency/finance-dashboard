@@ -2,6 +2,8 @@
 declare(strict_types=1);
 require __DIR__ . '/auth.php';
 $currentUser = auth_require_page();
+$canManualInputs = auth_can($currentUser, 'manual_inputs');
+$canSalesTargets = auth_can($currentUser, 'sales_targets');
 $csrfToken = (string) ($_SESSION['csrf_token'] ?? '');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
@@ -25,7 +27,7 @@ function asset(string $path): string
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="<?= asset('assets/styles.css') ?>">
 </head>
-<body>
+<body data-manual-inputs="<?= $canManualInputs ? 'on' : 'off' ?>" data-sales-targets="<?= $canSalesTargets ? 'on' : 'off' ?>">
     <div class="app-shell">
         <aside class="sidebar">
             <a class="brand" href="index.php" aria-label="Chili Finance home">
@@ -56,7 +58,7 @@ function asset(string $path): string
                 <div class="user-card">
                     <div class="user-meta">
                         <strong><?= htmlspecialchars($currentUser['name'], ENT_QUOTES, 'UTF-8') ?></strong>
-                        <small><?= htmlspecialchars($currentUser['email'], ENT_QUOTES, 'UTF-8') ?></small>
+                        <small><?= htmlspecialchars($currentUser['email'], ENT_QUOTES, 'UTF-8') ?></small><?php if (!$canManualInputs): ?><small class="user-role">View only · sales targets</small><?php endif; ?>
                     </div>
                     <form method="post" action="logout.php">
                         <input type="hidden" name="csrf" value="<?= htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') ?>">
@@ -104,7 +106,7 @@ function asset(string $path): string
                         <h2>Where the year stands</h2>
                         <p class="section-copy" id="summary-scope-note">Plan versus actual for the selected year, in one screen.</p>
                         <div class="manual-input-bar">
-                            <button type="button" class="input-button" id="open-import-modal" aria-haspopup="dialog" aria-controls="import-modal"><span aria-hidden="true">↑</span> Import targets sheet</button>
+                            <button type="button" class="input-button" id="open-import-modal" data-permission="manual_inputs" aria-haspopup="dialog" aria-controls="import-modal"><span aria-hidden="true">↑</span> Import targets sheet</button>
                             <p class="manual-input-status" id="import-status" data-tone="muted" aria-live="polite"></p>
                         </div>
                     </div>
@@ -166,7 +168,7 @@ function asset(string $path): string
                         <h2>Pipeline, wins and the work behind them</h2>
                         <p class="section-copy">Deals, leads, calls and meetings from HubSpot. Ad spend from Google Ads and Meta Ads, in USD.</p>
                         <div class="manual-input-bar">
-                            <button type="button" class="input-button" id="open-sales-target-modal" aria-haspopup="dialog" aria-controls="sales-target-modal"><span aria-hidden="true">+</span> Set sales target</button>
+                            <button type="button" class="input-button" id="open-sales-target-modal" data-permission="sales_targets" aria-haspopup="dialog" aria-controls="sales-target-modal"><span aria-hidden="true">+</span> Set sales target</button>
                             <p class="manual-input-status" id="sales-status" data-tone="muted" aria-live="polite"></p>
                         </div>
                     </div>
@@ -316,7 +318,7 @@ function asset(string $path): string
                                 <article class="panel manual-panel">
                     <div class="panel-header">
                         <div><p class="eyebrow">Manual input</p><h3>Late charge rates</h3></div>
-                        <button type="button" class="button-secondary" id="open-rules-modal">Edit rates</button>
+                        <button type="button" class="button-secondary" id="open-rules-modal" data-permission="manual_inputs">Edit rates</button>
                     </div>
                     <div class="rules-summary" id="late-rules-summary"></div>
                     <p class="manual-input-status" id="late-rules-status" data-tone="muted" aria-live="polite"></p>
@@ -365,7 +367,7 @@ function asset(string $path): string
                 <article class="panel manual-panel">
                     <div class="panel-header">
                         <div><p class="eyebrow">Acquisition costs</p><h3>Ad spend + other costs</h3></div>
-                        <button type="button" class="button-secondary" id="open-unit-modal">Enter other costs</button>
+                        <button type="button" class="button-secondary" id="open-unit-modal" data-permission="manual_inputs">Enter other costs</button>
                     </div>
                     <p class="manual-input-status" id="unit-ads-status" data-tone="muted" aria-live="polite"></p>
                     <p class="manual-input-status" id="unit-input-status" data-tone="muted" aria-live="polite"></p>
@@ -526,7 +528,7 @@ function asset(string $path): string
                         <h2>New business and total MRR</h2>
                         <p class="section-copy">Actuals against plan for the selected period, plus the gap carried from earlier months.</p>
                         <div class="manual-input-bar">
-                            <button type="button" class="input-button" id="open-targets-modal" aria-haspopup="dialog" aria-controls="targets-modal"><span aria-hidden="true">+</span> Set Target MRR</button>
+                            <button type="button" class="input-button" id="open-targets-modal" data-permission="manual_inputs" aria-haspopup="dialog" aria-controls="targets-modal"><span aria-hidden="true">+</span> Set Target MRR</button>
                             <p class="manual-input-status" id="targets-input-status" aria-live="polite"></p>
                         </div>
                     </div>
@@ -623,7 +625,7 @@ function asset(string $path): string
                         <h2>Cost of delivery and margin</h2>
                         <p class="section-copy">What delivery costs against plan, and what is left for the team.</p>
                         <div class="manual-input-bar">
-                            <button type="button" class="input-button" id="open-margin-modal" aria-haspopup="dialog" aria-controls="margin-modal"><span aria-hidden="true">+</span> Enter COGS &amp; margin</button>
+                            <button type="button" class="input-button" id="open-margin-modal" data-permission="manual_inputs" aria-haspopup="dialog" aria-controls="margin-modal"><span aria-hidden="true">+</span> Enter COGS &amp; margin</button>
                             <p class="manual-input-status" id="margin-input-status" aria-live="polite"></p>
                         </div>
                     </div>

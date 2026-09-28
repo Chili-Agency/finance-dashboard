@@ -14,6 +14,18 @@ const AUTH_IDLE_SECONDS = 8 * 60 * 60;
 const AUTH_MAX_ATTEMPTS = 5;
 const AUTH_LOCK_SECONDS = 5 * 60;
 
+/*
+ * Perfis (coluna role de dashboard_users, ver sql/006_user_roles.sql) e o que cada um pode gravar.
+ * Todos os perfis veem todas as páginas; a diferença está nos dados que podem inserir.
+ *   manual_inputs: Target MRR, COGS e margem, outros custos de aquisição, juros de atraso,
+ *                  importação da planilha de metas.
+ *   sales_targets: meta de vendas da página Sales.
+ */
+const AUTH_ROLES = [
+    'admin' => ['manual_inputs', 'sales_targets'],
+    'sales' => ['sales_targets'],
+];
+
 function auth_start(): void
 {
     if (session_status() === PHP_SESSION_ACTIVE) {
@@ -52,20 +64,34 @@ function auth_db(): PDO
     return $pdo;
 }
 
-/** @return array{id:int,email:string,name:string,password_hash:string}|null */
+/** @return array{id:int,email:string,name:string,password_hash:string,role:string}|null */
 function auth_find_user(string $email): ?array
 {
     $email = strtolower(trim($email));
     if ($email === '') {
         return null;
     }
-    $select = auth_db()->prepare(
-        'SELECT id, email, name, password_hash
-           FROM dashboard_users
-          WHERE email = ? AND is_active = 1
-          LIMIT 1'
-    );
-    $select->execute([$email]);
+    try {
+        $select = auth_db()->prepare(
+            'SELECT id, email, name, password_hash, role
+               FROM dashboard_users
+              WHERE email = ? AND is_active = 1
+              LIMIT 1'
+        );
+        $select->execute([$email]);
+    } catch (PDOException $error) {
+        // Banco ainda sem a coluna role (sql/006_user_roles.sql não rodou): todos são admin, como antes.
+        if (($error->errorInfo[1] ?? null) !== 1054) {
+            throw $error;
+        }
+        $select = auth_db()->prepare(
+            "SELECT id, email, name, password_hash, 'admin' AS role
+               FROM dashboard_users
+              WHERE email = ? AND is_active = 1
+              LIMIT 1"
+        );
+        $select->execute([$email]);
+    }
     $row = $select->fetch();
     if (!is_array($row)) {
         return null;
@@ -143,7 +169,7 @@ function auth_attempt(string $email, string $password): ?string
 
     session_regenerate_id(true); // evita session fixation
     unset($_SESSION['auth_attempts'], $_SESSION['auth_locked_until']);
-    $_SESSION['auth_user'] = ['id' => $user['id'], 'email' => $user['email'], 'name' => $user['name']];
+    $_SESSION['auth_user'] = ['id' => $user['id'], 'email' => $user['email'], 'name' => $user['name'], 'role' => auth_role_of($user)];
     $_SESSION['auth_last_seen'] = time();
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
     auth_after_login($user, $password);
@@ -204,4 +230,29 @@ function auth_require_api(): array
     }
     session_write_close();
     return $user;
+}
+
+/** Perfil do usuário. Perfil desconhecido não pode gravar nada. Sessões abertas antes da coluna role existir eram todas do admin. */
+function auth_role_of(array $user): string
+{
+    $role = strtolower(trim((string) ($user['role'] ?? 'admin')));
+    return $role === '' ? 'admin' : $role;
+}
+
+function auth_can(array $user, string $permission): bool
+{
+    return in_array($permission, AUTH_ROLES[auth_role_of($user)] ?? [], true);
+}
+
+/** Para endpoints que gravam: 403 se o perfil não tem a permissão. */
+function auth_require_permission(array $user, string $permission): void
+{
+    if (auth_can($user, $permission)) {
+        return;
+    }
+    http_response_code(403);
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    echo json_encode(['error' => 'Your account can view this data but not change it.', 'ok' => false]);
+    exit;
 }
