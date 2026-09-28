@@ -229,8 +229,7 @@ function salesTargetFor(months) {
 function adSpendRows() {
     if (state.ads.status !== 'ready') return [];
     return state.ads.rows.filter((row) => hasValue(row.costUsd)
-        && (state.scope === 'all' || row.market === state.scope)
-        && (state.category === 'all' || row.category === state.category));
+        && (state.scope === 'all' || row.market === state.scope)); // sem filtro de serviço: as campanhas não têm
 }
 
 function spendByMonth(months) {
@@ -457,8 +456,8 @@ function renderSalesCharts(window) {
         data: {
             labels,
             datasets: [
-                { label: 'Revenue', data: revenue, borderColor: '#57745d', backgroundColor: 'rgba(87,116,93,.12)', fill: 'origin', tension: .3, pointRadius: 3, pointBackgroundColor: '#57745d', borderWidth: 2 },
-                { label: 'Target', data: targets, borderColor: '#7b827d', borderDash: [5, 4], pointRadius: 2, pointBackgroundColor: '#7b827d', fill: false, tension: .3, borderWidth: 1.5, spanGaps: false },
+                { label: 'Revenue', data: revenue, borderColor: '#57745d', backgroundColor: 'rgba(87,116,93,.12)', fill: 'origin', cubicInterpolationMode: 'monotone', pointRadius: 3, pointBackgroundColor: '#57745d', borderWidth: 2 },
+                { label: 'Target', data: targets, borderColor: '#7b827d', borderDash: [5, 4], pointRadius: 2, pointBackgroundColor: '#7b827d', fill: false, cubicInterpolationMode: 'monotone', borderWidth: 1.5, spanGaps: false },
             ],
         },
         options: salesChartOptions(money),
@@ -493,7 +492,7 @@ function renderSalesStatus() {
         notes.push(Number.isFinite(fetched) ? `HubSpot data from ${relativeTime(fetched)}.` : 'HubSpot data loaded.');
         if (state.salesPoll && !state.salesPoll.timedOut) notes.push('Fetching new HubSpot data in the background. This page updates on its own in a few minutes.');
         else if (state.salesPoll && state.salesPoll.timedOut) { notes.push('The HubSpot refresh is taking longer than usual. Check the workflow executions in n8n.'); tone = 'sample'; }
-        if (state.category !== 'all') notes.push('Leads, calls and meetings have no service line, so they count every service.');
+        if (state.category !== 'all') notes.push('Leads, calls, meetings and ad spend have no service line, so they count every service.');
         else if (state.scope !== 'all') notes.push('Calls and meetings have no market, so they count every market.');
         if (errors.length) { notes.push(errors.join(' ')); tone = 'sample'; }
     }
@@ -559,6 +558,7 @@ function loadSalesTargetIntoForm() {
 }
 
 function openSalesTargetModal() {
+    if (document.body.dataset.salesTargets === 'off') return;
     const window = salesWindow();
     salesTargetForm.reset();
     showSalesTargetError('');

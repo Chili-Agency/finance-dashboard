@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 require __DIR__ . '/auth.php';
-auth_require_api();
+$currentUser = auth_require_api();
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -32,6 +32,8 @@ try {
             respond(200, ['entries' => array_map('toEntry', $rows)]);
 
         case 'POST':
+
+            auth_require_permission($currentUser, 'manual_inputs');
             $input = json_decode((string) file_get_contents('php://input'), true);
             if (!is_array($input)) {
                 respond(400, ['error' => 'Request body must be a JSON object.']);

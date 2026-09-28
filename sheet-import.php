@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 require __DIR__ . '/auth.php';
-auth_require_api();
+$currentUser = auth_require_api();
 require __DIR__ . '/xlsx-reader.php';
 
 header('Content-Type: application/json; charset=utf-8');
@@ -21,6 +21,7 @@ const IMPORT_FIELDS = [
 try {
     switch ($_SERVER['REQUEST_METHOD'] ?? 'GET') {
         case 'POST':
+            auth_require_permission($currentUser, 'manual_inputs');
             $missing = XlsxReader::missingExtensions();
             if ($missing !== []) {
                 respond(500, ['error' => sprintf(
