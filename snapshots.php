@@ -16,9 +16,16 @@ declare(strict_types=1);
  */
 
 const SNAPSHOT_LOCK = 'chili_finance_snapshots';
-const SNAPSHOT_LOCK_WAIT = 240;        // outra atualização em andamento: espera ela terminar
+const SNAPSHOT_LOCK_WAIT = 300;        // outra atualização em andamento: espera ela terminar
 const SNAPSHOT_FRESH_SECONDS = 60;     // fonte gravada há menos que isso não é buscada de novo
-const SNAPSHOT_TIMEOUT = 150;          // tempo máximo de cada webhook
+const SNAPSHOT_TIMEOUT = 270;          // tempo máximo de cada webhook (o HubSpot, paginado, é o mais lento)
+const SNAPSHOT_SESSION_TIMEOUT = 900;  // wait_timeout da conexão durante a busca (s)
+// Fontes que rodam em segundo plano: o webhook só responde "comecei" e o n8n envia o resultado
+// depois para snapshot-push.php (a busca do HubSpot passa dos 100 s que o n8n cloud aceita).
+const SNAPSHOT_ASYNC = ['sales'];
+// Enquanto uma busca em segundo plano não devolve o resultado, não dispara outra (cliques repetidos
+// no Refresh somavam execuções simultâneas e estouravam o limite de requisições do HubSpot).
+const SNAPSHOT_ASYNC_GUARD = 600; // s
 
 /** @return array<string, string> fonte => URL do webhook */
 function snapshot_sources(array $config): array
@@ -28,16 +35,30 @@ function snapshot_sources(array $config): array
         $sources["invoices_{$market}"] = (string) ($config['n8n'][$market] ?? '');
     }
     $sources['ads'] = (string) ($config['n8n']['ads'] ?? '');
+    $sources['sales'] = (string) ($config['n8n']['sales'] ?? '');
     return array_filter($sources, static fn (string $url): bool => $url !== '');
 }
 
 /**
  * Busca as fontes no n8n em paralelo e grava as que responderam bem.
+ *
+ * A busca pode levar minutos (o HubSpot pagina contatos e atividades), e o MySQL derruba conexões
+ * ociosas por mais que o wait_timeout ("2006 MySQL server has gone away"). Por isso a sessão pede
+ * um wait_timeout maior, a conexão é conferida (e refeita, se preciso) antes de gravar, e cada
+ * fonte é gravada à parte: uma falha não impede as outras.
  * @return array{ok:bool, sources:list<array<string, mixed>>, skipped:bool}
  */
-function snapshot_refresh(PDO $pdo, array $config, string $updatedBy): array
+function snapshot_refresh(PDO $pdo, array $config, string $updatedBy, ?array $only = null): array
 {
     $sources = snapshot_sources($config);
+    if ($only !== null) {
+        $sources = array_intersect_key($sources, array_flip($only)); // ex.: só 'sales', no agendamento diário
+    }
+    try {
+        $pdo->exec('SET SESSION wait_timeout = ' . SNAPSHOT_SESSION_TIMEOUT);
+    } catch (Throwable $error) {
+        error_log('[snapshots] wait_timeout: ' . $error->getMessage());
+    }
 
     $lock = $pdo->prepare('SELECT GET_LOCK(?, ?)');
     $lock->execute([SNAPSHOT_LOCK, SNAPSHOT_LOCK_WAIT]);
@@ -48,8 +69,12 @@ function snapshot_refresh(PDO $pdo, array $config, string $updatedBy): array
     try {
         // Se outra requisição acabou de gravar (ex.: dois cliques, ou botão logo após o agendamento), não busca de novo.
         $fresh = snapshot_fresh_sources($pdo, array_keys($sources));
-        $pending = array_diff_key($sources, array_flip($fresh));
+        $running = array_values(array_filter(array_keys($sources), static fn (string $name): bool => snapshot_async_running($pdo, $name)));
+        $pending = array_diff_key($sources, array_flip($fresh), array_flip($running));
         $fetched = $pending === [] ? [] : snapshot_fetch_all($pending);
+
+        // Se a conexão caiu durante a busca, a trava caiu junto; segue com uma conexão nova.
+        $pdo = snapshot_alive($pdo, $config);
 
         $report = [];
         foreach ($sources as $name => $url) {
@@ -57,18 +82,43 @@ function snapshot_refresh(PDO $pdo, array $config, string $updatedBy): array
                 $report[] = ['source' => $name, 'ok' => true, 'skipped' => true];
                 continue;
             }
+            if (in_array($name, $running, true)) {
+                $report[] = ['source' => $name, 'ok' => true, 'pending' => true, 'skipped' => true];
+                continue;
+            }
             $result = $fetched[$name];
+            if (snapshot_started_in_background($name, $result)) {
+                // O resultado chega depois, por snapshot-push.php. A última resposta boa continua valendo.
+                snapshot_mark_requested($pdo, $name);
+                $report[] = ['source' => $name, 'ok' => true, 'pending' => true, 'seconds' => $result['seconds']];
+                continue;
+            }
             $error = $result['error'] ?? snapshot_validate($name, (string) $result['body']);
-            if ($error === null) {
-                snapshot_save($pdo, $name, (string) $result['body'], $result['seconds'], $updatedBy);
-            } else {
-                snapshot_save_error($pdo, $name, $error, $updatedBy);
+            try {
+                if ($error === null) {
+                    snapshot_save($pdo, $name, (string) $result['body'], $result['seconds'], $updatedBy);
+                } else {
+                    snapshot_save_error($pdo, $name, $error, $updatedBy);
+                }
+            } catch (Throwable $saveError) {
+                $error = 'Could not save to the database: ' . $saveError->getMessage();
+                $pdo = snapshot_alive($pdo, $config);
+                try {
+                    snapshot_save_error($pdo, $name, $error, $updatedBy);
+                } catch (Throwable $ignored) {
+                }
+            }
+            if ($error !== null) {
                 error_log("[snapshots] {$name}: {$error}");
             }
             $report[] = ['source' => $name, 'ok' => $error === null, 'seconds' => $result['seconds'], 'error' => $error];
         }
     } finally {
-        $pdo->prepare('SELECT RELEASE_LOCK(?)')->execute([SNAPSHOT_LOCK]);
+        try {
+            $pdo->prepare('SELECT RELEASE_LOCK(?)')->execute([SNAPSHOT_LOCK]);
+        } catch (Throwable $ignored) {
+            // conexão perdida: o MySQL já soltou a trava
+        }
     }
 
     return [
@@ -76,6 +126,99 @@ function snapshot_refresh(PDO $pdo, array $config, string $updatedBy): array
         'skipped' => $pending === [],
         'sources' => $report,
     ];
+}
+
+/**
+ * Fonte em segundo plano que o n8n aceitou: respondeu 2xx sem o resultado completo ("Workflow was
+ * started"), ou estourou os 100 s do n8n cloud (HTTP 524), caso em que o workflow continua rodando.
+ * Se o webhook ainda devolver o resultado completo (workflow antigo), ele é gravado normalmente.
+ */
+function snapshot_started_in_background(string $name, array $result): bool
+{
+    if (!in_array($name, SNAPSHOT_ASYNC, true)) {
+        return false;
+    }
+    if ($result['error'] === null) {
+        return $name === 'sales' && snapshot_decode_sales((string) $result['body']) === null;
+    }
+    return str_contains((string) $result['error'], 'HTTP 524');
+}
+
+/** Linha de controle em data_snapshots (sem payload) que guarda quando a busca foi disparada. */
+function snapshot_request_key(string $name): string
+{
+    return "{$name}_requested";
+}
+
+function snapshot_mark_requested(PDO $pdo, string $name): void
+{
+    try {
+        $pdo->prepare(
+            'INSERT INTO data_snapshots (source, fetched_at, updated_by) VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE fetched_at = VALUES(fetched_at), updated_by = VALUES(updated_by)'
+        )->execute([snapshot_request_key($name), gmdate('Y-m-d H:i:s'), 'refresh']);
+    } catch (Throwable $error) {
+        error_log('[snapshots] mark requested: ' . $error->getMessage());
+    }
+}
+
+/** Busca em segundo plano disparada há menos de SNAPSHOT_ASYNC_GUARD e ainda sem resultado (bom ou com erro). */
+function snapshot_async_running(PDO $pdo, string $name): bool
+{
+    if (!in_array($name, SNAPSHOT_ASYNC, true)) {
+        return false;
+    }
+    try {
+        $select = $pdo->prepare(
+            "SELECT source, DATE_FORMAT(fetched_at, '%Y-%m-%d %H:%i:%s') AS fetched_at,
+                    DATE_FORMAT(last_error_at, '%Y-%m-%d %H:%i:%s') AS last_error_at
+               FROM data_snapshots WHERE source IN (?, ?)"
+        );
+        $select->execute([$name, snapshot_request_key($name)]);
+        $rows = array_column($select->fetchAll(PDO::FETCH_ASSOC), null, 'source');
+    } catch (Throwable $error) {
+        return false;
+    }
+    $requested = $rows[snapshot_request_key($name)]['fetched_at'] ?? null;
+    if ($requested === null || strtotime($requested . ' UTC') < time() - SNAPSHOT_ASYNC_GUARD) {
+        return false;
+    }
+    $answered = max((string) ($rows[$name]['fetched_at'] ?? ''), (string) ($rows[$name]['last_error_at'] ?? ''));
+    return $answered < $requested;
+}
+
+/** Devolve a conexão se ela ainda responde; senão abre outra com os dados do .env. */
+function snapshot_alive(PDO $pdo, array $config): PDO
+{
+    try {
+        $pdo->query('SELECT 1')->fetchColumn();
+        return $pdo;
+    } catch (Throwable $error) {
+        error_log('[snapshots] reconnecting: ' . $error->getMessage());
+    }
+    $db = $config['db'];
+    $fresh = new PDO(
+        sprintf('mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4', $db['host'], $db['port'] ?? 3306, $db['name']),
+        $db['user'],
+        $db['pass'],
+        [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC, PDO::ATTR_EMULATE_PREPARES => false]
+    );
+    try {
+        $fresh->exec('SET SESSION wait_timeout = ' . SNAPSHOT_SESSION_TIMEOUT);
+    } catch (Throwable $ignored) {
+    }
+    return $fresh;
+}
+
+/** Maior pacote que o MySQL aceita, em bytes (null se não der para ler). */
+function snapshot_packet_limit(PDO $pdo): ?int
+{
+    try {
+        $value = $pdo->query('SELECT @@max_allowed_packet')->fetchColumn();
+        return is_numeric($value) ? (int) $value : null;
+    } catch (Throwable $error) {
+        return null;
+    }
 }
 
 /** @return list<string> */
@@ -152,6 +295,18 @@ function snapshot_validate(string $name, string $body): ?string
     if ($name === 'ads') {
         return snapshot_decode_ads($body) === null ? 'n8n returned an unexpected response for ads.' : null;
     }
+    if ($name === 'sales') {
+        $data = snapshot_decode_sales($body);
+        if ($data === null) {
+            return 'n8n returned an unexpected response for sales.';
+        }
+        // O workflow marca ok=false quando deals ou contatos falharam: não apaga a última resposta boa.
+        if (($data['ok'] ?? true) === false) {
+            $errors = array_filter(array_map('strval', (array) ($data['errors'] ?? [])));
+            return 'HubSpot: ' . ($errors !== [] ? implode(' · ', $errors) : 'the workflow reported a failure.');
+        }
+        return null;
+    }
     $decoded = snapshot_decode_invoices($body);
     if (!$decoded['ok']) {
         return $decoded['error'];
@@ -190,6 +345,16 @@ function snapshot_decode_invoices(string $body): array
     return ['ok' => true, 'data' => $data];
 }
 
+/** Resposta do webhook de vendas (HubSpot): objeto com deals (o "Respond to Webhook" às vezes embrulha numa lista). */
+function snapshot_decode_sales(string $body): ?array
+{
+    $data = json_decode($body, true);
+    if (is_array($data) && isset($data[0]) && is_array($data[0]) && !isset($data['deals'])) {
+        $data = $data[0];
+    }
+    return is_array($data) && isset($data['deals']) && is_array($data['deals']) ? $data : null;
+}
+
 /** Resposta do webhook de ads: objeto com rows (o "Respond to Webhook" às vezes embrulha numa lista). */
 function snapshot_decode_ads(string $body): ?array
 {
@@ -200,9 +365,18 @@ function snapshot_decode_ads(string $body): ?array
     return is_array($data) && isset($data['rows']) && is_array($data['rows']) ? $data : null;
 }
 
-function snapshot_save(PDO $pdo, string $name, string $body, float $seconds, string $updatedBy): void
+function snapshot_save(PDO $pdo, string $name, string $body, ?float $seconds, string $updatedBy): void
 {
-    $payload = gzcompress($body, 6);
+    $payload = gzcompress($body, 9);
+    // Pacote maior que max_allowed_packet derruba a conexão (erro 2006) em vez de dar um erro claro.
+    $limit = snapshot_packet_limit($pdo);
+    if ($limit !== null && strlen($payload) + 1024 > $limit) {
+        throw new RuntimeException(sprintf(
+            'the data is %.1f MB compressed, above the MySQL max_allowed_packet of %.1f MB. Ask the host to raise it, or fetch a shorter period.',
+            strlen($payload) / 1048576,
+            $limit / 1048576
+        ));
+    }
     $now = gmdate('Y-m-d H:i:s');
     $statement = $pdo->prepare(
         'INSERT INTO data_snapshots (source, payload, payload_bytes, fetched_at, fetch_seconds, last_error, last_error_at, updated_by)
@@ -220,7 +394,7 @@ function snapshot_save(PDO $pdo, string $name, string $body, float $seconds, str
     $statement->bindValue(2, $payload, PDO::PARAM_LOB);
     $statement->bindValue(3, strlen($body), PDO::PARAM_INT);
     $statement->bindValue(4, $now);
-    $statement->bindValue(5, $seconds);
+    $statement->bindValue(5, $seconds, $seconds === null ? PDO::PARAM_NULL : PDO::PARAM_STR);
     $statement->bindValue(6, $updatedBy);
     $statement->execute();
 }

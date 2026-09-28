@@ -402,7 +402,7 @@ function monthSeries() {
 function renderMrr() { const series = monthSeries(); const selectedInvoices = filteredInvoices().filter(isBillable); const selected = selectedInvoices.reduce((sum, invoice) => sum + amount(invoice), 0); $('#mrr-total').textContent = money(selected); $('#mrr-label').textContent = periodBounds().label; if (state.mrrChart) state.mrrChart.destroy(); state.mrrChart = new Chart($('#mrr-chart'), { type: 'bar', data: { labels: series.labels, datasets: [{ data: series.values, backgroundColor: series.values.map((_, index) => index === series.values.length - 1 ? colors.authorised : '#d9d8d0'), borderRadius: 2, barPercentage: .58 }] }, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => ` ${money(context.raw)}` } } }, scales: { x: { grid: { display: false }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 10 } } }, y: { beginAtZero: true, grid: { color: '#e5e3dc' }, ticks: { color: '#7b827d', font: { family: 'DM Mono', size: 9 }, callback: (value) => money(value) } } } } }); $('#mrr-empty').classList.toggle('is-hidden', series.values.length > 0); $('#mrr-breakdown').innerHTML = Object.entries(companyLabels).map(([key, label]) => { const total = selectedInvoices.filter((invoice) => invoice.companyKey === key).reduce((sum, invoice) => sum + amount(invoice), 0); const dimmed = state.scope !== 'all' && state.scope !== key; return `<div class="breakdown-item${dimmed ? ' is-dimmed' : ''}"><span>${label}</span><strong>${money(total)}</strong></div>`; }).join(''); }
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' }[character])); }
-function renderAll() { renderInvoices(); renderLate(); renderMrr(); renderScorecard(); syncViewToUrl(); }
+function renderAll() { renderInvoices(); renderLate(); renderMrr(); renderScorecard(); if (typeof renderSales === 'function') renderSales(); syncViewToUrl(); }
 
 $('#period-select').addEventListener('change', (event) => { state.period = event.target.value; state.periodFromUrl = true; $('#date-range').hidden = state.period !== 'custom'; renderAll(); });
 $('#date-from').addEventListener('input', (event) => { state.customStart = event.target.value; });
@@ -436,12 +436,13 @@ async function refreshData() {
             headers: { 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
         }));
         const body = await response.json().catch(() => null);
+        state.lastRefresh = body;
         if (!response.ok) problem = body && (body.errors?.length ? body.errors.join(' · ') : body.error) || `The server answered HTTP ${response.status}`;
     } catch (error) {
         problem = error.message;
     }
     state.sync.inFlight = false;
-    await Promise.all([loadInvoices(), typeof loadAds === 'function' ? loadAds() : null]);
+    await Promise.all([loadInvoices(), typeof loadAds === 'function' ? loadAds() : null, typeof loadSales === 'function' ? loadSales() : null]);
     if (problem) {
         const notice = $('#error-notice');
         notice.classList.remove('is-info');
@@ -2899,6 +2900,7 @@ async function loadAds() {
         state.ads = { status: 'error', rows: [], accounts: [], errors: [error.message], fetchedAt: null };
     }
     renderUnitSection();
+    if (typeof renderSales === 'function') renderSales();
 }
 
 function adsFor(months, scope = state.scope, category = state.category) {
