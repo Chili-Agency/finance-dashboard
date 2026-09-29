@@ -1105,7 +1105,16 @@ function asset(string $path): string
         </form>
     </dialog>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-    <script src="<?= asset('assets/app.js') ?>"></script>
+    <script src="<?= asset('assets/core.js') ?>"></script>
+    <script src="<?= asset('assets/overview.js') ?>"></script>
     <script src="<?= asset('assets/sales.js') ?>"></script>
+    <script src="<?= asset('assets/invoices.js') ?>"></script>
+    <script src="<?= asset('assets/late-invoices.js') ?>"></script>
+    <script src="<?= asset('assets/unit-economics.js') ?>"></script>
+    <script src="<?= asset('assets/mrr-tracking.js') ?>"></script>
+    <script src="<?= asset('assets/retention.js') ?>"></script>
+    <script src="<?= asset('assets/targets.js') ?>"></script>
+    <script src="<?= asset('assets/margin-cogs.js') ?>"></script>
+    <script src="<?= asset('assets/app.js') ?>"></script>
 </body>
 </html>
