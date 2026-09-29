@@ -68,12 +68,14 @@ function watchSalesRefresh() {
     if (state.salesPoll) clearInterval(state.salesPoll.timer);
     const startedAt = Date.now();
     const before = (state.sales.data && state.sales.data.fetchedAt) || '';
-    state.salesPoll = { startedAt, timedOut: false, timer: setInterval(async () => {
+    // O timer fica numa variável local: o intervalo sempre consegue se cancelar, mesmo que
+    // outra parte do código troque ou zere state.salesPoll.
+    const timer = setInterval(async () => {
         try {
             const response = redirectIfSignedOut(await fetch(SALES_ENDPOINT, { cache: 'no-store' }));
             const body = await response.json().catch(() => null);
             if (response.ok && body && body.configured !== false && body.fetchedAt && body.fetchedAt !== before) {
-                clearInterval(state.salesPoll.timer);
+                clearInterval(timer);
                 state.salesPoll = null;
                 state.sales = { status: 'ready', data: prepareSales(body), errors: body.errors || [] };
                 renderSales();
@@ -83,11 +85,12 @@ function watchSalesRefresh() {
             // tenta de novo na próxima volta
         }
         if (Date.now() - startedAt > SALES_POLL_LIMIT_MINUTES * 60 * 1000) {
-            clearInterval(state.salesPoll.timer);
+            clearInterval(timer);
             state.salesPoll = { timedOut: true };
             renderSalesStatus();
         }
-    }, SALES_POLL_SECONDS * 1000) };
+    }, SALES_POLL_SECONDS * 1000);
+    state.salesPoll = { startedAt, timedOut: false, timer };
 }
 
 function prepareSales(body) {
@@ -363,6 +366,11 @@ function renderSalesBreakdowns(current) {
     $('#sales-by-market').innerHTML = salesBarRows(groupDeals(current.won, (deal) => deal.market).map(([market, entry]) => ({
         label: SALES_MARKET_LABELS[market] || market, value: entry.value, sub: plural(entry.count, 'deal'), color: SALES_MARKET_COLORS[market] || '#a5a6a0',
     })), { empty: 'No won deals in this period' });
+    const wonLink = $('#open-sales-won-modal');
+    if (wonLink) {
+        wonLink.hidden = current.won.length === 0;
+        wonLink.firstChild.textContent = `See ${plural(current.won.length, 'client')} `;
+    }
 
     $('#sales-by-owner').innerHTML = salesBarRows(groupDeals(current.won, (deal) => deal.owner || '').slice(0, SALES_TOP_PEOPLE).map(([owner, entry]) => ({
         label: data.nameOf(owner), value: entry.value, sub: plural(entry.count, 'deal'), color: data.colorOf(owner),
@@ -508,11 +516,12 @@ function clearSalesPage() {
     $('#sales-funnel-rates').innerHTML = '';
     $('#sales-channels').innerHTML = '';
     $('#sales-channels-total').innerHTML = '';
+    const wonLink = $('#open-sales-won-modal');
+    if (wonLink) wonLink.hidden = true;
     ['#sales-close-rate', '#sales-cycle', '#sales-lead-mql', '#sales-velocity', '#sales-spend-total'].forEach((selector) => setText(selector, DASH));
     ['#sales-close-rate-note', '#sales-cycle-note', '#sales-lead-mql-note', '#sales-velocity-note'].forEach((selector) => setText(selector, ''));
     Object.values(state.salesCharts).forEach((chart) => chart.destroy());
     state.salesCharts = {};
-state.salesPoll = null; // HubSpot atualizando em segundo plano, depois do Refresh
     $('#sales-trend-empty').textContent = waiting;
     $('#sales-spend-empty').textContent = waiting;
     $('#sales-trend-empty').classList.remove('is-hidden');
@@ -532,6 +541,80 @@ function renderSales() {
     renderSalesActivity(window);
     renderSalesStats(window, current);
     renderSalesCharts(window);
+    const wonModal = $('#sales-won-modal');
+    if (wonModal && wonModal.open) renderSalesWonModal();
+}
+
+// ---------- Modal dos clientes ganhos (painel By market) ----------
+
+const salesWonModal = $('#sales-won-modal');
+const SALES_SERVICE_LABELS = { ...categoryLabels, other: 'Unclassified' };
+const SALES_DEAL_TYPES = { newbusiness: ['New', 'is-new'], existingbusiness: ['Existing', 'is-existing'] };
+const salesDate = (day) => (day ? new Date(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10))) : null);
+
+function renderSalesWonModal() {
+    const data = state.sales.data;
+    if (!data) return;
+    const window = salesWindow();
+    const deals = salesMeasure(window).won
+        .map((deal) => ({ ...deal, value: dealValue(deal) }))
+        .sort((a, b) => b.closedAt.localeCompare(a.closedAt) || b.value - a.value);
+    const total = sumOf(deals, (deal) => deal.value);
+    const types = countBy(deals, (deal) => deal.type || '');
+    const typeNote = types
+        .filter(([type]) => SALES_DEAL_TYPES[type])
+        .map(([type, count]) => `${number(count)} ${SALES_DEAL_TYPES[type][0].toLowerCase()}`);
+    const untyped = deals.filter((deal) => !SALES_DEAL_TYPES[deal.type || '']).length;
+    if (untyped) typeNote.push(`${number(untyped)} with no type`);
+
+    setText('#sales-won-modal-context', `${state.scope === 'all' ? 'Global' : companyLabels[state.scope]} · ${serviceName(state.category)} · ${window.label}`);
+    setText('#sales-won-modal-summary', deals.length
+        ? `${plural(deals.length, 'client')} · ${money(total)} TCV${typeNote.length ? ` · ${typeNote.join(', ')}` : ''}`
+        : 'No won deals in this period.');
+
+    const split = state.category !== 'all' && deals.some((deal) => dealShare(deal) < 1);
+    const unnamed = deals.some((deal) => !deal.name);
+    const scopeNote = $('#sales-won-modal-scope');
+    scopeNote.hidden = !split && !unnamed;
+    scopeNote.textContent = [
+        split ? `Some deals sold more than one service: only their ${serviceName(state.category)} share is counted here.` : '',
+        unnamed ? 'Some deals show no name: the saved HubSpot data is from before deal names were fetched. Press Refresh to load them.' : '',
+    ].filter(Boolean).join(' ');
+
+    $('#sales-won-table').innerHTML = deals.map((deal) => {
+        const lines = Object.entries(deal.shares || {}).filter(([, part]) => Number(part) > 0).map(([line]) => SALES_SERVICE_LABELS[line] || line).join(' + ');
+        const cycle = deal.createdAt ? Math.max(0, Math.round((Date.parse(deal.closedAt) - Date.parse(deal.createdAt)) / DAY_MS)) : null;
+        const [typeLabel, typeClass] = SALES_DEAL_TYPES[deal.type || ''] || [deal.type || DASH, 'is-other'];
+        return `<tr>
+            <td>${escapeHtml(deal.name || `Deal ${deal.id}`)}<span class="entry-sub">Closed ${escapeHtml(shortDate(salesDate(deal.closedAt)))}</span></td>
+            <td>${escapeHtml(SALES_MARKET_LABELS[deal.market] || deal.market || DASH)}</td>
+            <td>${escapeHtml(monthLabel(monthFromKey(deal.closedAt.slice(0, 7))))}</td>
+            <td>${escapeHtml(lines || DASH)}</td>
+            <td>${escapeHtml(data.nameOf(deal.owner))}</td>
+            <td class="align-right mono">${hasValue(cycle) ? plural(cycle, 'day') : DASH}</td>
+            <td class="align-right mono">${hasValue(deal.valueUsd) ? `<span class="value-up">${money(deal.value)}</span>` : DASH}</td>
+            <td><span class="status-pill ${typeClass}">${escapeHtml(typeLabel)}</span></td>
+        </tr>`;
+    }).join('');
+    $('#sales-won-table-empty').classList.toggle('is-hidden', deals.length > 0);
+    $('#sales-won-table-total').classList.toggle('is-hidden', deals.length === 0);
+    setText('#sales-won-total-value', money(total));
+}
+
+function openSalesWonModal() {
+    renderSalesWonModal();
+    salesWonModal.showModal();
+}
+
+function closeSalesWonModal() {
+    salesWonModal.close();
+    $('#open-sales-won-modal').focus();
+}
+
+if (salesWonModal) {
+    $('#open-sales-won-modal').addEventListener('click', openSalesWonModal);
+    salesWonModal.querySelectorAll('[data-close-modal]').forEach((button) => button.addEventListener('click', closeSalesWonModal));
+    salesWonModal.addEventListener('click', (event) => { if (event.target === salesWonModal) closeSalesWonModal(); });
 }
 
 // ---------- Modal da meta ----------

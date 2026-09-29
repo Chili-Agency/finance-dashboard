@@ -2790,8 +2790,8 @@ function renderSummaryPlanChart(data) {
         data: {
             labels: data.months.map((entry) => entry.label),
             datasets: [
-                { type: 'bar', label: 'Actual', data: data.months.map((entry) => (hasValue(entry.actual) && entry.actual > 0 ? entry.actual : null)), backgroundColor: colors.authorised, borderWidth: 0, maxBarThickness: 28 },
-                { type: 'line', label: 'Target', data: data.months.map((entry) => (hasValue(entry.target) ? entry.target : null)), borderColor: '#4a544d', borderWidth: 1.5, borderDash: [5, 4], pointRadius: 2, pointBackgroundColor: '#4a544d', spanGaps: true, tension: 0 },
+                { type: 'bar', label: 'Actual', data: data.months.map((entry) => (hasValue(entry.actual) && entry.actual > 0 ? entry.actual : null)), backgroundColor: colors.authorised, borderWidth: 0, maxBarThickness: 28, order: 1 },
+                { type: 'line', label: 'Target', data: data.months.map((entry) => (hasValue(entry.target) ? entry.target : null)), borderColor: '#4a544d', borderWidth: 1.5, borderDash: [5, 4], pointRadius: 2, pointBackgroundColor: '#4a544d', spanGaps: true, tension: 0, order: 0 },
             ],
         },
         options: summaryChartOptions(),
@@ -2854,7 +2854,9 @@ function summaryChartOptions() {
         maintainAspectRatio: false,
         animation: false,
         plugins: {
-            legend: { display: true, position: 'bottom', labels: { boxWidth: 10, boxHeight: 10, font: { family: 'Manrope', size: 10 }, color: '#6d6f68' } },
+            // O Chart.js desenha por último (por cima) o dataset de menor "order". Os gráficos usam order
+            // para pôr a linha de meta sobre as barras; a legenda segue a ordem em que os datasets foram declarados.
+            legend: { display: true, position: 'bottom', labels: { boxWidth: 10, boxHeight: 10, font: { family: 'Manrope', size: 10 }, color: '#6d6f68', sort: (a, b) => a.datasetIndex - b.datasetIndex } },
             tooltip: { callbacks: { label: (item) => `${item.dataset.label}: ${money(item.parsed.y)}` } },
         },
         scales: {

@@ -495,6 +495,13 @@ table.shows-service .service-col{display:table-cell}
 @media(max-width:1280px){.sales-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:700px){.sales-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.sales-funnel{grid-template-columns:1fr;gap:4px}.funnel-stage,.funnel-stage:first-child{clip-path:none;margin:0;padding:12px}.funnel-outcomes{grid-template-columns:1fr 1fr;grid-template-rows:auto;margin:4px 0 0}.sales-chart-wrap{height:230px}}
 
+/* Modal dos clientes ganhos (Sales > By market): mesmo layout do modal de churn */
+.sales-panel-link{display:block;margin-top:18px}
+.sales-won-table{min-width:880px}
+.status-pill.is-new{background:#e8eee8;color:var(--green)}
+.status-pill.is-existing{background:#e1ecf0;color:#4b6b7b}
+.status-pill.is-other{background:#ece9e5;color:#777}
+
 /* Perfis: quem não tem a permissão não vê os botões de inserção (o servidor recusa a gravação de qualquer forma) */
 body[data-manual-inputs="off"] [data-permission="manual_inputs"],
 body[data-manual-inputs="off"] [data-entry-edit],
