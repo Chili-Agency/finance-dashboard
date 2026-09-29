@@ -130,6 +130,7 @@ function salesDeals(array $items, array $config, array &$errors): array
         $closedAt = $outcome === 'open' ? null : day($deal['closedAt'] ?? null);
         $rows[] = [
             'id' => (string) ($deal['id'] ?? ''),
+            'name' => trim((string) ($deal['name'] ?? '')) ?: null, // dealname; a lista de clientes ganhos usa
             'outcome' => $outcome,
             'createdAt' => day($deal['createdAt'] ?? null),
             'closedAt' => $closedAt,

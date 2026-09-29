@@ -193,7 +193,7 @@ function asset(string $path): string
                 </div>
 
                 <div class="sales-kpis">
-                    <article class="metric-card sales-kpi" id="sales-revenue-card"><span class="metric-label">Revenue</span><strong id="sales-revenue">—</strong><p id="sales-revenue-note">—</p></article>
+                    <article class="metric-card sales-kpi" id="sales-revenue-card"><span class="metric-label" title="Total Contract Value: sum of won deals in the period">TCV (Total Contract Value)</span><strong id="sales-revenue">—</strong><p id="sales-revenue-note">—</p></article>
                     <article class="metric-card sales-kpi" id="sales-deals-card"><span class="metric-label">Deals closed</span><strong id="sales-deals">—</strong><p id="sales-deals-note">—</p></article>
                     <article class="metric-card sales-kpi" id="sales-growth-card"><span class="metric-label">Growth</span><strong id="sales-growth">—</strong><p id="sales-growth-note">—</p></article>
                     <article class="metric-card sales-kpi summary-card" id="sales-target-card" data-state="empty"><span class="metric-label">To target</span><strong id="sales-target">—</strong><div class="summary-bar"><span id="sales-target-bar"></span></div><p id="sales-target-note">—</p></article>
@@ -207,7 +207,7 @@ function asset(string $path): string
                 </article>
 
                 <div class="split-grid">
-                    <article class="panel"><div class="panel-header"><div><p class="eyebrow">Revenue</p><h3>By market</h3></div><span class="panel-meta">Won deals</span></div><div class="sales-bars" id="sales-by-market"></div></article>
+                    <article class="panel"><div class="panel-header"><div><p class="eyebrow">Revenue</p><h3>By market</h3></div><span class="panel-meta">Won deals</span></div><div class="sales-bars" id="sales-by-market"></div><button type="button" class="stat-link sales-panel-link" id="open-sales-won-modal" aria-haspopup="dialog" aria-controls="sales-won-modal" hidden>See clients <span aria-hidden="true">→</span></button></article>
                     <article class="panel"><div class="panel-header"><div><p class="eyebrow">Revenue</p><h3>By salesperson</h3></div><span class="panel-meta">Deal owner</span></div><div class="sales-bars" id="sales-by-owner"></div></article>
                 </div>
 
@@ -1007,6 +1007,50 @@ function asset(string $path): string
             </footer>
         </form>
     </dialog>
+    <dialog class="modal is-wide" id="sales-won-modal" aria-labelledby="sales-won-modal-title">
+        <div class="modal-form">
+            <header class="modal-header">
+                <div>
+                    <p class="eyebrow">Revenue</p>
+                    <h2 id="sales-won-modal-title">New clients</h2>
+                </div>
+                <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+            </header>
+            <p class="modal-copy" id="sales-won-modal-context"></p>
+            <p class="churn-scope-note" id="sales-won-modal-scope" role="note" hidden></p>
+            <p class="churn-summary" id="sales-won-modal-summary"></p>
+
+            <div class="table-scroll churn-scroll">
+                <table class="entries-table churn-table sales-won-table">
+                    <thead>
+                        <tr>
+                            <th>Client</th>
+                            <th>Market</th>
+                            <th>Month</th>
+                            <th>Service sold</th>
+                            <th>Salesperson</th>
+                            <th class="align-right" title="From deal created to won">Time to close</th>
+                            <th class="align-right" title="Total Contract Value in USD">TCV</th>
+                            <th>Type</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sales-won-table"></tbody>
+                    <tfoot id="sales-won-table-total">
+                        <tr><td colspan="6">Total won</td><td class="align-right mono"><span class="value-up" id="sales-won-total-value">—</span></td><td></td></tr>
+                    </tfoot>
+                </table>
+                <div class="table-empty is-hidden" id="sales-won-table-empty">No won deals in this period.</div>
+            </div>
+
+            <footer class="modal-footer">
+                <p class="modal-hint">Deals marked as won in the HubSpot Sales Pipeline, in the month they closed. TCV is the deal amount converted to USD at that month’s rate. New = new business; Existing = a new deal with a current client (upsell or cross-sell). With a service filter on, a deal with more than one service counts only its share of that service line.</p>
+                <div class="modal-actions">
+                    <button type="button" class="button-secondary" data-close-modal>Close</button>
+                </div>
+            </footer>
+        </div>
+    </dialog>
+
     <dialog class="modal" id="sales-target-modal" aria-labelledby="sales-target-modal-title">
         <form class="modal-form" id="sales-target-form" novalidate>
             <header class="modal-header">
