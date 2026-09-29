@@ -20,10 +20,12 @@ const AUTH_LOCK_SECONDS = 5 * 60;
  *   manual_inputs: Target MRR, COGS e margem, outros custos de aquisição, juros de atraso,
  *                  importação da planilha de metas.
  *   sales_targets: meta de vendas da página Sales.
+ * Perfil com lista vazia só visualiza. Perfil que não está aqui também não grava nada.
  */
 const AUTH_ROLES = [
     'admin' => ['manual_inputs', 'sales_targets'],
     'sales' => ['sales_targets'],
+    'ppc' => [], // time de PPC: só visualiza
 ];
 
 function auth_start(): void

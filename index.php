@@ -58,7 +58,7 @@ function asset(string $path): string
                 <div class="user-card">
                     <div class="user-meta">
                         <strong><?= htmlspecialchars($currentUser['name'], ENT_QUOTES, 'UTF-8') ?></strong>
-                        <small><?= htmlspecialchars($currentUser['email'], ENT_QUOTES, 'UTF-8') ?></small><?php if (!$canManualInputs): ?><small class="user-role">View only · sales targets</small><?php endif; ?>
+                        <small><?= htmlspecialchars($currentUser['email'], ENT_QUOTES, 'UTF-8') ?></small><?php if (!$canManualInputs): ?><small class="user-role"><?= $canSalesTargets ? 'View only ·&nbsp;sales&nbsp;targets' : 'View only' ?></small><?php endif; ?>
                     </div>
                     <form method="post" action="logout.php">
                         <input type="hidden" name="csrf" value="<?= htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') ?>">
