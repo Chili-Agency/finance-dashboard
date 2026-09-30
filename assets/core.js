@@ -78,12 +78,15 @@ function categoryTag(invoice) {
 function amount(invoice) { return fullAmount(invoice) * categoryShare(invoice); }
 
 function fullAmount(invoice) {
+    const pick = (source) => [source.SubTotal, source.Total, source.AmountDue]
+        .find((value) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)));
     const usd = invoice.amounts_usd;
     if (usd) {
-        const value = usd.Total ?? usd.SubTotal ?? usd.AmountDue;
-        if (Number.isFinite(Number(value))) return Number(value);
+        const value = pick(usd);
+        if (value !== undefined) return Number(value);
     }
-    return Number(invoice.Total || invoice.SubTotal || invoice.AmountDue || 0) * Number(invoice.usdRate || 1);
+    const local = pick(invoice);
+    return Number(local ?? 0) * Number(invoice.usdRate || 1);
 }
 
 function isRevenue(invoice) { return String(invoice.Type || '').toUpperCase() === 'ACCREC'; }

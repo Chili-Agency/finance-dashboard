@@ -1,14 +1,14 @@
 function renderMetrics(invoices) {
     const totals = { paid: 0, late: 0, open: 0, paidCount: 0, lateCount: 0, openCount: 0 };
-    invoices.forEach((invoice) => { const bucket = invoiceBucket(invoice); if (bucket === 'paid') { totals.paid += amount(invoice); totals.paidCount++; } if (bucket === 'late') { totals.late += amount(invoice); totals.lateCount++; } if (bucket === 'open') { totals.open += amount(invoice); totals.openCount++; } });
+    invoices.filter(isBillable).forEach((invoice) => { const bucket = invoiceBucket(invoice); if (bucket === 'paid') { totals.paid += amount(invoice); totals.paidCount++; } if (bucket === 'late') { totals.late += amount(invoice); totals.lateCount++; } if (bucket === 'open') { totals.open += amount(invoice); totals.openCount++; } });
     const overdue = lateInvoices();
     const overdueCount = overdue.length;
     $('#paid-total').textContent = money(totals.paid); $('#late-total').textContent = money(overdue.reduce((sum, item) => sum + item.balance, 0)); $('#open-total').textContent = money(totals.open);
     const totalCount = totals.paidCount + totals.lateCount + totals.openCount;
-    const voidedCount = invoices.filter((invoice) => invoiceBucket(invoice) === 'voided').length;
+    const excludedCount = invoices.filter((invoice) => !isBillable(invoice)).length;
     $('#all-total').textContent = money(totals.paid + totals.late + totals.open);
     $('#all-count').textContent = `${number(totalCount)} invoice${totalCount === 1 ? '' : 's'}`;
-    $('#all-note').textContent = voidedCount ? `issued, ${number(voidedCount)} voided excluded` : 'issued in period';
+    $('#all-note').textContent = excludedCount ? `issued, excl. tax · ${number(excludedCount)} voided/draft/deleted excluded` : 'issued in period, excl. tax';
     $('#paid-count').textContent = `${number(totals.paidCount)} invoice${totals.paidCount === 1 ? '' : 's'}`; $('#late-count').textContent = `${number(overdueCount)} invoice${overdueCount === 1 ? '' : 's'}`; $('#open-count').textContent = `${number(totals.openCount)} invoice${totals.openCount === 1 ? '' : 's'}`;
 }
 

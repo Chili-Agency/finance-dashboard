@@ -139,6 +139,7 @@ $sourceErrors = [];
 $sourceWarnings = [];
 $sourceSeconds = [];
 $sourceFetchedAt = [];
+$seenInvoiceIds = [];
 
 // Invoices gravadas pela última atualização (snapshot-refresh.php), não mais o webhook ao vivo.
 try {
@@ -209,6 +210,16 @@ foreach ($requested as $key) {
         }
         if (trim((string) ($invoice['Reference'] ?? '')) !== '') {
             $diagnostics[$key]['withReference']++;
+        }
+
+        // A mesma invoice pode vir duas vezes do n8n (páginas do Xero que se sobrepõem): conta uma vez só.
+        $invoiceId = (string) ($invoice['InvoiceID'] ?? '');
+        if ($invoiceId !== '') {
+            if (isset($seenInvoiceIds[$invoiceId])) {
+                $warnings['duplicates'] = 'Duplicate invoices from n8n were ignored';
+                continue;
+            }
+            $seenInvoiceIds[$invoiceId] = true;
         }
 
         $slim = slimInvoice($invoice, $markerPatterns, $categoryRules, $lineMarkers, $otherServiceRules);
