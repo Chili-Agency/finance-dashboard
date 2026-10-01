@@ -25,7 +25,8 @@ const AUTH_LOCK_SECONDS = 5 * 60;
 const AUTH_ROLES = [
     'admin' => ['manual_inputs', 'sales_targets'],
     'sales' => ['sales_targets'],
-    'ppc' => [], // time de PPC: só visualiza
+    'ppc' => [],
+    'seo' => [],
 ];
 
 function auth_start(): void
