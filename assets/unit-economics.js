@@ -116,7 +116,7 @@ function clientLifetimes() {
         const entry = clients.get(key) || { key, name: invoice.Contact?.Name || 'Unknown client', scope: invoice.companyKey, first: date, last: date, revenue: 0, months: new Set(), invoices: 0 };
         if (date < entry.first) entry.first = date;
         if (date > entry.last) entry.last = date;
-        entry.revenue += amount(invoice);
+        entry.revenue += mrrAmount(invoice);
         entry.months.add(monthKey(date));
         entry.invoices += 1;
         clients.set(key, entry);
@@ -140,7 +140,7 @@ function unitMetrics() {
     const { start, end } = periodBounds();
     const window = { start: start || new Date(1970, 0, 1), end: end || new Date(9999, 11, 31) };
     const invoices = scopedInvoices().filter((invoice) => inWindow(invoiceDate(invoice), window));
-    const revenue = invoices.reduce((total, invoice) => total + amount(invoice), 0);
+    const revenue = invoices.reduce((total, invoice) => total + mrrAmount(invoice), 0);
 
 
     const earliest = inScopeBillable().reduce((first, invoice) => { const date = invoiceDate(invoice); return date && (!first || date < first) ? date : first; }, null);
