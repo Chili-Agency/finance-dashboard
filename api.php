@@ -13,7 +13,8 @@ const FX_MONEY_FIELDS = ['SubTotal', 'TotalTax', 'Total', 'AmountDue', 'AmountPa
 // Marcadores lidos só no texto da própria linha (descrição, código do item, conta, tracking).
 // A onboarding fee não pode vir do Reference: "Onboarding 1/3" no Reference marcaria a
 // fatura inteira como fee, e a mensalidade que vem junto sumiria da retenção.
-const LINE_ONLY_MARKERS = ['onboarding'];
+// O mesmo vale para a break fee: o Reference só diz que a fatura tem uma multa, não qual linha.
+const LINE_ONLY_MARKERS = ['onboarding', 'breakFee'];
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
@@ -73,17 +74,26 @@ $markerPatterns = [
         '/referral/i',
         '/indica[cç][aã]o/i',
     ],
-    // Onboarding fee cobrada nas primeiras parcelas. Não é receita recorrente: fica fora da
-    // retenção, para o fim da fee não aparecer como downgrade. Ajuste aos nomes usados no Xero.
     'onboarding' => [
-        '/\bon[-\s]?board(ing)?\b/i', // "Onboarding Fee", "onboard fee"
+        '/\bon[-\s]?board(ing)?\b/i',
         '/\bset[-\s]?up\s*fee\b/i',
         '/taxa\s*de\s*(setup|implanta[cç][aã]o|ades[aã]o)/i',
         '/(tarifa|cuota|cargo)\s*de\s*(configuraci[oó]n|implementaci[oó]n|alta|inscripci[oó]n)/i',
     ],
+    // Multa de rescisão (break fee): receita não recorrente, fica fora de todo o MRR.
+    // Flag u de propósito: sem ela o PHP lê o texto byte a byte e [oó], [aã] não casam acentos.
+    // Os lookarounds tratam "_" como separador (BREAK_FEE) sem casar dentro de outra palavra.
+    'breakFee' => [
+        '/(?<!\p{L})break[-_\s]?fees?(?!\p{L})/iu',
+        '/(?<!\p{L})(early\s*)?(termination|cancell?ation)\s*fees?(?!\p{L})/iu',
+        '/(?<!\p{L})exit\s*fees?(?!\p{L})/iu',
+        '/multa\s*(contratual|rescis[oó]ria|de\s*rescis[aã]o|por\s*cancelamento)/iu',
+        '/taxa\s*de\s*(rescis[aã]o|cancelamento)/iu',
+        '/(multa|cargo|penalizaci[oó]n)\s*por\s*(rescisi[oó]n|cancelaci[oó]n|terminaci[oó]n)/iu',
+    ],
 ];
 
-$lineMarkers = ['upsell', 'onboarding'];
+$lineMarkers = ['upsell', 'onboarding', 'breakFee'];
 
 // Ordem = prioridade. "Others" agrupa serviços fora de SEO/PPC; cada linha recebe
 // também o serviço específico. SMM vem primeiro: "Social Media Marketing" é SMM, não
@@ -183,7 +193,7 @@ foreach ($requested as $key) {
 
     $before = count($invoices);
     $sourceTypeCounts[$key] = [];
-    $diagnostics[$key] = ['withLineItems' => 0, 'withReference' => 0, 'firstMonthMarked' => 0, 'upsellMarked' => 0, 'referralMarked' => 0, 'onboardingLines' => 0, 'withAccountName' => 0, 'seo' => 0, 'ppc' => 0, 'others' => 0, 'smm' => 0, 'marketing' => 0, 'webdev' => 0, 'unclassified' => 0];
+    $diagnostics[$key] = ['withLineItems' => 0, 'withReference' => 0, 'firstMonthMarked' => 0, 'upsellMarked' => 0, 'referralMarked' => 0, 'onboardingLines' => 0, 'breakFeeLines' => 0, 'breakFeeReferenceOnly' => 0, 'withAccountName' => 0, 'seo' => 0, 'ppc' => 0, 'others' => 0, 'smm' => 0, 'marketing' => 0, 'webdev' => 0, 'unclassified' => 0];
 
     foreach ($response['data'] as $invoice) {
         if (!is_array($invoice)) {
@@ -246,6 +256,12 @@ foreach ($requested as $key) {
         }
         if (array_sum((array) ($slim['onboardingShares'] ?? [])) > 0) {
             $diagnostics[$key]['onboardingLines']++;
+        }
+        if (array_sum((array) ($slim['breakFeeShares'] ?? [])) > 0) {
+            $diagnostics[$key]['breakFeeLines']++;
+        } elseif (matchesAny((string) ($slim['Reference'] ?? ''), $markerPatterns['breakFee'])) {
+            // Reference diz break fee, mas nenhuma linha diz: não entra no desconto do MRR.
+            $diagnostics[$key]['breakFeeReferenceOnly']++;
         }
         if (!empty($slim['hasAccountNames'])) {
             $diagnostics[$key]['withAccountName']++;
@@ -518,6 +534,7 @@ function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules
         'upsellShares' => $markerShares['upsell'] ?? null,
         // Fatia de cada linha de serviço que é onboarding fee (mesma base de categoryShares).
         'onboardingShares' => $markerShares['onboarding'] ?? null,
+        'breakFeeShares' => $markerShares['breakFee'] ?? null,
         'otherServices' => $otherServices,
         'otherServiceShares' => $otherServiceShares,
         'hasAccountNames' => $hasAccountNames,
