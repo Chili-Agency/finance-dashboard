@@ -254,6 +254,7 @@ async function loadInvoices() {
             throw new Error(data && Array.isArray(data.errors) && data.errors.length ? data.errors.join(' · ') : `The dashboard server answered HTTP ${response.status}`);
         }
         state.invoices = Array.isArray(data.invoices) ? data.invoices : [];
+        state.cogsBills = Array.isArray(data.cogsLines) ? data.cogsLines : [];
         state.monthlyRows = null;
         state.sourceTypeCounts = data.sourceTypeCounts || {};
         state.categoryCounts = data.categoryCounts || {};
@@ -623,9 +624,45 @@ function invoicesInWindow(list, buckets, window) {
     return list.filter((invoice) => inWindow(invoiceDate(invoice), window));
 }
 
+// Retenção em câmbio constante. Cada fatura é convertida para USD pela cotação do mês dela, então o mesmo
+// valor em BRL ou MXN virava um USD diferente no mês seguinte e a comparação lia isso como queda (churn).
+// Aqui o mês anterior é reconvertido pela cotação do mês atual (a fatura já traz o valor local e a taxa),
+// e só uma queda de valor na moeda local conta como churn. Faturas em USD não mudam.
+function invoiceCurrency(invoice) {
+    return String(invoice.CurrencyCode || invoice.companyCurrency || 'USD').toUpperCase();
+}
+
+function restateAtCurrentRates(previous, currentInvoices, meta) {
+    const reference = new Map();
+    currentInvoices.forEach((invoice) => {
+        const rate = Number(invoice.usdRate);
+        const date = invoiceDate(invoice);
+        if (!date || !(rate > 0)) return;
+        const code = invoiceCurrency(invoice);
+        const known = reference.get(code);
+        if (!known || date > known.date) reference.set(code, { date, rate });
+    });
+    return previous.map((invoice) => {
+        const known = reference.get(invoiceCurrency(invoice));
+        const own = Number(invoice.usdRate);
+        if (!known || !(own > 0)) return invoice;
+        const factor = known.rate / own;
+        if (Math.abs(factor - 1) < 0.0001) return invoice;
+        meta.fxRestated = true;
+        const usd = invoice.amounts_usd
+            ? Object.fromEntries(Object.entries(invoice.amounts_usd).map(([field, value]) => [field, value !== null && value !== '' && Number.isFinite(Number(value)) ? Number(value) * factor : value]))
+            : invoice.amounts_usd;
+        return { ...invoice, usdRate: known.rate, amounts_usd: usd };
+    });
+}
+
 function measureWindow(ctx, windows, meta) {
     const current = invoicesInWindow(ctx.invoices, ctx.byMonth, windows.current);
-    const previous = invoicesInWindow(ctx.invoices, ctx.byMonth, windows.previous);
+    const previous = restateAtCurrentRates(
+        invoicesInWindow(ctx.invoices, ctx.byMonth, windows.previous),
+        invoicesInWindow(ctx.everyLine, ctx.everyByMonth, windows.current),
+        meta,
+    );
     const currentByContact = totalsByContact(current);
     const baseContacts = new Set(invoicesInWindow(ctx.everyLine, ctx.everyByMonth, windows.previous).map(contactKey));
     const currentLines = totalsByContactLine(current);
@@ -744,7 +781,7 @@ function retentionOverWindow(ctx, window) {
     const baseWindow = monthWindow(new Date(firstMonth.getFullYear(), firstMonth.getMonth() - 1, 1));
     const endWindow = monthWindow(monthFromKey(months[months.length - 1]));
 
-    const totals = { hasBase: false, initial: null, onboardingInBase: 0, churned: 0, expansion: 0, taggedUpsell: 0, crossSells: 0, upsellOutsideBase: 0 };
+    const totals = { hasBase: false, initial: null, onboardingInBase: 0, churned: 0, expansion: 0, taggedUpsell: 0, crossSells: 0, upsellOutsideBase: 0, fxRestated: false };
     const monthly = [];
     const events = [];
     const setupMonths = [];
@@ -759,6 +796,7 @@ function retentionOverWindow(ctx, window) {
         totals.taggedUpsell += meta.taggedUpsell;
         totals.crossSells += meta.crossSells;
         totals.upsellOutsideBase += meta.upsellOutsideBase;
+        if (meta.fxRestated) totals.fxRestated = true;
         if (m.hasBase && m.initial > 0) {
             monthly.push({ key, label: current.label, initial: m.initial, churned: m.churned, expansion: m.expansion, retained: m.retained, rate: share(m.retained, m.initial) });
         }
@@ -856,6 +894,7 @@ function buildScorecard() {
     meta.lostClients = retention.lostClients;
     meta.retentionMonthly = retention.monthly;
     meta.onboardingInBase = retention.onboardingInBase;
+    meta.fxRestated = retention.fxRestated;
     meta.setupClients = retention.setupClients;
     meta.taggedUpsell = retention.taggedUpsell;
     meta.crossSells = retention.crossSells;
@@ -945,7 +984,7 @@ function selectedSingleMonth() {
     return start && end && isCalendarMonth(start, end) ? start : null;
 }
 
-function marginEntryFor(month, invoices, scope = state.scope, category = state.category) {
+function manualMarginEntryFor(month, invoices, scope = state.scope, category = state.category) {
     const exact = state.marginInputs[marginInputKey(month, scope, category)];
     if (exact) return exact;
     if (category === 'all') {
@@ -956,7 +995,7 @@ function marginEntryFor(month, invoices, scope = state.scope, category = state.c
     }
     if (scope === 'all') {
         const markets = Object.keys(companyLabels)
-            .map((key) => marginEntryFor(month, invoices, key, category))
+            .map((key) => manualMarginEntryFor(month, invoices, key, category))
             .filter(Boolean);
         if (markets.length) return combineMarginParts(month, markets, scope, category, true);
     }
@@ -1015,6 +1054,59 @@ function combineMarginParts(month, parts, scope, category, acrossMarkets) {
     };
 }
 
+// ---- COGS lido do Xero, somado por cima do COGS lançado à mão ----
+// Fontes: bills (ACCPAY) vindas do api.php e Spend Money vindas do workflow de custos (costs.php).
+// Cada linha traz mercado, mês, conta, serviço (centro de custo) e costUsd.
+function cogsLines() {
+    return [...(state.cogsBills || []), ...((state.costs && state.costs.cogsRows) || [])];
+}
+
+function cogsIndex() {
+    const cache = state.cogsIndexCache;
+    if (cache && cache.bills === state.cogsBills && cache.costs === state.costs) return cache.byMonth;
+    const byMonth = new Map();
+    cogsLines().forEach((line) => {
+        if (!hasValue(line.costUsd)) return;
+        if (!byMonth.has(line.month)) byMonth.set(line.month, []);
+        byMonth.get(line.month).push(line);
+    });
+    state.cogsIndexCache = { bills: state.cogsBills, costs: state.costs, byMonth };
+    return byMonth;
+}
+
+function xeroCogsFor(month, scope = state.scope, category = state.category) {
+    const lines = (cogsIndex().get(month) || [])
+        .filter((line) => (scope === 'all' || line.market === scope) && (category === 'all' || line.service === category));
+    if (!lines.length) return null;
+    const byAccount = {};
+    let total = 0;
+    lines.forEach((line) => {
+        total += Number(line.costUsd);
+        byAccount[line.account] = (byAccount[line.account] || 0) + Number(line.costUsd);
+    });
+    return { total, byAccount, lines: lines.length };
+}
+
+function mergeXeroCogs(list) {
+    const parts = list.filter(Boolean);
+    if (!parts.length) return null;
+    const byAccount = {};
+    parts.forEach((part) => Object.entries(part.byAccount).forEach(([account, value]) => { byAccount[account] = (byAccount[account] || 0) + value; }));
+    return { total: parts.reduce((sum, part) => sum + part.total, 0), byAccount, lines: parts.reduce((sum, part) => sum + part.lines, 0) };
+}
+
+function marginEntryFor(month, invoices, scope = state.scope, category = state.category) {
+    const manual = manualMarginEntryFor(month, invoices, scope, category);
+    const xero = xeroCogsFor(month, scope, category);
+    if (!xero) return manual;
+    if (!manual) {
+        return { month, scope, category, cogs: xero.total, cogsTarget: null, margin: null, marginTarget: null, bonusPool: null, combinedFrom: [], enteredAt: null, xero };
+    }
+    // Sem "revenue": com o Xero somado, a parcela do COGS sobre a receita usa a receita do mês inteiro.
+    const { revenue, ...rest } = manual;
+    return { ...rest, cogs: hasValue(manual.cogs) ? Number(manual.cogs) + xero.total : xero.total, xero };
+}
+
 function marginEntriesInPeriod(invoices) {
     const { start, end } = periodBounds();
     const from = start ? monthKey(start) : null;
@@ -1024,6 +1116,10 @@ function marginEntriesInPeriod(invoices) {
         .filter((entry) => state.category === 'all' || entry.category === state.category)
         .map((entry) => entry.month)
         .filter((month) => (!from || month >= from) && (!to || month <= to)));
+    cogsIndex().forEach((lines, month) => {
+        if ((from && month < from) || (to && month > to)) return;
+        if (lines.some((line) => (state.scope === 'all' || line.market === state.scope) && (state.category === 'all' || line.service === state.category))) months.add(month);
+    });
     return [...months].sort()
         .map((month) => marginEntryFor(month, invoices))
         .filter(Boolean);
@@ -1062,6 +1158,7 @@ function aggregateMarginEntries(entries, invoices) {
         months: entries.map((entry) => entry.month),
         combinedFrom: [...new Set(entries.flatMap((entry) => entry.combinedFrom || []))],
         enteredAt: entries.map((entry) => entry.enteredAt).filter(Boolean).sort().pop() || null,
+        xero: mergeXeroCogs(entries.map((entry) => entry.xero)),
     };
 }
 

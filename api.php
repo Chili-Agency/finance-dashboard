@@ -10,6 +10,23 @@ auth_require_api();
 // false: todas pela cotação do mês corrente (o comportamento antigo, "cotação de hoje").
 const FX_BY_INVOICE_MONTH = true;
 const FX_MONEY_FIELDS = ['SubTotal', 'TotalTax', 'Total', 'AmountDue', 'AmountPaid'];
+
+// Contas do Xero que contam como COGS (compara o nome da conta, sem diferenciar maiúscula, espaços ou "&" / "and").
+// Para incluir outra conta, acrescente o nome aqui e no nó Config do workflow de custos no n8n.
+const COGS_ACCOUNTS = [
+    'Client Domain & Hosting',
+    'Client Referral Commission',
+    'Contractor - Content',
+    'Contractor - Design',
+    'Contractor - Landing Page',
+    'Contractor - PPC (Social)',
+    'Contractor - SEO Tech',
+    'Link Building Cost',
+    'Tax retention',
+    'Subscriptions & Software',
+];
+// Bills que entram no COGS: já aprovadas (AUTHORISED) ou pagas (PAID). Rascunho, anulada e excluída ficam de fora.
+const COGS_BILL_STATUSES = ['AUTHORISED', 'PAID'];
 // Marcadores lidos só no texto da própria linha (descrição, código do item, conta, tracking).
 // A onboarding fee não pode vir do Reference: "Onboarding 1/3" no Reference marcaria a
 // fatura inteira como fee, e a mensalidade que vem junto sumiria da retenção.
@@ -140,6 +157,7 @@ $categoryRules = [
 $source = $_GET['source'] ?? 'all';
 $requested = $source === 'all' ? array_keys($companies) : [$source];
 $invoices = [];
+$cogsLines = [];
 $errors = [];
 $sourceCounts = [];
 $sourceTypeCounts = [];
@@ -232,6 +250,13 @@ foreach ($requested as $key) {
             $seenInvoiceIds[$invoiceId] = true;
         }
 
+        // Contas a pagar (bills) não entram no MRR, mas as linhas das contas de COGS somam no COGS do dashboard.
+        if ($type === 'ACCPAY') {
+            foreach (cogsLinesFromBill($invoice, $key, (string) $company['currency'], $categoryRules, $otherServiceRules) as $costLine) {
+                $cogsLines[] = $costLine;
+            }
+        }
+
         $slim = slimInvoice($invoice, $markerPatterns, $categoryRules, $lineMarkers, $otherServiceRules);
 
         $slim['companyKey'] = $key;
@@ -287,7 +312,7 @@ foreach ($requested as $key) {
     $sourceWarnings[$key] = array_values($warnings);
 }
 
-$fx = applyMonthlyRates($invoices, $sourceWarnings, (string) ($config['fx']['oer_app_id'] ?? ''));
+$fx = applyMonthlyRates($invoices, $sourceWarnings, (string) ($config['fx']['oer_app_id'] ?? ''), $cogsLines);
 
 echo json_encode([
     'invoices' => $invoices,
@@ -304,6 +329,7 @@ echo json_encode([
     'sourceTypeCounts' => $sourceTypeCounts,
     'diagnostics' => $diagnostics,
     'categoryCounts' => $categoryCounts,
+    'cogsLines' => $cogsLines,
     'fx' => $fx,
     'fetchedAt' => gmdate('c'),
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -313,7 +339,7 @@ echo json_encode([
  * Ordem: cotação mensal do banco → conversão que ainda vier do n8n → taxa fixa de $companies.
  * Meses anteriores ao início da gravação usam o primeiro mês gravado (ver FxRates::resolve).
  */
-function applyMonthlyRates(array &$invoices, array &$sourceWarnings, string $appId): array
+function applyMonthlyRates(array &$invoices, array &$sourceWarnings, string $appId, array &$cogsLines = []): array
 {
     $current = FxRates::currentMonth();
     $monthOf = static fn (array $invoice): string => FX_BY_INVOICE_MONTH ? (invoiceMonth($invoice) ?? $current) : $current;
@@ -326,7 +352,7 @@ function applyMonthlyRates(array &$invoices, array &$sourceWarnings, string $app
     $ready = false;
     $errors = [];
     try {
-        $rates->load(array_map($currencyOf, $invoices));
+        $rates->load(array_merge(array_map($currencyOf, $invoices), array_column($cogsLines, 'currency')));
         $errors = $rates->errors();
         $ready = true;
     } catch (Throwable $error) {
@@ -373,6 +399,20 @@ function applyMonthlyRates(array &$invoices, array &$sourceWarnings, string $app
     }
     unset($invoice);
 
+    // Linhas de COGS das bills: mesma cotação mensal (mês da bill) das invoices.
+    $cogsWithoutRate = 0;
+    foreach ($cogsLines as &$costLine) {
+        $currency = $costLine['currency'];
+        $rate = $ready || $currency === 'USD' ? $rates->resolve(FxRates::clampMonth($costLine['month']), $currency) : null;
+        if ($rate === null || !($rate['units'] > 0)) {
+            $costLine['costUsd'] = null;
+            $cogsWithoutRate++;
+            continue;
+        }
+        $costLine['costUsd'] = round($costLine['amount'] / $rate['units'], 2);
+    }
+    unset($costLine);
+
     foreach ($fallbackBySource as $source => $count) {
         $sourceWarnings[$source][] = $count . ' invoice' . ($count === 1 ? '' : 's') . ' converted with the fallback rate';
     }
@@ -384,8 +424,96 @@ function applyMonthlyRates(array &$invoices, array &$sourceWarnings, string $app
         'apiCalls' => $rates->fetches(),
         'invoicesWithNearestMonthRate' => $approximate,
         'fallbackInvoices' => array_sum($fallbackBySource),
+        'cogsLinesWithoutRate' => $cogsWithoutRate,
         'errors' => $errors,
     ];
+}
+
+function normalizeAccountName(string $name): string
+{
+    $name = strtolower(str_replace(['&', '–', '—'], [' and ', '-', '-'], $name));
+    return trim((string) preg_replace('/\s+/', ' ', $name));
+}
+
+/**
+ * Linhas de custo (COGS) de uma conta a pagar (bill) do Xero: só as contas de COGS_ACCOUNTS, em bills
+ * autorizadas ou pagas, no mês da bill e sem imposto. O serviço vem do centro de custo (tracking) da linha.
+ *
+ * @return array<int, array<string, mixed>>
+ */
+function cogsLinesFromBill(array $bill, string $market, string $fallbackCurrency, array $categoryRules, array $otherServiceRules): array
+{
+    if (!in_array(strtoupper((string) ($bill['Status'] ?? '')), COGS_BILL_STATUSES, true)) {
+        return [];
+    }
+    $month = invoiceMonth($bill);
+    if ($month === null) {
+        return [];
+    }
+    $currency = strtoupper(trim((string) ($bill['CurrencyCode'] ?? '')));
+    if ($currency === '') {
+        $currency = $fallbackCurrency;
+    }
+    $accounts = array_flip(array_map('normalizeAccountName', COGS_ACCOUNTS));
+    $inclusive = strtoupper((string) ($bill['LineAmountTypes'] ?? '')) === 'INCLUSIVE';
+
+    $lines = [];
+    foreach (array_values((array) ($bill['LineItems'] ?? [])) as $index => $line) {
+        if (!is_array($line)) {
+            continue;
+        }
+        $account = trim((string) ($line['AccountName'] ?? ''));
+        if ($account === '' || !isset($accounts[normalizeAccountName($account)])) {
+            continue;
+        }
+        $gross = (float) ($line['LineAmount'] ?? 0);
+        $tax = (float) ($line['TaxAmount'] ?? 0);
+        [$service, $costCenter] = costService($line, $categoryRules, $otherServiceRules);
+        $lines[] = [
+            'id' => (string) ($bill['InvoiceID'] ?? '') . ':' . $index,
+            'source' => 'bill',
+            'market' => $market,
+            'month' => $month,
+            'account' => $account,
+            'service' => $service,
+            'costCenter' => $costCenter,
+            'amount' => round($inclusive ? $gross - $tax : $gross, 2),
+            'currency' => $currency,
+            'contact' => (string) ($bill['Contact']['Name'] ?? ''),
+            'costUsd' => null,
+        ];
+    }
+    return $lines;
+}
+
+/**
+ * [serviço, centro de custo] de uma linha de custo. O serviço (seo, ppc, others) vem do centro de custo
+ * (tracking) da linha; sem tracking, do nome da conta; sem nenhum dos dois, "unallocated" (entra só no total).
+ *
+ * @return array{0: string, 1: ?string}
+ */
+function costService(array $line, array $categoryRules, array $otherServiceRules): array
+{
+    $options = [];
+    foreach ((array) ($line['Tracking'] ?? []) as $tracking) {
+        if (is_array($tracking) && trim((string) ($tracking['Option'] ?? '')) !== '') {
+            $options[] = trim((string) $tracking['Option']);
+        }
+    }
+    $costCenter = $options === [] ? null : implode(' / ', $options);
+
+    $fromText = static function (string $text) use ($categoryRules, $otherServiceRules): ?string {
+        foreach ($categoryRules as $category => $rule) {
+            if (matchesAny($text, $rule['text'] ?? [])) {
+                return $category;
+            }
+        }
+        return matchService($text, $otherServiceRules) !== null ? 'others' : null;
+    };
+
+    $service = $costCenter !== null ? $fromText($costCenter) : null;
+    $service ??= $fromText((string) ($line['AccountName'] ?? ''));
+    return [$service ?? 'unallocated', $costCenter];
 }
 
 /** "YYYY-MM" da data da invoice (DateString ISO ou /Date(ms)/ do Xero). */

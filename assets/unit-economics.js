@@ -33,7 +33,7 @@ function adsAccountsInView(scope = state.scope) {
 }
 
 const COSTS_ENDPOINT = 'costs.php';
-state.costs = { status: 'loading', rows: [], rules: [], errors: [], warnings: [], fetchedAt: null };
+state.costs = { status: 'loading', rows: [], cogsRows: [], rules: [], errors: [], warnings: [], fetchedAt: null };
 
 async function loadCosts() {
     state.costs = { ...state.costs, status: 'loading' };
@@ -43,16 +43,16 @@ async function loadCosts() {
         const body = await response.json().catch(() => null);
         if (!body) throw new Error(`The server answered HTTP ${response.status}.`);
         if (body.configured === false) {
-            state.costs = { status: 'off', rows: [], rules: [], errors: body.errors || [], warnings: [], fetchedAt: null };
+            state.costs = { status: 'off', rows: [], cogsRows: [], rules: [], errors: body.errors || [], warnings: [], fetchedAt: null };
         } else if (!response.ok) {
             throw new Error((body.errors || []).join(' · ') || `The server answered HTTP ${response.status}.`);
         } else {
-            state.costs = { status: 'ready', rows: body.rows || [], rules: body.rules || [], errors: body.errors || [], warnings: body.warnings || [], fetchedAt: body.fetchedAt || null };
+            state.costs = { status: 'ready', rows: body.rows || [], cogsRows: body.cogsRows || [], rules: body.rules || [], errors: body.errors || [], warnings: body.warnings || [], fetchedAt: body.fetchedAt || null };
         }
     } catch (error) {
-        state.costs = { status: 'error', rows: [], rules: [], errors: [error.message], warnings: [], fetchedAt: null };
+        state.costs = { status: 'error', rows: [], cogsRows: [], rules: [], errors: [error.message], warnings: [], fetchedAt: null };
     }
-    renderUnitSection();
+    renderScorecard();
 }
 
 // Custos de assinaturas (backlinks, HubSpot, Linked Helper, Sender.net) lidos do Xero, em USD.
