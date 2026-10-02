@@ -39,7 +39,7 @@ async function refreshData() {
         problem = error.message;
     }
     state.sync.inFlight = false;
-    await Promise.all([loadInvoices(), typeof loadAds === 'function' ? loadAds() : null, typeof loadSales === 'function' ? loadSales() : null]);
+    await Promise.all([loadInvoices(), typeof loadAds === 'function' ? loadAds() : null, typeof loadCosts === 'function' ? loadCosts() : null, typeof loadSales === 'function' ? loadSales() : null]);
     if (problem) {
         const notice = $('#error-notice');
         notice.classList.remove('is-info');
@@ -80,3 +80,4 @@ loadBrIndices();
 loadUnitInputs();
 loadLateRules();
 loadAds();
+loadCosts();

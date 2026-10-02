@@ -32,6 +32,46 @@ function adsAccountsInView(scope = state.scope) {
     return state.ads.accounts.filter((account) => account.configured && (scope === 'all' || account.market === 'all' || account.market === scope));
 }
 
+const COSTS_ENDPOINT = 'costs.php';
+state.costs = { status: 'loading', rows: [], rules: [], errors: [], warnings: [], fetchedAt: null };
+
+async function loadCosts() {
+    state.costs = { ...state.costs, status: 'loading' };
+    renderUnitSection();
+    try {
+        const response = redirectIfSignedOut(await fetch(COSTS_ENDPOINT, { cache: 'no-store' }));
+        const body = await response.json().catch(() => null);
+        if (!body) throw new Error(`The server answered HTTP ${response.status}.`);
+        if (body.configured === false) {
+            state.costs = { status: 'off', rows: [], rules: [], errors: body.errors || [], warnings: [], fetchedAt: null };
+        } else if (!response.ok) {
+            throw new Error((body.errors || []).join(' · ') || `The server answered HTTP ${response.status}.`);
+        } else {
+            state.costs = { status: 'ready', rows: body.rows || [], rules: body.rules || [], errors: body.errors || [], warnings: body.warnings || [], fetchedAt: body.fetchedAt || null };
+        }
+    } catch (error) {
+        state.costs = { status: 'error', rows: [], rules: [], errors: [error.message], warnings: [], fetchedAt: null };
+    }
+    renderUnitSection();
+}
+
+// Custos de assinaturas (backlinks, HubSpot, Linked Helper, Sender.net) lidos do Xero, em USD.
+// Mesmo recorte de adsFor: meses do período e mercado da visão; o serviço não divide esse custo.
+function costsFor(months, scope = state.scope) {
+    if (state.costs.status !== 'ready') return null;
+    const wanted = new Set(months);
+    const totals = { cost: 0, rows: 0, missingFx: 0, byKey: {}, labels: {} };
+    state.costs.rows.forEach((row) => {
+        if (!wanted.has(row.month) || (scope !== 'all' && row.market !== scope)) return;
+        if (!hasValue(row.costUsd)) { totals.missingFx += 1; return; }
+        totals.cost += Number(row.costUsd);
+        totals.byKey[row.key] = (totals.byKey[row.key] || 0) + Number(row.costUsd);
+        totals.labels[row.key] = row.label || row.key;
+        totals.rows += 1;
+    });
+    return totals;
+}
+
 const unitForm = $('#unit-form');
 const unitModal = $('#unit-modal');
 
@@ -162,7 +202,7 @@ function unitMetrics() {
     const monthsInWindow = Math.max(1, months.length);
     const arpa = hasValue(activeClients) && activeClients > 0 ? revenue / activeClients / monthsInWindow : null;
     const margin = meta.marginEntry?.margin ?? meta.marginAggregate?.margin ?? null;
-    const acquisition = acquisitionFigures(adsFor(months), inputs.salesMarketingCost, newClients);
+    const acquisition = acquisitionFigures(adsFor(months), inputs.salesMarketingCost, newClients, state.category, costsFor(months));
 
     return {
         months,
@@ -202,16 +242,20 @@ function newClientsInWindow(window) {
     return count;
 }
 
-function acquisitionFigures(ads, otherCost, newClients, category = state.category) {
+function acquisitionFigures(ads, manualCost, newClients, category = state.category, subscriptions = null) {
     const adsCost = ads ? ads.cost : null;
     const hasAds = Boolean(ads) && ads.rows > 0;
-    const other = hasValue(otherCost) ? Number(otherCost) : null;
+    const manual = hasValue(manualCost) ? Number(manualCost) : null;
+    const fromXero = subscriptions && subscriptions.rows > 0 ? subscriptions.cost : null;
+    const other = hasValue(manual) || hasValue(fromXero) ? (manual || 0) + (fromXero || 0) : null;
     const acquisitionCost = hasAds || hasValue(other) ? (hasAds ? adsCost : 0) + (other || 0) : null;
     return {
         ads,
         adsCost: hasAds ? adsCost : (ads ? 0 : null),
         conversions: ads ? ads.conversions : null,
         otherCost: other,
+        otherManual: manual,
+        otherSubscriptions: subscriptions,
         acquisitionCost,
         cac: category === 'all' && hasValue(acquisitionCost) && hasValue(newClients) && newClients > 0 ? acquisitionCost / newClients : null,
         cpl: hasAds && ads.conversions > 0 ? adsCost / ads.conversions : null,
@@ -259,7 +303,6 @@ function renderUnitSection() {
     const costParts = [
         adsBySource ? `Google Ads ${money(adsBySource.google)}` : null,
         adsBySource ? `Meta Ads ${money(adsBySource.meta)}` : null,
-        hasValue(metrics.otherCost) ? `other ${money(metrics.otherCost)}` : null,
     ].filter(Boolean).join(' + ');
     const byService = state.category !== 'all';
     unitCard('cac', {
@@ -274,6 +317,7 @@ function renderUnitSection() {
             : `${costParts ? `${costParts} · ` : ''}${metrics.newClientsFromInvoices ? 'new clients from the invoices' : 'new clients entered by hand'}`,
         state: hasValue(metrics.cac) ? 'good' : 'empty',
     });
+    renderOtherCostsLine(metrics);
     unitCard('cpl', {
         value: moneyOr(metrics.cpl),
         note: hasValue(metrics.adsCost) && metrics.ads && metrics.ads.rows > 0
@@ -301,6 +345,66 @@ function renderUnitSection() {
     renderUnitInputStatus();
     renderUnitMonthlyTable();
     renderClientTable(metrics.clients);
+}
+
+// Detalhe do "Other costs" por assinatura (ordem das regras do n8n) + o que foi digitado à mão.
+function otherCostsBreakdown(metrics) {
+    const subscriptions = metrics.otherSubscriptions;
+    const lines = [];
+    const known = new Set();
+    state.costs.rules.forEach((rule) => {
+        known.add(rule.key);
+        lines.push({ label: rule.label, value: subscriptions && subscriptions.byKey[rule.key] ? subscriptions.byKey[rule.key] : 0 });
+    });
+    if (subscriptions) {
+        Object.entries(subscriptions.byKey).forEach(([key, value]) => {
+            if (!known.has(key)) lines.push({ label: subscriptions.labels[key] || key, value });
+        });
+    }
+    if (hasValue(metrics.otherManual) && metrics.otherManual > 0) lines.push({ label: 'Entered by hand', value: metrics.otherManual });
+    return lines;
+}
+
+// Linha extra do card de CAC, criada aqui (logo abaixo do texto dos anúncios) para não depender do index.php.
+function renderOtherCostsLine(metrics) {
+    const foot = $('#unit-cac-foot');
+    if (!foot) return;
+    let node = $('#unit-cac-other');
+    if (!node) {
+        node = document.createElement('p');
+        node.id = 'unit-cac-other';
+        node.className = foot.className;
+        foot.insertAdjacentElement('afterend', node);
+    }
+    const status = state.costs.status;
+    node.style.display = status === 'off' ? 'none' : '';
+    if (status === 'off') return;
+    const hint = 'cursor:help;text-decoration:underline dotted;text-underline-offset:2px';
+    if (status === 'loading') { node.textContent = 'Other costs: loading…'; return; }
+    if (status === 'error') {
+        node.innerHTML = `Other costs: <span tabindex="0" style="${hint}" title="${escapeHtml(state.costs.errors.join(' · '))}">unavailable</span>`;
+        return;
+    }
+    const total = hasValue(metrics.otherCost) ? Number(metrics.otherCost) : 0;
+    const subscriptions = metrics.otherSubscriptions;
+    const lines = otherCostsBreakdown(metrics).map((line) => `${line.label}: ${money(line.value)}`);
+    if (subscriptions && subscriptions.missingFx > 0) lines.push(`${plural(subscriptions.missingFx, 'cost')} without an exchange rate left out`);
+    const tip = escapeHtml(lines.length ? lines.join('\n') : 'No subscription costs found in Xero for this period').replace(/\n/g, '&#10;');
+    node.innerHTML = `Other costs: <span tabindex="0" style="${hint}" title="${tip}">${money(total)}</span>`;
+}
+
+function costsStatus() {
+    const costs = state.costs;
+    if (costs.status === 'loading') return { text: 'Loading subscription costs…', tone: 'muted' };
+    if (costs.status === 'off') return { text: 'Subscription costs are not connected: set N8N_WEBHOOK_COSTS in the .env with the webhook of the n8n workflow.', tone: 'sample' };
+    if (costs.status === 'error') return { text: `Could not load subscription costs: ${costs.errors.join(' · ')}`, tone: 'error' };
+    const names = costs.rules.map((rule) => rule.label);
+    const parts = [
+        `${names.length ? listNames(names) : 'Subscription costs'} are read from the Xero bank transactions${costs.fetchedAt ? `, fetched ${relativeTime(new Date(costs.fetchedAt).getTime())}` : ''}, and added in Other costs. A cost shows up once its bank line is reconciled in Xero.`,
+        costs.errors.length ? `Issues: ${costs.errors.join(' · ')}` : '',
+        costs.warnings.length ? costs.warnings.join(' · ') : '',
+    ].filter(Boolean);
+    return { text: parts.join(' '), tone: costs.errors.length ? 'error' : costs.warnings.length ? 'sample' : 'manual' };
 }
 
 function adsUnavailableNote(fallback) {
@@ -339,10 +443,12 @@ function renderUnitInputStatus() {
     if (state.unitInputsStatus === 'loading') { node.textContent = 'Loading saved figures…'; node.dataset.tone = 'muted'; return; }
     if (state.unitInputsStatus === 'error') { node.textContent = `Could not load saved figures: ${state.unitInputsError}`; node.dataset.tone = 'error'; return; }
     const count = Object.keys(state.unitInputs).length;
-    node.textContent = count
+    const costs = costsStatus();
+    const manualText = count
         ? `${plural(count, 'entry')} saved. Other acquisition costs are added to the ad spend (Google + Meta) in CAC; leave New clients empty to use the count from the invoices.`
         : 'No other acquisition costs entered. CAC uses only the ad spend (Google + Meta) until you add them (salaries, tools, other channels).';
-    node.dataset.tone = count ? 'manual' : 'muted';
+    node.textContent = `${manualText} ${costs.text}`;
+    node.dataset.tone = costs.tone === 'error' ? 'error' : count ? 'manual' : 'muted';
 }
 
 function unitMonthlyRows() {
@@ -355,7 +461,7 @@ function unitMonthlyRows() {
             atv: row.invoices ? row.mrr / row.invoices : null,
             arpa: row.clients ? row.mrr / row.clients : null,
             newClients,
-            ...acquisitionFigures(adsFor([row.month], row.scope), input?.salesMarketingCost, newClients, row.category),
+            ...acquisitionFigures(adsFor([row.month], row.scope), input?.salesMarketingCost, newClients, row.category, costsFor([row.month], row.scope)),
             hasExactInput: Boolean(exactUnit(row.month, row.scope, row.category)),
         };
     });
