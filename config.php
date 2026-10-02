@@ -78,6 +78,9 @@ return (static function (): array {
             'mx' => $env('N8N_WEBHOOK_MX'),
             // Opcional: workflow "Chili Finance - Ads (Google + Meta) (CAC/CPL)". Vazio desliga a integração.
             'ads' => $env('N8N_WEBHOOK_ADS', ''),
+            // Opcional: workflow "Chili Finance - Custos (Xero banco)" (backlinks, HubSpot, Linked Helper, Sender.net).
+            // Vazio desliga os custos de assinaturas em "Other costs".
+            'costs' => $env('N8N_WEBHOOK_COSTS', ''),
             // Opcional: workflow "Chili Finance - Sales (HubSpot)". Vazio desliga a página Sales.
             'sales' => $env('N8N_WEBHOOK_SALES', ''),
         ],

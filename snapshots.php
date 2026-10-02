@@ -4,7 +4,7 @@ declare(strict_types=1);
 /*
  * Dados do n8n guardados no banco (tabela data_snapshots, ver sql/004_data_snapshots.sql).
  *
- * O dashboard não chama mais os webhooks ao abrir a página: api.php e ads.php leem a última
+ * O dashboard não chama mais os webhooks ao abrir a página: api.php, ads.php e costs.php leem a última
  * resposta gravada aqui. Quem busca de novo é o snapshot-refresh.php, chamado:
  *   - pelo workflow agendado do n8n (4x por mês, junto com a cotação do FX);
  *   - pelo botão Refresh do dashboard.
@@ -35,6 +35,7 @@ function snapshot_sources(array $config): array
         $sources["invoices_{$market}"] = (string) ($config['n8n'][$market] ?? '');
     }
     $sources['ads'] = (string) ($config['n8n']['ads'] ?? '');
+    $sources['costs'] = (string) ($config['n8n']['costs'] ?? '');
     $sources['sales'] = (string) ($config['n8n']['sales'] ?? '');
     return array_filter($sources, static fn (string $url): bool => $url !== '');
 }
@@ -295,6 +296,19 @@ function snapshot_validate(string $name, string $body): ?string
     if ($name === 'ads') {
         return snapshot_decode_ads($body) === null ? 'n8n returned an unexpected response for ads.' : null;
     }
+    if ($name === 'costs') {
+        $data = snapshot_decode_costs($body);
+        if ($data === null) {
+            return 'n8n returned an unexpected response for the subscription costs.';
+        }
+        // O workflow marca ok=false quando alguma entidade do Xero falhou: não apaga a última resposta boa
+        // (o total de custos ficaria subestimado sem aviso).
+        if (($data['ok'] ?? true) === false) {
+            $errors = array_filter(array_map('strval', (array) ($data['errors'] ?? [])));
+            return 'Xero bank transactions: ' . ($errors !== [] ? implode(' · ', $errors) : 'the workflow reported a failure.');
+        }
+        return null;
+    }
     if ($name === 'sales') {
         $data = snapshot_decode_sales($body);
         if ($data === null) {
@@ -357,6 +371,16 @@ function snapshot_decode_sales(string $body): ?array
 
 /** Resposta do webhook de ads: objeto com rows (o "Respond to Webhook" às vezes embrulha numa lista). */
 function snapshot_decode_ads(string $body): ?array
+{
+    $data = json_decode($body, true);
+    if (is_array($data) && isset($data[0]) && is_array($data[0]) && !isset($data['rows'])) {
+        $data = $data[0];
+    }
+    return is_array($data) && isset($data['rows']) && is_array($data['rows']) ? $data : null;
+}
+
+/** Resposta do webhook de custos (Xero banco): objeto com rows, no mesmo formato do de ads. */
+function snapshot_decode_costs(string $body): ?array
 {
     $data = json_decode($body, true);
     if (is_array($data) && isset($data[0]) && is_array($data[0]) && !isset($data['rows'])) {
