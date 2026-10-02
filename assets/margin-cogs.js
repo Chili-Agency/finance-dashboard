@@ -120,15 +120,17 @@ function renderMarginInputStatus() {
     if (state.marginInputsStatus === 'error') { node.textContent = `Could not load saved figures: ${state.marginInputsError}`; node.dataset.tone = 'error'; return; }
     const context = `${companyLabels[state.scope] || 'Global'}, ${state.category === 'all' ? 'all services' : categoryLabels[state.category]}`;
     if (meta.marginEntry) {
-        const saved = new Date(meta.marginEntry.enteredAt).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-        node.textContent = `Figures saved for ${monthLabel(monthFromKey(meta.marginEntry.month))} (${context}), last updated ${saved}.${combinedNote(meta.marginEntry)}`;
+        const entry = meta.marginEntry;
+        const monthText = monthLabel(monthFromKey(entry.month));
+        const saved = entry.enteredAt ? new Date(entry.enteredAt).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
+        node.textContent = `${saved ? `Figures saved for ${monthText} (${context}), last updated ${saved}.${combinedNote(entry)}` : `No figures entered by hand for ${monthText} (${context}).`}${xeroCogsNote(entry.xero)}`;
         node.dataset.tone = 'manual';
     } else if (meta.marginAggregate) {
         const months = meta.marginAggregate.months;
         const range = months.length === 1
             ? monthLabel(monthFromKey(months[0]))
             : `${months.length} months, ${monthLabel(monthFromKey(months[0]))} to ${monthLabel(monthFromKey(months[months.length - 1]))}`;
-        node.textContent = `Figures saved for ${range} (${context}). COGS and bonus pool are summed; margins are weighted by revenue.${combinedNote(meta.marginAggregate)}`;
+        node.textContent = `Figures saved for ${range} (${context}). COGS and bonus pool are summed; margins are weighted by revenue.${combinedNote(meta.marginAggregate)}${xeroCogsNote(meta.marginAggregate.xero)}`;
         node.dataset.tone = 'manual';
     } else if (!meta.marginMonth) {
         node.textContent = `No figures saved in this period (${context}).`;
@@ -138,6 +140,14 @@ function renderMarginInputStatus() {
         node.dataset.tone = USE_DEMO_TARGETS ? 'sample' : 'muted';
     }
     appendSavedEntryLinks(node, meta);
+}
+
+// COGS lido do Xero (contratados, assinaturas, link building...) já somado ao COGS acima.
+function xeroCogsNote(xero) {
+    if (!xero) return '';
+    const top = Object.entries(xero.byAccount).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([account, value]) => `${account} ${money(value)}`);
+    const rest = Object.keys(xero.byAccount).length - top.length;
+    return ` COGS includes ${money(xero.total)} read from Xero (${plural(xero.lines, 'cost line')}): ${top.join(', ')}${rest > 0 ? ` and ${rest} more` : ''}.`;
 }
 
 function combinedNote(figures) {

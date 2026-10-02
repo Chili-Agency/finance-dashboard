@@ -90,12 +90,39 @@ foreach ($data['rows'] as $raw) {
     ];
 }
 
+// COGS vindo do Xero (Spend Money nas contas de COGS), calculado pelo n8n junto com as assinaturas.
+$cogsRows = [];
+foreach ((array) ($data['cogsRows'] ?? []) as $raw) {
+    if (!is_array($raw)) {
+        continue;
+    }
+    $market = strtolower(trim((string) ($raw['market'] ?? '')));
+    $month = (string) ($raw['month'] ?? '');
+    if (!in_array($market, COSTS_MARKETS, true) || preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $month) !== 1 || !is_numeric($raw['amount'] ?? null)) {
+        continue;
+    }
+    $currency = strtoupper(trim((string) ($raw['currency'] ?? '')));
+    $cogsRows[] = [
+        'id' => (string) ($raw['id'] ?? ''),
+        'source' => 'spend',
+        'market' => $market,
+        'month' => $month,
+        'account' => (string) ($raw['account'] ?? ''),
+        'service' => (string) ($raw['service'] ?? 'unallocated'),
+        'costCenter' => isset($raw['costCenter']) && $raw['costCenter'] !== '' ? (string) $raw['costCenter'] : null,
+        'amount' => (float) $raw['amount'],
+        'currency' => $currency !== '' ? $currency : COSTS_DEFAULT_CURRENCY[$market],
+        'contact' => (string) ($raw['contact'] ?? ''),
+        'costUsd' => null,
+    ];
+}
+
 $fx = ['source' => 'fx_monthly_rates', 'missing' => 0, 'errors' => []];
-if ($rows !== []) {
+if ($rows !== [] || $cogsRows !== []) {
     $rates = new FxRates(auth_db(), (string) ($config['fx']['oer_app_id'] ?? ''));
     $ready = false;
     try {
-        $rates->load(array_values(array_unique(array_column($rows, 'currency'))));
+        $rates->load(array_values(array_unique(array_merge(array_column($rows, 'currency'), array_column($cogsRows, 'currency')))));
         $fx['errors'] = $rates->errors();
         $ready = true;
     } catch (Throwable $error) {
@@ -103,22 +130,26 @@ if ($rows !== []) {
         $fx['errors'][] = 'Could not read fx_monthly_rates: ' . $error->getMessage();
     }
 
-    foreach ($rows as &$row) {
-        $rate = $ready || $row['currency'] === 'USD'
-            ? $rates->resolve(FxRates::clampMonth($row['month']), $row['currency'])
-            : null;
-        if ($rate === null || !($rate['units'] > 0)) {
-            $fx['missing']++;
-            continue;
+    $convert = static function (array &$list) use ($rates, &$ready, &$fx): void {
+        foreach ($list as &$row) {
+            $rate = $ready || $row['currency'] === 'USD'
+                ? $rates->resolve(FxRates::clampMonth($row['month']), $row['currency'])
+                : null;
+            if ($rate === null || !($rate['units'] > 0)) {
+                $fx['missing']++;
+                continue;
+            }
+            $row['costUsd'] = round($row['amount'] / $rate['units'], 2);
         }
-        $row['costUsd'] = round($row['amount'] / $rate['units'], 2);
-    }
-    unset($row);
+        unset($row);
+    };
+    $convert($rows);
+    $convert($cogsRows);
 }
 
 $errors = [];
 if ($fx['missing'] > 0) {
-    $errors[] = $fx['missing'] . ' subscription cost' . ($fx['missing'] === 1 ? '' : 's') . ' without an exchange rate, left out of the totals';
+    $errors[] = $fx['missing'] . ' cost line' . ($fx['missing'] === 1 ? '' : 's') . ' without an exchange rate, left out of the totals';
 }
 
 $rules = [];
@@ -131,6 +162,7 @@ foreach ((array) ($data['rules'] ?? []) as $rule) {
 costs_respond(200, [
     'configured' => true,
     'rows' => $rows,
+    'cogsRows' => $cogsRows,
     'rules' => $rules,
     'markets' => (object) (is_array($data['markets'] ?? null) ? $data['markets'] : []),
     'since' => $data['since'] ?? null,

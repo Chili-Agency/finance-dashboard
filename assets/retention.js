@@ -7,7 +7,8 @@ function renderRetentionSection() {
             ? Number(data.initialPortfolio) - Number(data.churned)
             : null;
     const onboardingNote = meta.onboardingInBase > 0.005 ? ` · ${money(meta.onboardingInBase)} of onboarding fees left out` : '';
-    const baseHint = `${meta.previousLabel ? `Final portfolio of ${meta.previousLabel}` : 'Final portfolio of the previous month'}${onboardingNote}`;
+    const fxNote = meta.fxRestated ? ' · at current exchange rates' : '';
+    const baseHint = `${meta.previousLabel ? `Final portfolio of ${meta.previousLabel}` : 'Final portfolio of the previous month'}${onboardingNote}${fxNote}`;
     const summed = !meta.latestOnly && meta.retentionMonths > 1;
     const churnRate = hasValue(data.churnRate) ? data.churnRate : share(data.churned, data.initialPortfolio);
     const expansionRate = hasValue(data.expansionRate) ? data.expansionRate : share(data.upsells, data.initialPortfolio);
@@ -104,6 +105,7 @@ function renderChurnModal() {
             ? `${plural(clientCount, 'client')} · ${money(total)} churned · ${plural(lost, 'client')} lost, ${plural(downgrades, 'downgrade')}`
             : 'No client lost value in this period.',
         hidden ? `${plural(hidden.count, 'downgrade')} (${money(hidden.value)}) from ${hidden.month} not listed: select ${hidden.month} in Reporting period to see them.` : '',
+        meta.fxRestated ? 'Currency moves are not churn: the previous month is restated at the current month’s exchange rates, so only a drop in local-currency value counts.' : '',
         meta.setupClients
             ? `${plural(meta.setupClients, 'new client')} still in the first ${SETUP_MONTHS + 1} months ${meta.setupClients === 1 ? 'is' : 'are'} left out: changes while a contract is being set up (onboarding fee, services phased in, prepaid months) are not churn.`
             : '',
