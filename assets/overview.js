@@ -5,6 +5,9 @@ const SUMMARY_ROWS = [
     { key: 'actual', label: 'MRR actual', format: moneyOr },
     { key: 'target', label: 'MRR target', format: moneyOr },
     { key: 'attainment', label: 'Attainment', format: (value) => percentOr(value, 0), tone: 'ratio' },
+    { key: 'newSales', label: 'New sales', format: moneyOr, hint: 'Won deals of new business by monthly recurring revenue (HubSpot), in USD' },
+    { key: 'newSalesTarget', label: 'New sales target', format: moneyOr, hint: 'Sales target set in Sales > Set sales target (company target, or the sum of the salespeople)' },
+    { key: 'newSalesMissing', label: 'Missing from target', format: (value) => percentOr(value, 0), tone: 'missing', hint: 'Share of the new sales target still to close (0% once reached)' },
     { key: 'retention', label: 'Retention', format: percentOr, tone: 'retention' },
     { key: 'retentionTarget', label: 'Retention target', format: percentOr },
     { key: 'clients', label: 'Active clients', format: (value) => (hasValue(value) ? number(value) : DASH) },
@@ -30,8 +33,13 @@ function summaryData() {
     const pick = (name, month) => (state.monthlyRows[name] || [])
         .find((row) => row.month === month && row.scope === state.scope && row.category === state.category) || null;
 
-    const months = Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`).map((month) => {
+    const monthKeys = Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`);
+    // Vendas novas do HubSpot (Sales page); null enquanto os dados não chegam ou fora do período que o HubSpot cobre.
+    const newSalesByMonth = typeof overviewNewSales === 'function' ? overviewNewSales(monthKeys) : null;
+    const months = monthKeys.map((month, monthIndex) => {
         const targets = pick('targets', month);
+        const newSales = newSalesByMonth ? newSalesByMonth[monthIndex] : null;
+        const newSalesTarget = typeof overviewSalesTarget === 'function' ? overviewSalesTarget(month) : null;
         const retention = pick('retention', month);
         const mrr = pick('mrr', month);
         const margin = marginEntryFor(month, invoices);
@@ -42,6 +50,9 @@ function summaryData() {
             target: targets ? targets.target : null,
             attainment: targets ? share(targets.actual, targets.target) : null,
             newBusiness: targets ? targets.newBusiness : null,
+            newSales,
+            newSalesTarget,
+            newSalesMissing: hasValue(newSales) && hasValue(newSalesTarget) && Number(newSalesTarget) > 0 ? Math.max(0, 1 - Number(newSales) / Number(newSalesTarget)) : null,
             retention: retention ? retention.rate : null,
             retentionTarget: retention ? retention.target : manual.retentionTarget,
             churned: retention ? retention.churned : null,
@@ -169,7 +180,7 @@ function renderSummaryMatrix(data) {
             const value = entry[row.key];
             return `<td class="align-right mono ${summaryTone(row, entry)}">${row.format(value)}</td>`;
         }).join('');
-        return `<tr><th scope="row">${escapeHtml(row.label)}</th>${cells}</tr>`;
+        return `<tr><th scope="row"${row.hint ? ` title="${escapeHtml(row.hint)}"` : ''}>${escapeHtml(row.label)}</th>${cells}</tr>`;
     }).join('');
 
     const note = $('#summary-matrix-note');
@@ -183,10 +194,29 @@ function renderSummaryMatrix(data) {
             ? `${missing.join(' and ')} not entered for this view yet — import the targets sheet above, or enter them in Targets and Margin & COGS.`
             : `Manual figures come from Targets and Margin & COGS; the rest is calculated from invoices.`;
     note.dataset.tone = missing.length ? 'sample' : 'muted';
+
+    // As linhas de vendas novas vêm da página Sales (HubSpot + metas de vendas).
+    if (typeof overviewNewSales === 'function' && data.elapsed.length > 0) {
+        const hubspot = state.sales && state.sales.status;
+        if (hubspot === 'off') note.textContent += ' New sales needs the HubSpot connection (see Sales).';
+        else if (hubspot === 'error' && !state.sales.data) note.textContent += ' New sales could not be loaded from HubSpot.';
+        else if (hubspot === 'loading' && !state.sales.data) note.textContent += ' New sales is loading from HubSpot…';
+        else if (!data.months.some((entry) => hasValue(entry.newSalesTarget))) note.textContent += ' New sales target: set it in Sales > Set sales target.';
+    }
+}
+
+// Refaz só a matriz, quando os dados de vendas chegam depois da primeira renderização do Overview.
+function refreshSummaryMatrix() {
+    if (!$('#summary-matrix') || !state.monthlyRows) return;
+    renderSummaryMatrix(summaryData());
 }
 
 function summaryTone(row, entry) {
     if (!row.tone) return '';
+    if (row.tone === 'missing') {
+        // Nada faltando (0%) é verde; qualquer fatia faltando é vermelho.
+        return hasValue(entry.newSalesMissing) ? (Number(entry.newSalesMissing) === 0 ? 'cell-up' : 'cell-down') : '';
+    }
     const pairs = { ratio: [entry.attainment, 1], retention: [entry.retention, entry.retentionTarget], margin: [entry.margin, entry.marginTarget], cogs: [entry.cogsTarget, entry.cogs] };
     const [value, reference] = pairs[row.tone] || [];
     if (!hasValue(value) || !hasValue(reference)) return '';
@@ -397,6 +427,7 @@ const IMPORT_COLUMNS = [
     ['cogsTarget', 'Target COGS'],
     ['margin', 'Margin'],
     ['marginTarget', 'Target margin'],
+    ['newSalesTarget', 'Target new business'],
 ];
 const IMPORT_DROP_NOTE = 'or drop it here · Google Sheets: File › Download › Microsoft Excel';
 const importModal = $('#import-modal');
@@ -425,14 +456,14 @@ function renderImportStatus() {
     if (state.marginInputsStatus === 'loading' || state.targetInputsStatus === 'loading') { node.textContent = ''; node.dataset.tone = 'muted'; return; }
     const result = state.importResult;
     if (result) {
-        node.textContent = `Imported ${plural(result.figures, 'figure')} from ${result.fileName} for ${importSpan(result.from, result.to)}. They now show here, in Targets and in Margin & COGS.`;
+        node.textContent = `Imported ${plural(result.figures, 'figure')} from ${result.fileName} for ${importSpan(result.from, result.to)}. They now show here, in Targets, in Margin & COGS and in Sales.`;
         node.dataset.tone = 'manual';
         return;
     }
     const entries = [...Object.values(state.marginInputs || {}), ...Object.values(state.targetInputs || {})];
     const latest = entries.map((entry) => entry.enteredAt).filter(Boolean).sort().pop();
     if (!latest) {
-        node.textContent = 'Fills Target MRR, COGS and margins for every market from the finance spreadsheet.';
+        node.textContent = 'Fills Target MRR, COGS, margins and the new business target for every market from the finance spreadsheet.';
         node.dataset.tone = 'muted';
         return;
     }
@@ -615,7 +646,7 @@ if (importModal && importForm) {
         try {
             const result = await importRequest({ method: 'POST', body: importUploadBody('commit') });
             state.importResult = { fileName: result.file.name, figures: result.figures, from: result.from, to: result.to };
-            await Promise.all([loadMarginInputs(), loadTargetInputs()]);
+            await Promise.all([loadMarginInputs(), loadTargetInputs(), typeof loadSalesTargets === 'function' ? loadSalesTargets() : null]);
             state.importBusy = false;
             closeImportModal();
             renderImportStatus();

@@ -16,6 +16,9 @@ const IMPORT_FIELDS = [
     'cogsTarget' => ['label' => 'Target COGS', 'rows' => ['target cogs'], 'kind' => 'money', 'actual' => false],
     'margin' => ['label' => 'Current margin', 'rows' => ['current margin', 'current contribution margin'], 'kind' => 'fraction', 'min' => -1, 'max' => 1, 'actual' => true],
     'marginTarget' => ['label' => 'Target margin', 'rows' => ['target margin', 'target contribution margin'], 'kind' => 'fraction', 'min' => 0, 'max' => 1, 'actual' => false],
+    // Meta de vendas novas (MRR) do mês. Vai para sales_targets como meta da empresa (Overview e página Sales).
+    // A linha "New Business (MRR)" (realizado) e "To Target" não entram: o realizado vem do HubSpot.
+    'newSalesTarget' => ['label' => 'Target new business (MRR)', 'rows' => ['target new business (mrr)', 'target new business'], 'kind' => 'money', 'actual' => false, 'zeroIsEmpty' => true],
 ];
 
 try {
@@ -56,7 +59,7 @@ try {
                 throw new InvalidArgumentException('Nothing to import: no figures were found in the target tabs.');
             }
 
-            $saved = save($pdo, $parsed['entries']);
+            $saved = save($pdo, $parsed['entries'], (string) ($currentUser['email'] ?? ''));
             respond(200, $summary + ['saved' => $saved]);
 
         default:
@@ -293,6 +296,11 @@ function parseWorkbook(string $path): array
                 if ($raw === null || $raw === '') {
                     continue;
                 }
+                // Meta zerada = sem meta: a fórmula da aba consolidada devolve 0 nos meses sem meta
+                // e isso não deve apagar uma meta que já está salva.
+                if (!empty($spec['zeroIsEmpty']) && is_float($raw) && $raw == 0.0) {
+                    continue;
+                }
                 if ($spec['actual'] && !isset($actualMonths[$month])) {
                     if ($field !== 'cogs') {
                         $leftOut++;
@@ -465,9 +473,9 @@ function connect(): PDO
  * Grava tudo ou nada. Em margin_inputs, um campo que a planilha deixa vazio não
  * apaga o que já estava salvo (o bonus pool, por exemplo, não vem da planilha).
  *
- * @return array{targets:int, margin:int}
+ * @return array{targets:int, margin:int, salesTargets:int}
  */
-function save(PDO $pdo, array $entries): array
+function save(PDO $pdo, array $entries, string $email = ''): array
 {
     $target = $pdo->prepare(
         'INSERT INTO mrr_targets (period_month, scope, category, total_mrr_target)
@@ -487,7 +495,25 @@ function save(PDO $pdo, array $entries): array
             updated_at = CURRENT_TIMESTAMP'
     );
 
-    $saved = ['targets' => 0, 'margin' => 0];
+    // Meta de vendas novas: só toca em sales_targets se a planilha trouxe essa linha. Meta da empresa (owner_id 'all').
+    $salesTarget = null;
+    if (array_filter($entries, static fn (array $entry): bool => $entry['newSalesTarget'] !== null) !== []) {
+        $columns = salesTargetColumns($pdo);
+        if ($columns === []) {
+            throw new InvalidArgumentException('The sales_targets table is missing, so the new business targets can\'t be saved. Run the sales targets SQL first. Nothing was saved.');
+        }
+        $withOwner = in_array('owner_id', $columns, true);
+        $salesTarget = $pdo->prepare(
+            'INSERT INTO sales_targets (period_month, scope, category, ' . ($withOwner ? 'owner_id, ' : '') . 'revenue_target, updated_by)
+             VALUES (:period_month, :scope, :category, ' . ($withOwner ? "'all', " : '') . ':revenue_target, :updated_by)
+             ON DUPLICATE KEY UPDATE
+                revenue_target = VALUES(revenue_target),
+                updated_by = VALUES(updated_by),
+                updated_at = CURRENT_TIMESTAMP'
+        );
+    }
+
+    $saved = ['targets' => 0, 'margin' => 0, 'salesTargets' => 0];
     $pdo->beginTransaction();
     try {
         foreach ($entries as $entry) {
@@ -506,6 +532,10 @@ function save(PDO $pdo, array $entries): array
                 $margin->execute($key + $values);
                 $saved['margin']++;
             }
+            if ($salesTarget !== null && $entry['newSalesTarget'] !== null) {
+                $salesTarget->execute($key + ['revenue_target' => $entry['newSalesTarget'], 'updated_by' => $email !== '' ? $email : 'import']);
+                $saved['salesTargets']++;
+            }
         }
         $pdo->commit();
     } catch (Throwable $error) {
@@ -513,6 +543,16 @@ function save(PDO $pdo, array $entries): array
         throw $error;
     }
     return $saved;
+}
+
+/** Colunas de sales_targets (vazio se a tabela não existe). owner_id só existe depois do sql/008. */
+function salesTargetColumns(PDO $pdo): array
+{
+    $select = $pdo->query(
+        "SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sales_targets'"
+    );
+    return array_map('strval', $select->fetchAll(PDO::FETCH_COLUMN));
 }
 
 function respond(int $status, array $body): void
