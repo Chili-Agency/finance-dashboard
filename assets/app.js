@@ -39,7 +39,7 @@ async function refreshData() {
         problem = error.message;
     }
     state.sync.inFlight = false;
-    await Promise.all([loadInvoices(), typeof loadAds === 'function' ? loadAds() : null, typeof loadCosts === 'function' ? loadCosts() : null, typeof loadClients === 'function' ? loadClients() : null, typeof loadSales === 'function' ? loadSales() : null]);
+    await Promise.all([loadInvoices(), typeof loadAds === 'function' ? loadAds() : null, typeof loadCosts === 'function' ? loadCosts() : null, typeof loadClients === 'function' ? loadClients() : null, typeof loadSales === 'function' ? loadSales() : null, typeof loadSalesGoals === 'function' ? loadSalesGoals() : null]);
     if (problem) {
         const notice = $('#error-notice');
         notice.classList.remove('is-info');
@@ -82,3 +82,4 @@ loadLateRules();
 loadAds();
 loadCosts();
 loadClients();
+loadSalesGoals();
