@@ -39,6 +39,7 @@ function asset(string $path): string
             <nav class="main-nav" aria-label="Main navigation">
                 <button class="nav-item is-active" data-view="overview" data-title="Overview"><span class="nav-icon">◍</span>Overview</button>
                 <button class="nav-item" data-view="sales" data-title="Sales"><span class="nav-icon">◆</span>Sales</button>
+                <button class="nav-item" data-view="clients" data-title="Client view"><span class="nav-icon">◉</span>Client view</button>
                 <button class="nav-item" data-view="invoices" data-title="Invoices"><span class="nav-icon">◒</span>Invoices</button>
                 <button class="nav-item" data-view="late" data-title="Late invoices"><span class="nav-icon">◔</span>Late invoices</button>
                 <button class="nav-item" data-view="unit" data-title="Unit economics"><span class="nav-icon">◈</span>Unit economics</button>
@@ -159,6 +160,22 @@ function asset(string $path): string
                     <div class="bridge" id="summary-bridge"></div>
                     <div class="table-empty is-hidden" id="summary-bridge-empty">No data for this period</div>
                 </article>
+            </section>
+
+            <section class="view" id="clients-view" aria-labelledby="page-title">
+                <div class="section-intro">
+                    <div>
+                        <p class="eyebrow">Account information</p>
+                        <h2>Client view</h2>
+                        <p class="section-copy">Payments from Xero, NPS from HubSpot and the onboarding date, in one place for escalations.</p>
+                        <p class="manual-input-status" id="client-sources-note" data-tone="muted" aria-live="polite"></p>
+                    </div>
+                    <div class="filter-stack">
+                        <label class="field"><span>Client</span><input type="search" id="client-search" list="client-options" placeholder="Type a client name…" autocomplete="off"><datalist id="client-options"></datalist></label>
+                    </div>
+                </div>
+                <p class="table-empty" id="client-empty">Loading invoices…</p>
+                <div id="client-detail" hidden></div>
             </section>
 
             <section class="view" id="sales-view" aria-labelledby="page-title">
@@ -1108,6 +1125,7 @@ function asset(string $path): string
     <script src="<?= asset('assets/core.js') ?>"></script>
     <script src="<?= asset('assets/overview.js') ?>"></script>
     <script src="<?= asset('assets/sales.js') ?>"></script>
+    <script src="<?= asset('assets/client-view.js') ?>"></script>
     <script src="<?= asset('assets/invoices.js') ?>"></script>
     <script src="<?= asset('assets/late-invoices.js') ?>"></script>
     <script src="<?= asset('assets/unit-economics.js') ?>"></script>

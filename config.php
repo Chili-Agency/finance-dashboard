@@ -81,6 +81,8 @@ return (static function (): array {
             // Opcional: workflow "Chili Finance - Custos (Xero banco)" (backlinks, HubSpot, Linked Helper, Sender.net).
             // Vazio desliga os custos de assinaturas em "Other costs".
             'costs' => $env('N8N_WEBHOOK_COSTS', ''),
+            // Opcional: workflow "Chili Finance - Clientes (HubSpot)" (NPS por empresa). Vazio desliga o NPS na página Client view.
+            'clients' => $env('N8N_WEBHOOK_CLIENTS', ''),
             // Opcional: workflow "Chili Finance - Sales (HubSpot)". Vazio desliga a página Sales.
             'sales' => $env('N8N_WEBHOOK_SALES', ''),
         ],
