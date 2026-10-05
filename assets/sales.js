@@ -3,13 +3,15 @@
  * e helpers dele (state, periodBounds, money, monthKeysBetween...).
  *
  * Dados: sales.php (deals, contatos, chamadas e reuniões do HubSpot), state.ads (Google + Meta,
- * carregado pelo app.js) e sales-targets.php (meta de receita, entrada manual).
+ * carregado pelo app.js), sales-targets.php (meta de receita por mês, mercado, serviço e vendedor,
+ * entrada manual) e goals.php (metas por tier: nome, valor, vendedor, mercado e serviço).
  * Contatos, chamadas e reuniões não têm linha de serviço; chamadas e reuniões também não têm
  * mercado. Nesses blocos o filtro que não se aplica é ignorado e a página avisa.
  */
 
 const SALES_ENDPOINT = 'sales.php';
 const SALES_TARGETS_ENDPOINT = 'sales-targets.php';
+const GOALS_ENDPOINT = 'goals.php';
 const SALES_MARKET_LABELS = { ...companyLabels, unknown: 'No country' };
 const SALES_MARKET_COLORS = { br: '#57745d', mx: '#d49b35', pa: '#55778a', int: '#e84d2c', unknown: '#a5a6a0' };
 const SALES_CHANNELS = [
@@ -31,6 +33,7 @@ state.sales = { status: 'loading', data: null, errors: [] };
 state.salesTargets = {};
 state.salesTargetsStatus = 'loading';
 state.salesTargetsError = '';
+state.goalList = { status: 'loading', goals: [], error: '' }; // metas por tier (tabela sales_goals)
 
 // ---- Vendedores e metas por pessoa (HubSpot) ----
 const SALES_GOALS_ENDPOINT = 'sales-goals.php';
@@ -61,6 +64,7 @@ async function loadSales() {
     } catch (error) {
         state.sales = { status: 'error', data: state.sales.data, errors: [error.message] };
     }
+    refreshOverviewSales();
     const refresh = state.lastRefresh;
     state.lastRefresh = null;
     if (refresh && (refresh.sources || []).some((source) => source.source === 'sales' && source.pending)) watchSalesRefresh();
@@ -86,6 +90,7 @@ function watchSalesRefresh() {
                 clearInterval(timer);
                 state.salesPoll = null;
                 state.sales = { status: 'ready', data: prepareSales(body), errors: body.errors || [] };
+                refreshOverviewSales();
                 renderSales();
                 return;
             }
@@ -127,8 +132,9 @@ async function salesTargetsRequest(options = {}) {
     return body;
 }
 
-const salesTargetKey = (month, scope, category) => `${month}|${scope}|${category}`;
-function storeSalesTarget(entry) { state.salesTargets[salesTargetKey(entry.month, entry.scope, entry.category)] = entry; }
+// owner 'all' = meta da empresa; um id = meta de um vendedor (id do owner no HubSpot).
+const salesTargetKey = (month, scope, category, owner = 'all') => `${month}|${scope}|${category}|${owner || 'all'}`;
+function storeSalesTarget(entry) { state.salesTargets[salesTargetKey(entry.month, entry.scope, entry.category, entry.ownerId)] = entry; }
 
 async function loadSalesTargets() {
     try {
@@ -140,6 +146,7 @@ async function loadSalesTargets() {
         state.salesTargetsStatus = 'error';
         state.salesTargetsError = error.message;
     }
+    refreshOverviewSales();
     renderSales();
 }
 
@@ -210,28 +217,29 @@ function revenueByMonth(months) {
 
 // ---------- Metas ----------
 
-function exactSalesTarget(month, scope, category) {
-    const entry = state.salesTargets[salesTargetKey(month, scope, category)];
+function exactSalesTarget(month, scope, category, owner = 'all') {
+    const entry = state.salesTargets[salesTargetKey(month, scope, category, owner)];
     return entry && hasValue(entry.revenueTarget) ? Number(entry.revenueTarget) : null;
 }
 
-function resolveSalesTarget(month, scope, category) {
-    const exact = exactSalesTarget(month, scope, category);
+// A meta de um vendedor e a da empresa são separadas: cada uma soma só as próprias entradas por mercado e serviço.
+function resolveSalesTarget(month, scope, category, owner = 'all') {
+    const exact = exactSalesTarget(month, scope, category, owner);
     if (hasValue(exact)) return exact;
     if (category === 'all') {
-        const lines = Object.keys(categoryLabels).map((key) => exactSalesTarget(month, scope, key)).filter(hasValue);
+        const lines = Object.keys(categoryLabels).map((key) => exactSalesTarget(month, scope, key, owner)).filter(hasValue);
         if (lines.length) return sumOf(lines, Number);
     }
     if (scope === 'all') {
-        const markets = Object.keys(companyLabels).map((key) => resolveSalesTarget(month, key, category)).filter(hasValue);
+        const markets = Object.keys(companyLabels).map((key) => resolveSalesTarget(month, key, category, owner)).filter(hasValue);
         if (markets.length) return sumOf(markets, Number);
     }
     return null;
 }
 
-/** Soma das metas dos meses; covered = quantos meses têm meta. */
-function salesTargetFor(months) {
-    const values = months.map((month) => resolveSalesTarget(month, state.scope, state.category)).filter(hasValue);
+/** Soma das metas dos meses (da empresa, ou do vendedor escolhido); covered = quantos meses têm meta. */
+function salesTargetFor(months, owner = 'all') {
+    const values = months.map((month) => resolveSalesTarget(month, state.scope, state.category, owner)).filter(hasValue);
     return { target: values.length ? sumOf(values, Number) : null, covered: values.length, months: months.length };
 }
 
@@ -304,6 +312,7 @@ function countBy(items, keyOf) {
 
 function renderSalesKpis(window, current) {
     salesKpi('revenue', { value: money(current.revenue), note: `${plural(current.won.length, 'won deal')} · ${window.label}` });
+    renderSalesTiers(window, current);
 
     const byMarket = countBy(current.won, (deal) => deal.market);
     salesKpi('deals', {
@@ -327,7 +336,7 @@ function renderSalesKpis(window, current) {
     }
 
     const months = monthKeysBetween(window.start, window.end);
-    const plan = salesTargetFor(months);
+    const plan = salesTargetFor(months, state.salesOwner);
     const coverage = plan.covered && plan.covered < plan.months ? ` · target set for ${plan.covered} of ${plan.months} months` : '';
     salesKpi('target', {
         value: hasValue(plan.target) && plan.target > 0 ? percentOr(current.revenue / plan.target, 0) : DASH,
@@ -340,7 +349,7 @@ function renderSalesKpis(window, current) {
     const quarterEnd = endOfMonth(new Date(quarterStart.getFullYear(), quarterStart.getMonth() + 2, 1));
     const toDate = anchor < quarterEnd ? anchor : quarterEnd;
     const quarterRevenue = salesMeasure({ start: quarterStart, end: toDate, from: salesDay(quarterStart), to: salesDay(toDate) }).revenue;
-    const quarterPlan = salesTargetFor(monthKeysBetween(quarterStart, quarterEnd));
+    const quarterPlan = salesTargetFor(monthKeysBetween(quarterStart, quarterEnd), state.salesOwner);
     setText('#sales-quarter-label', `Q${Math.floor(quarterStart.getMonth() / 3) + 1} ${quarterStart.getFullYear()} to date`);
     salesKpi('quarter', {
         value: hasValue(quarterPlan.target) && quarterPlan.target > 0 ? percentOr(quarterRevenue / quarterPlan.target, 0) : DASH,
@@ -465,7 +474,7 @@ function renderSalesCharts(window) {
     const labels = months.map((key) => new Intl.DateTimeFormat('en-US', { month: 'short' }).format(monthFromKey(key)));
 
     const revenue = revenueByMonth(months);
-    const targets = months.map((key) => (state.salesOwner === 'all' ? resolveSalesTarget(key, state.scope, state.category) : null));
+    const targets = months.map((key) => resolveSalesTarget(key, state.scope, state.category, state.salesOwner));
     if (state.salesCharts.trend) state.salesCharts.trend.destroy();
     state.salesCharts.trend = new Chart($('#sales-trend-chart'), {
         type: 'line',
@@ -513,6 +522,7 @@ function renderSalesStatus() {
         if (errors.length) { notes.push(errors.join(' ')); tone = 'sample'; }
     }
     if (state.salesTargetsStatus === 'error') { notes.push(`Sales targets: ${state.salesTargetsError}`); tone = 'error'; }
+    if (state.goalList.status === 'error') { notes.push(`Sales goals: ${state.goalList.error}`); tone = 'error'; }
     if (data && state.salesOwner !== 'all') notes.push('Leads, MQL and SQL are not split by person.');
     const goalsNote = salesGoalsNote();
     if (goalsNote.text) {
@@ -531,6 +541,8 @@ function clearSalesPage() {
     $('#sales-funnel-rates').innerHTML = '';
     const overviewTable = $('#sales-overview-table');
     if (overviewTable) overviewTable.innerHTML = '';
+    const tierNode = $('#sales-revenue-tier');
+    if (tierNode) tierNode.textContent = '';
     $('#sales-channels').innerHTML = '';
     $('#sales-channels-total').innerHTML = '';
     const wonLink = $('#open-sales-won-modal');
@@ -553,7 +565,6 @@ function renderSales() {
     const current = salesMeasure(window);
     renderSalesOwnerFilter();
     renderSalesKpis(window, current);
-    renderSalesOwnerKpis();
     renderSalesOverview(window);
     renderSalesFunnel(window, current);
     renderSalesBreakdowns(current);
@@ -650,10 +661,10 @@ function showSalesTargetError(message, field) {
 }
 
 function loadSalesTargetIntoForm() {
-    const { month, scope, category, revenueTarget } = salesTargetForm.elements;
-    const entry = month.value ? state.salesTargets[salesTargetKey(month.value, scope.value, category.value)] : null;
+    const { month, scope, category, ownerId, revenueTarget } = salesTargetForm.elements;
+    const entry = month.value ? state.salesTargets[salesTargetKey(month.value, scope.value, category.value, ownerId.value)] : null;
     revenueTarget.value = entry && hasValue(entry.revenueTarget) ? Number(entry.revenueTarget) : '';
-    const combined = !entry && month.value ? resolveSalesTarget(month.value, scope.value, category.value) : null;
+    const combined = !entry && month.value ? resolveSalesTarget(month.value, scope.value, category.value, ownerId.value) : null;
     setText('#sales-target-hint', entry
         ? `Editing the saved target${entry.enteredAt ? ` from ${formatEnteredAt(entry.enteredAt)}` : ''}${entry.updatedBy ? ` by ${entry.updatedBy}` : ''}.`
         : hasValue(combined) ? `No target for this exact combination. The page currently adds up ${money(combined)} from markets and services.` : 'New target.');
@@ -665,6 +676,8 @@ function openSalesTargetModal() {
     const window = salesWindow();
     salesTargetForm.reset();
     showSalesTargetError('');
+    // Vendedor já escolhido no filtro da página vem marcado; All salespeople = meta da empresa.
+    fillSalesPersonSelect(salesTargetForm.elements.ownerId, 'All salespeople (company target)', state.salesOwner);
     salesTargetForm.elements.month.value = monthKey(window.bounded ? window.start : startOfToday());
     salesTargetForm.elements.scope.value = state.scope;
     salesTargetForm.elements.category.value = state.category;
@@ -678,12 +691,12 @@ if (salesTargetModal && salesTargetForm) {
     $('#open-sales-target-modal').addEventListener('click', openSalesTargetModal);
     salesTargetModal.querySelectorAll('[data-close-modal]').forEach((button) => button.addEventListener('click', closeSalesTargetModal));
     salesTargetModal.addEventListener('click', (event) => { if (event.target === salesTargetModal) closeSalesTargetModal(); });
-    ['month', 'scope', 'category'].forEach((name) => salesTargetForm.elements[name].addEventListener('change', loadSalesTargetIntoForm));
+    ['month', 'scope', 'category', 'ownerId'].forEach((name) => salesTargetForm.elements[name].addEventListener('change', loadSalesTargetIntoForm));
     salesTargetForm.addEventListener('input', () => { if (!$('#sales-target-error').hidden) showSalesTargetError(''); });
 
     salesTargetForm.addEventListener('submit', async (event) => {
         event.preventDefault();
-        const { month, scope, category, revenueTarget } = salesTargetForm.elements;
+        const { month, scope, category, ownerId, revenueTarget } = salesTargetForm.elements;
         if (!/^\d{4}-\d{2}$/.test(month.value)) { showSalesTargetError('Choose the month this target belongs to.', month); return; }
         const value = Number(revenueTarget.value);
         if (revenueTarget.value.trim() === '' || !Number.isFinite(value) || value < 0) { showSalesTargetError('Enter the revenue target in USD.', revenueTarget); return; }
@@ -696,11 +709,12 @@ if (salesTargetModal && salesTargetForm) {
             const { entry } = await salesTargetsRequest({
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
-                body: JSON.stringify({ month: month.value, scope: scope.value, category: category.value, revenueTarget: value }),
+                body: JSON.stringify({ month: month.value, scope: scope.value, category: category.value, ownerId: ownerId.value, revenueTarget: value }),
             });
             storeSalesTarget(entry);
             state.salesTargetsStatus = 'ready';
             closeSalesTargetModal();
+            refreshOverviewSales();
             renderSales();
         } catch (error) {
             showSalesTargetError(error.message || 'Could not save the target.');
@@ -713,6 +727,7 @@ if (salesTargetModal && salesTargetForm) {
 
 loadSales();
 loadSalesTargets();
+loadGoalList();
 
 // ---------- Vendedor, metas por pessoa e visão geral ----------
 
@@ -734,6 +749,7 @@ async function loadSalesGoals() {
     } catch (error) {
         state.salesGoals = { status: 'error', goals: [], kinds: [], errors: [error.message], warnings: [], fetchedAt: null };
     }
+    refreshOverviewSales();
     renderSales();
 }
 
@@ -801,6 +817,53 @@ function salesMonthlyTargets() {
 
 const dealMonthly = (deal) => (Number(deal[SALES_NEW_SALES_FIELD]) || 0) * dealShare(deal);
 
+// ---------- Vendas novas por mês (matriz do Overview) ----------
+// Usadas por assets/overview.js. Seguem o mercado e o serviço filtrados no Overview e somam todos os vendedores
+// (o filtro de vendedor é só da página Sales).
+
+/** Vendas novas por mês (deals ganhos de negócio novo, pela receita mensal), na ordem de months. null = sem dados do HubSpot nesse mês. */
+function overviewNewSales(months) {
+    const data = state.sales.data;
+    if (!data) return months.map(() => null);
+    const totals = new Map(months.map((key) => [key, 0]));
+    data.deals.forEach((deal) => {
+        if (deal.outcome !== 'won' || deal.type === 'existingbusiness' || !deal.closedAt) return;
+        if (!salesInScope(deal.market) || dealShare(deal) <= 0) return;
+        const key = deal.closedAt.slice(0, 7);
+        if (totals.has(key)) totals.set(key, totals.get(key) + dealMonthly(deal));
+    });
+    const since = data.since ? String(data.since).slice(0, 7) : null;
+    const current = monthKey(startOfToday());
+    // Mês futuro, ou anterior ao que o HubSpot trouxe: ainda não há como saber.
+    return months.map((key) => (key > current || (since && key < since) ? null : totals.get(key)));
+}
+
+/**
+ * Meta de vendas novas de um mês: a da empresa (Set sales target com "All salespeople"); se não houver,
+ * a soma das metas dos vendedores; por fim a soma das metas do HubSpot (só sem filtro de mercado e serviço).
+ */
+function overviewSalesTarget(month) {
+    const company = resolveSalesTarget(month, state.scope, state.category, 'all');
+    if (hasValue(company)) return company;
+
+    const owners = new Set(Object.values(state.salesTargets)
+        .filter((entry) => entry.month === month && entry.ownerId && entry.ownerId !== 'all')
+        .map((entry) => entry.ownerId));
+    const people = [...owners].map((owner) => resolveSalesTarget(month, state.scope, state.category, owner)).filter(hasValue);
+    if (people.length) return sumOf(people, Number);
+
+    if (state.salesGoals.status === 'ready' && state.scope === 'all' && state.category === 'all') {
+        const fromHubspot = [...salesMonthlyTargets().values()].map((byMonth) => byMonth.get(month)).filter(hasValue);
+        if (fromHubspot.length) return sumOf(fromHubspot, Number);
+    }
+    return null;
+}
+
+// Os dados de vendas e de metas chegam depois da página: avisa a matriz do Overview para se refazer.
+function refreshOverviewSales() {
+    if (typeof refreshSummaryMatrix === 'function') refreshSummaryMatrix();
+}
+
 // Vendas novas por pessoa no período: deals ganhos de negócio novo (não "existing business"), pela receita mensal.
 function salesNewByOwner(window) {
     const people = new Map();
@@ -827,12 +890,27 @@ function renderSalesOverview(window) {
     const months = monthKeysBetween(window.start, window.end);
     const targetsApply = state.salesGoals.status === 'ready' && state.scope === 'all' && state.category === 'all';
 
-    const targetOf = (owner) => {
+    // Meta do vendedor: a que se grava em "Set sales target" (segue os filtros de mercado e serviço);
+    // sem ela, a meta do HubSpot, que só vale sem filtro de mercado nem de serviço.
+    const manualOf = (owner) => {
+        if (!owner) return null;
+        const values = months.map((month) => resolveSalesTarget(month, state.scope, state.category, owner)).filter(hasValue);
+        return values.length ? sumOf(values, Number) : null;
+    };
+    const hubspotOf = (owner) => {
         if (!targetsApply || !owner || !targets.has(owner)) return null;
         const values = months.map((month) => targets.get(owner).get(month)).filter(hasValue);
         return values.length ? sumOf(values, (value) => value) : null;
     };
+    const targetOf = (owner) => {
+        const manual = manualOf(owner);
+        return hasValue(manual) ? manual : hubspotOf(owner);
+    };
+    const manualOwners = new Set(Object.values(state.salesTargets)
+        .filter((entry) => entry.ownerId && entry.ownerId !== 'all' && months.includes(entry.month))
+        .map((entry) => entry.ownerId));
     const ids = new Set([...people.keys()]);
+    manualOwners.forEach((owner) => { if (targetOf(owner) !== null) ids.add(owner); });
     if (targetsApply) targets.forEach((_, owner) => { if (targetOf(owner) !== null) ids.add(owner); });
 
     const rows = [...ids]
@@ -865,20 +943,13 @@ function renderSalesOverview(window) {
     const note = $('#sales-overview-note');
     if (note) {
         const parts = [`New sales = won deals of new business, by ${SALES_NEW_SALES_FIELD === 'mrrUsd' ? 'monthly recurring revenue (MRR)' : 'deal value'}, in USD.`];
-        if (state.salesGoals.status === 'ready' && !targetsApply) parts.push('Targets are per person: clear the market and service filters to compare.');
-        else if (state.salesGoals.status === 'ready' && !targets.size) parts.push('No goals found in HubSpot for these salespeople yet.');
-        else if (state.salesGoals.status !== 'ready') parts.push('Targets by person are not available (see the note at the top).');
+        parts.push('Targets are the ones set in Set sales target for each salesperson, or the HubSpot goals when none was set.');
+        if (!rows.some((row) => hasValue(row.target))) parts.push('No targets by person for this period yet: use Set sales target and choose a salesperson.');
+        else if (state.salesGoals.status === 'ready' && !targetsApply) parts.push('HubSpot goals only count with no market or service filter; targets from Set sales target follow the filters.');
         if (withoutRevenue) parts.push(`${plural(withoutRevenue, 'won deal')} without ${SALES_NEW_SALES_FIELD === 'mrrUsd' ? 'MRR' : 'a value'} in HubSpot count as $0.`);
         note.textContent = parts.join(' ');
         note.dataset.tone = withoutRevenue ? 'sample' : 'muted';
     }
-}
-
-// Com um vendedor escolhido, as metas dos cartões (da empresa) não valem para ele: as dele estão na tabela.
-function renderSalesOwnerKpis() {
-    if (state.salesOwner === 'all') return;
-    salesKpi('target', { value: DASH, note: 'Targets by person are in the overview table', ratio: null });
-    salesKpi('quarter', { value: DASH, note: 'Targets by person are in the overview table', ratio: null });
 }
 
 const salesOwnerSelect = $('#sales-owner-select');
@@ -886,5 +957,248 @@ if (salesOwnerSelect) {
     salesOwnerSelect.addEventListener('change', () => {
         state.salesOwner = salesOwnerSelect.value || 'all';
         renderSales();
+    });
+}
+
+// ---------- Vendedores nos formulários ----------
+
+// Quem aparece nas listas dos formulários: salespeople dos deals e das metas do HubSpot mais todos os owners ativos
+// (um vendedor novo, sem nenhum deal ainda, também precisa poder receber meta).
+function salesFormPeople() {
+    const data = state.sales.data;
+    const people = new Map(salesPeople().map((person) => [person.id, person.name]));
+    if (data) {
+        Object.entries(data.owners || {}).forEach(([id, owner]) => {
+            if (owner && owner.active && !people.has(id)) people.set(id, owner.name || `Owner ${id}`);
+        });
+    }
+    return [...people.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function fillSalesPersonSelect(select, allLabel, selected = 'all') {
+    const people = salesFormPeople();
+    if (selected !== 'all' && !people.some((person) => person.id === selected)) {
+        people.push({ id: selected, name: state.sales.data ? state.sales.data.nameOf(selected) : `Owner ${selected}` });
+    }
+    select.innerHTML = `<option value="all">${escapeHtml(allLabel)}</option>${people.map((person) => `<option value="${escapeHtml(person.id)}">${escapeHtml(person.name)}</option>`).join('')}`;
+    select.value = selected;
+}
+
+// ---------- Metas por tier (tabela sales_goals, via goals.php) ----------
+// Cada meta tem nome livre, valor em USD por mês, vendedor, mercado e serviço ('all' = vale para todos).
+// Não há lista fixa de tiers: o card de TCV mostra quais metas da visão atual o período já alcançou.
+
+async function goalsRequest(options = {}) {
+    const response = redirectIfSignedOut(await fetch(GOALS_ENDPOINT, { cache: 'no-store', ...options }));
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `The server answered HTTP ${response.status}.`);
+    return body;
+}
+
+const sortGoals = (goals) => [...goals].sort((a, b) => a.amount - b.amount || a.name.localeCompare(b.name));
+
+async function loadGoalList() {
+    try {
+        const { goals = [] } = await goalsRequest();
+        state.goalList = { status: 'ready', goals: sortGoals(goals), error: '' };
+    } catch (error) {
+        state.goalList = { status: 'error', goals: state.goalList.goals, error: error.message };
+    }
+    renderSales();
+    if (typeof renderSalesGoalsTable === 'function') renderSalesGoalsTable();
+}
+
+/**
+ * Metas que valem para a visão atual. Uma meta vale quando vendedor, mercado e serviço dela são "all"
+ * ou iguais ao que está filtrado na página. Se duas têm o mesmo nome, vence a mais específica.
+ * O valor é mensal: um período de vários meses multiplica pelo número de meses.
+ */
+function goalTiersForView(window) {
+    if (state.goalList.status !== 'ready') return [];
+    const months = Math.max(1, monthKeysBetween(window.start, window.end).length);
+    const best = new Map();
+    state.goalList.goals.forEach((goal) => {
+        if (goal.ownerId !== 'all' && goal.ownerId !== state.salesOwner) return;
+        if (goal.scope !== 'all' && goal.scope !== state.scope) return;
+        if (goal.category !== 'all' && goal.category !== state.category) return;
+        const specificity = (goal.ownerId !== 'all' ? 4 : 0) + (goal.scope !== 'all' ? 2 : 0) + (goal.category !== 'all' ? 1 : 0);
+        const key = goal.name.toLowerCase();
+        if (!best.has(key) || specificity > best.get(key).specificity) best.set(key, { name: goal.name, monthly: goal.amount, specificity });
+    });
+    return [...best.values()]
+        .map((goal) => ({ name: goal.name, monthly: goal.monthly, amount: goal.monthly * months }))
+        .sort((a, b) => a.amount - b.amount || a.name.localeCompare(b.name));
+}
+
+// Linha de tiers do card "Total contract value (goals by tier)".
+function renderSalesTiers(window, current) {
+    const node = $('#sales-revenue-tier');
+    if (!node) return;
+    node.classList.remove('is-reached');
+    node.removeAttribute('title');
+    const { status } = state.goalList;
+    if (status === 'loading') { node.textContent = ''; return; }
+    if (status === 'error') { node.textContent = 'Goal tiers could not be loaded'; return; }
+    const tiers = goalTiersForView(window);
+    if (!tiers.length) { node.textContent = 'No goal tiers for this view'; return; }
+
+    const tcv = Number(current.revenue) || 0;
+    const reached = tiers.filter((tier) => tcv >= tier.amount);
+    const next = tiers.find((tier) => tcv < tier.amount);
+    const top = reached.length ? reached[reached.length - 1] : null;
+    const parts = [top ? `${top.name} reached` : 'No tier reached yet'];
+    parts.push(next ? `${money(next.amount - tcv)} to ${next.name}` : 'top tier');
+    node.textContent = parts.join(' · ');
+    node.classList.toggle('is-reached', Boolean(top));
+    node.title = tiers.map((tier) => `${tier.name}: ${money(tier.amount)}`).join(' · ');
+}
+
+// ---------- Modal "Manage goals" ----------
+
+const salesGoalsModal = $('#sales-goals-modal');
+const salesGoalsForm = $('#sales-goals-form');
+const GOALS_DEFAULT_HINT = 'Amounts are per month. A period of several months multiplies them.';
+
+function showSalesGoalsError(message, field) {
+    const node = $('#sales-goals-error');
+    node.textContent = message;
+    node.hidden = !message;
+    if (field) field.focus();
+}
+
+function salesGoalLabels(goal) {
+    const data = state.sales.data;
+    const known = data && data.owners && data.owners[goal.ownerId];
+    return {
+        owner: goal.ownerId === 'all' ? 'All salespeople' : (known ? known.name : goal.ownerName || 'Former owner'),
+        market: goal.scope === 'all' ? 'All markets' : (SALES_MARKET_LABELS[goal.scope] || goal.scope),
+        service: goal.category === 'all' ? 'All services' : (SALES_SERVICE_LABELS[goal.category] || goal.category),
+    };
+}
+
+function renderSalesGoalsTable() {
+    const body = $('#sales-goals-table');
+    if (!body || !salesGoalsForm) return;
+    const goals = state.goalList.goals;
+    const editing = salesGoalsForm.elements.id.value;
+    body.innerHTML = goals.map((goal) => {
+        const label = salesGoalLabels(goal);
+        return `<tr${String(goal.id) === editing ? ' class="is-editing"' : ''}>
+            <td>${escapeHtml(goal.name)}</td>
+            <td>${escapeHtml(label.owner)}</td>
+            <td>${escapeHtml(label.market)}</td>
+            <td>${escapeHtml(label.service)}</td>
+            <td class="align-right mono">${money(goal.amount)}</td>
+            <td class="goal-actions"><button type="button" data-goal-edit="${goal.id}">Edit</button><button type="button" data-goal-delete="${goal.id}">Delete</button></td>
+        </tr>`;
+    }).join('');
+    $('#sales-goals-empty').classList.toggle('is-hidden', goals.length > 0 || state.goalList.status !== 'ready');
+}
+
+function resetSalesGoalsForm(hint = GOALS_DEFAULT_HINT) {
+    salesGoalsForm.reset();
+    fillSalesPersonSelect(salesGoalsForm.elements.ownerId, 'All salespeople', 'all');
+    salesGoalsForm.elements.id.value = '';
+    setText('#sales-goals-legend', 'New goal');
+    $('#sales-goals-submit').textContent = 'Save goal';
+    setText('#sales-goals-hint', hint);
+    showSalesGoalsError('');
+    renderSalesGoalsTable();
+}
+
+function editSalesGoal(id) {
+    const goal = state.goalList.goals.find((item) => String(item.id) === String(id));
+    if (!goal) return;
+    const { name, amount, ownerId, scope, category } = salesGoalsForm.elements;
+    fillSalesPersonSelect(ownerId, 'All salespeople', goal.ownerId);
+    salesGoalsForm.elements.id.value = String(goal.id);
+    name.value = goal.name;
+    amount.value = goal.amount;
+    scope.value = goal.scope;
+    category.value = goal.category;
+    setText('#sales-goals-legend', `Editing “${goal.name}”`);
+    $('#sales-goals-submit').textContent = 'Update goal';
+    setText('#sales-goals-hint', `${goal.updatedBy ? `Last saved by ${goal.updatedBy}` : 'Saved goal'}${goal.enteredAt ? ` on ${formatEnteredAt(goal.enteredAt)}` : ''}.`);
+    showSalesGoalsError('');
+    renderSalesGoalsTable();
+    name.focus();
+}
+
+async function deleteSalesGoal(id) {
+    const goal = state.goalList.goals.find((item) => String(item.id) === String(id));
+    if (!goal || !confirm(`Delete the goal “${goal.name}”?`)) return;
+    try {
+        await goalsRequest({
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
+            body: JSON.stringify({ action: 'delete', id: goal.id }),
+        });
+        state.goalList = { ...state.goalList, goals: state.goalList.goals.filter((item) => item.id !== goal.id) };
+        const wasEditing = salesGoalsForm.elements.id.value === String(goal.id);
+        if (wasEditing) resetSalesGoalsForm(`Deleted “${goal.name}”.`);
+        else { renderSalesGoalsTable(); setText('#sales-goals-hint', `Deleted “${goal.name}”.`); }
+        renderSales();
+    } catch (error) {
+        showSalesGoalsError(error.message || 'Could not delete the goal.');
+    }
+}
+
+function openSalesGoalsModal() {
+    if (document.body.dataset.salesTargets === 'off') return;
+    resetSalesGoalsForm();
+    if (state.goalList.status === 'error') showSalesGoalsError(state.goalList.error);
+    salesGoalsModal.showModal();
+}
+
+function closeSalesGoalsModal() { salesGoalsModal.close(); $('#open-sales-goals-modal').focus(); }
+
+if (salesGoalsModal && salesGoalsForm) {
+    $('#open-sales-goals-modal').addEventListener('click', openSalesGoalsModal);
+    salesGoalsModal.querySelectorAll('[data-close-modal]').forEach((button) => button.addEventListener('click', closeSalesGoalsModal));
+    salesGoalsModal.addEventListener('click', (event) => { if (event.target === salesGoalsModal) closeSalesGoalsModal(); });
+    $('#sales-goals-new').addEventListener('click', () => resetSalesGoalsForm());
+    salesGoalsForm.addEventListener('input', () => { if (!$('#sales-goals-error').hidden) showSalesGoalsError(''); });
+    $('#sales-goals-table').addEventListener('click', (event) => {
+        const edit = event.target.closest('[data-goal-edit]');
+        const remove = event.target.closest('[data-goal-delete]');
+        if (edit) editSalesGoal(edit.dataset.goalEdit);
+        else if (remove) deleteSalesGoal(remove.dataset.goalDelete);
+    });
+
+    salesGoalsForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const { id, name, amount, ownerId, scope, category } = salesGoalsForm.elements;
+        if (!name.value.trim()) { showSalesGoalsError('Give the goal a name, for example Tier 1.', name); return; }
+        const value = Number(amount.value);
+        if (amount.value.trim() === '' || !Number.isFinite(value) || value <= 0) { showSalesGoalsError('Enter the goal amount in USD, greater than zero.', amount); return; }
+
+        const submit = $('#sales-goals-submit');
+        const label = submit.textContent;
+        submit.disabled = true;
+        submit.textContent = 'Saving…';
+        try {
+            const { goal } = await goalsRequest({
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
+                body: JSON.stringify({
+                    id: id.value ? Number(id.value) : null,
+                    name: name.value.trim(),
+                    amount: value,
+                    ownerId: ownerId.value,
+                    ownerName: ownerId.value === 'all' ? null : ownerId.selectedOptions[0].textContent,
+                    scope: scope.value,
+                    category: category.value,
+                }),
+            });
+            const others = state.goalList.goals.filter((item) => item.id !== goal.id);
+            state.goalList = { status: 'ready', goals: sortGoals([...others, goal]), error: '' };
+            resetSalesGoalsForm(`Saved “${goal.name}”. Add another goal, or close this window.`);
+            renderSales();
+        } catch (error) {
+            showSalesGoalsError(error.message || 'Could not save the goal.');
+        } finally {
+            submit.disabled = false;
+            if (submit.textContent === 'Saving…') submit.textContent = label;
+        }
     });
 }

@@ -186,6 +186,7 @@ function asset(string $path): string
                         <p class="section-copy">Deals, leads, calls and meetings from HubSpot. Ad spend from Google Ads and Meta Ads, in USD.</p>
                         <div class="manual-input-bar">
                             <button type="button" class="input-button" id="open-sales-target-modal" data-permission="sales_targets" aria-haspopup="dialog" aria-controls="sales-target-modal"><span aria-hidden="true">+</span> Set sales target</button>
+                            <button type="button" class="input-button" id="open-sales-goals-modal" data-permission="sales_targets" aria-haspopup="dialog" aria-controls="sales-goals-modal"><span aria-hidden="true">≡</span> Manage goals</button>
                             <p class="manual-input-status" id="sales-status" data-tone="muted" aria-live="polite"></p>
                         </div>
                     </div>
@@ -211,7 +212,7 @@ function asset(string $path): string
                 </div>
 
                 <div class="sales-kpis">
-                    <article class="metric-card sales-kpi" id="sales-revenue-card"><span class="metric-label" title="Total Contract Value: sum of won deals in the period">TCV (Total Contract Value)</span><strong id="sales-revenue">—</strong><p id="sales-revenue-note">—</p></article>
+                    <article class="metric-card sales-kpi" id="sales-revenue-card"><span class="metric-label" title="Total Contract Value: sum of won deals in the period, compared with the goal tiers set in Manage goals">Total contract value (goals by tier)</span><strong id="sales-revenue">—</strong><p id="sales-revenue-note">—</p><p class="sales-tier" id="sales-revenue-tier"></p></article>
                     <article class="metric-card sales-kpi" id="sales-deals-card"><span class="metric-label">Deals closed</span><strong id="sales-deals">—</strong><p id="sales-deals-note">—</p></article>
                     <article class="metric-card sales-kpi" id="sales-growth-card"><span class="metric-label">Growth</span><strong id="sales-growth">—</strong><p id="sales-growth-note">—</p></article>
                     <article class="metric-card sales-kpi summary-card" id="sales-target-card" data-state="empty"><span class="metric-label">To target</span><strong id="sales-target">—</strong><div class="summary-bar"><span id="sales-target-bar"></span></div><p id="sales-target-note">—</p></article>
@@ -1008,7 +1009,7 @@ function asset(string $path): string
                 </div>
                 <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
             </header>
-            <p class="modal-copy">Reads Target MRR, COGS, Target COGS, current margin and target margin from the country tabs (SEOBR, PPCMX…) and from Consolidated, which feeds the Global view. Nothing is saved until you confirm.</p>
+            <p class="modal-copy">Reads Target MRR, COGS, Target COGS, current margin, target margin and Target New Business (MRR) from the country tabs (SEOBR, PPCMX…) and from Consolidated, which feeds the Global view. Nothing is saved until you confirm.</p>
 
             <input type="hidden" name="csrf" value="<?= htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8') ?>">
 
@@ -1084,7 +1085,7 @@ function asset(string $path): string
                 </div>
                 <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
             </header>
-            <p class="modal-copy">Revenue the team should close in won deals for one month, market and service line, in USD. Global and All add up the markets and services when there is no entry of their own.</p>
+            <p class="modal-copy">Revenue to close in won deals for one month, market, service line and salesperson, in USD. Choose All salespeople for the company target. Global and All add up the markets and services when there is no entry of their own.</p>
 
             <fieldset class="form-group">
                 <legend>Applies to</legend>
@@ -1108,6 +1109,13 @@ function asset(string $path): string
                         </select>
                     </label>
                 </div>
+                <div class="form-grid">
+                    <label class="field"><span>Salesperson</span>
+                        <select name="ownerId">
+                            <option value="all">All salespeople (company target)</option>
+                        </select>
+                    </label>
+                </div>
             </fieldset>
 
             <fieldset class="form-group">
@@ -1124,6 +1132,79 @@ function asset(string $path): string
                 <div class="modal-actions">
                     <button type="button" class="button-secondary" data-close-modal>Cancel</button>
                     <button type="submit" class="button-primary" id="sales-target-submit">Save target</button>
+                </div>
+            </footer>
+        </form>
+    </dialog>
+    <dialog class="modal is-wide" id="sales-goals-modal" aria-labelledby="sales-goals-modal-title">
+        <form class="modal-form" id="sales-goals-form" novalidate>
+            <header class="modal-header">
+                <div>
+                    <p class="eyebrow">Manual input</p>
+                    <h2 id="sales-goals-modal-title">Sales goals by tier</h2>
+                </div>
+                <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+            </header>
+            <p class="modal-copy">Name each goal anything you like (Tier 1, Stretch, Q4 push…) and set its amount in USD per month. There is no limit on how many you add. Market, service and salesperson set who the goal applies to; All means everyone. The Total contract value card on this page shows which tier the period reached.</p>
+
+            <div class="table-scroll churn-scroll">
+                <table class="entries-table sales-goals-table">
+                    <thead>
+                        <tr>
+                            <th>Goal</th>
+                            <th>Salesperson</th>
+                            <th>Market</th>
+                            <th>Service</th>
+                            <th class="align-right">Amount per month</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="sales-goals-table"></tbody>
+                </table>
+                <div class="table-empty is-hidden" id="sales-goals-empty">No goals yet. Add the first one below.</div>
+            </div>
+
+            <fieldset class="form-group">
+                <legend id="sales-goals-legend">New goal</legend>
+                <input type="hidden" name="id">
+                <div class="form-grid is-three">
+                    <label class="field"><span>Goal name / tier</span><input type="text" name="name" maxlength="80" placeholder="Tier 1" autocomplete="off"></label>
+                    <label class="field"><span>Amount per month</span><div class="input-affix"><i>$</i><input type="number" name="amount" min="0" step="0.01" inputmode="decimal"></div></label>
+                    <label class="field"><span>Salesperson</span>
+                        <select name="ownerId">
+                            <option value="all">All salespeople</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="form-grid">
+                    <label class="field"><span>Market</span>
+                        <select name="scope">
+                            <option value="all">All markets</option>
+                            <option value="br">Brazil</option>
+                            <option value="mx">Mexico</option>
+                            <option value="pa">Panama</option>
+                            <option value="int">International</option>
+                        </select>
+                    </label>
+                    <label class="field"><span>Service</span>
+                        <select name="category">
+                            <option value="all">All services</option>
+                            <option value="seo">SEO</option>
+                            <option value="ppc">PPC</option>
+                            <option value="others">Others (SMM, Marketing, Web dev)</option>
+                        </select>
+                    </label>
+                </div>
+            </fieldset>
+
+            <p class="form-error" id="sales-goals-error" role="alert" hidden></p>
+
+            <footer class="modal-footer">
+                <p class="modal-hint" id="sales-goals-hint"></p>
+                <div class="modal-actions">
+                    <button type="button" class="button-secondary" id="sales-goals-new">New goal</button>
+                    <button type="button" class="button-secondary" data-close-modal>Close</button>
+                    <button type="submit" class="button-primary" id="sales-goals-submit">Save goal</button>
                 </div>
             </footer>
         </form>
