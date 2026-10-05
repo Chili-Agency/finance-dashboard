@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 /*
- * Busca invoices (4 Xero), ads, custos de assinaturas (Xero banco) e vendas (HubSpot) no n8n e grava em data_snapshots (ver snapshots.php).
+ * Busca invoices (4 Xero), ads, custos de assinaturas (Xero banco), clientes e NPS (HubSpot) e vendas (HubSpot) no n8n e grava em data_snapshots (ver snapshots.php).
  *
  * Duas formas de chamar, sempre por POST:
  *   - agendamento do n8n: cabeçalho X-Refresh-Token igual ao FX_REFRESH_TOKEN do .env
@@ -10,7 +10,7 @@ declare(strict_types=1);
  *   - botão Refresh do dashboard: sessão logada + cabeçalho X-CSRF-Token.
  * Abrir a página ou dar F5 não chama este endpoint.
  *
- * ?sources=sales (ou uma lista separada por vírgula: invoices, ads, costs, sales) atualiza só essas fontes.
+ * ?sources=sales (ou uma lista separada por vírgula: invoices, ads, costs, clients, sales) atualiza só essas fontes.
  * Sem o parâmetro, atualiza todas. "invoices" vale pelas quatro entidades do Xero.
  */
 
@@ -58,11 +58,11 @@ $only = null;
 $requested = trim((string) ($_GET['sources'] ?? ''));
 if ($requested !== '') {
     $aliases = ['invoices' => ['invoices_br', 'invoices_int', 'invoices_pa', 'invoices_mx']];
-    $known = ['invoices_br', 'invoices_int', 'invoices_pa', 'invoices_mx', 'ads', 'costs', 'sales'];
+    $known = ['invoices_br', 'invoices_int', 'invoices_pa', 'invoices_mx', 'ads', 'costs', 'clients', 'sales'];
     $only = [];
     foreach (array_filter(array_map('trim', explode(',', strtolower($requested)))) as $name) {
         if (!isset($aliases[$name]) && !in_array($name, $known, true)) {
-            respond(400, ['ok' => false, 'error' => "Unknown source: {$name}. Use invoices, ads, costs or sales."]);
+            respond(400, ['ok' => false, 'error' => "Unknown source: {$name}. Use invoices, ads, costs, clients or sales."]);
         }
         array_push($only, ...($aliases[$name] ?? [$name]));
     }
@@ -80,7 +80,7 @@ try {
     respond(503, ['ok' => false, 'error' => $error->getMessage()]);
 }
 
-$labels = ['invoices_br' => 'Brazil', 'invoices_int' => 'International', 'invoices_pa' => 'Panama', 'invoices_mx' => 'Mexico', 'ads' => 'Ads', 'costs' => 'Subscription costs (Xero)', 'sales' => 'Sales (HubSpot)'];
+$labels = ['invoices_br' => 'Brazil', 'invoices_int' => 'International', 'invoices_pa' => 'Panama', 'invoices_mx' => 'Mexico', 'ads' => 'Ads', 'costs' => 'Subscription costs (Xero)', 'clients' => 'Clients and NPS (HubSpot)', 'sales' => 'Sales (HubSpot)'];
 $errors = [];
 foreach ($result['sources'] as $source) {
     if (!$source['ok']) {

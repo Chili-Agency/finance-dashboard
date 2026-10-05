@@ -1,4 +1,4 @@
-function renderAll() { renderInvoices(); renderLate(); renderMrr(); renderScorecard(); if (typeof renderSales === 'function') renderSales(); syncViewToUrl(); }
+function renderAll() { renderInvoices(); renderLate(); renderMrr(); renderScorecard(); if (typeof renderSales === 'function') renderSales(); if (typeof renderClientView === 'function') renderClientView(); syncViewToUrl(); }
 
 $('#period-select').addEventListener('change', (event) => { state.period = event.target.value; state.periodFromUrl = true; $('#date-range').hidden = state.period !== 'custom'; renderAll(); });
 $('#date-from').addEventListener('input', (event) => { state.customStart = event.target.value; });
@@ -39,7 +39,7 @@ async function refreshData() {
         problem = error.message;
     }
     state.sync.inFlight = false;
-    await Promise.all([loadInvoices(), typeof loadAds === 'function' ? loadAds() : null, typeof loadCosts === 'function' ? loadCosts() : null, typeof loadSales === 'function' ? loadSales() : null]);
+    await Promise.all([loadInvoices(), typeof loadAds === 'function' ? loadAds() : null, typeof loadCosts === 'function' ? loadCosts() : null, typeof loadClients === 'function' ? loadClients() : null, typeof loadSales === 'function' ? loadSales() : null]);
     if (problem) {
         const notice = $('#error-notice');
         notice.classList.remove('is-info');
@@ -81,3 +81,4 @@ loadUnitInputs();
 loadLateRules();
 loadAds();
 loadCosts();
+loadClients();

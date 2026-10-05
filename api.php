@@ -429,6 +429,37 @@ function applyMonthlyRates(array &$invoices, array &$sourceWarnings, string $app
     ];
 }
 
+/** "YYYY-MM-DD" de uma data do Xero (ISO ou /Date(ms)/), ou null. */
+function xeroDay(mixed $value): ?string
+{
+    $text = (string) $value;
+    if (preg_match('/^(\d{4}-\d{2}-\d{2})/', $text, $match) === 1) {
+        return $match[1];
+    }
+    if (preg_match('#^/Date\((-?\d+)#', $text, $match) === 1) {
+        return gmdate('Y-m-d', intdiv((int) $match[1], 1000));
+    }
+    return null;
+}
+
+/** Pagamentos já feitos na invoice (data e valor na moeda dela), do mais antigo ao mais recente. */
+function slimPayments(mixed $payments): array
+{
+    $rows = [];
+    foreach ((array) $payments as $payment) {
+        if (!is_array($payment)) {
+            continue;
+        }
+        $date = xeroDay($payment['DateString'] ?? $payment['Date'] ?? null);
+        if ($date === null) {
+            continue;
+        }
+        $rows[] = ['date' => $date, 'amount' => round((float) ($payment['Amount'] ?? 0), 2)];
+    }
+    usort($rows, static fn (array $a, array $b): int => strcmp($a['date'], $b['date']));
+    return array_slice($rows, 0, 20);
+}
+
 function normalizeAccountName(string $name): string
 {
     $name = strtolower(str_replace(['&', '–', '—'], [' and ', '-', '-'], $name));
@@ -647,6 +678,8 @@ function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules
         'Total' => $invoice['Total'] ?? null,
         'AmountDue' => $invoice['AmountDue'] ?? null,
         'AmountPaid' => $invoice['AmountPaid'] ?? null,
+        'paidAt' => xeroDay($invoice['FullyPaidOnDate'] ?? null),
+        'payments' => slimPayments($invoice['Payments'] ?? []),
         'Contact' => [
             'ContactID' => $invoice['Contact']['ContactID'] ?? null,
             'Name' => $invoice['Contact']['Name'] ?? null,

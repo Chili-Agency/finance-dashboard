@@ -4,7 +4,7 @@ declare(strict_types=1);
 /*
  * Dados do n8n guardados no banco (tabela data_snapshots, ver sql/004_data_snapshots.sql).
  *
- * O dashboard não chama mais os webhooks ao abrir a página: api.php, ads.php e costs.php leem a última
+ * O dashboard não chama mais os webhooks ao abrir a página: api.php, ads.php, costs.php e clients.php leem a última
  * resposta gravada aqui. Quem busca de novo é o snapshot-refresh.php, chamado:
  *   - pelo workflow agendado do n8n (4x por mês, junto com a cotação do FX);
  *   - pelo botão Refresh do dashboard.
@@ -36,6 +36,7 @@ function snapshot_sources(array $config): array
     }
     $sources['ads'] = (string) ($config['n8n']['ads'] ?? '');
     $sources['costs'] = (string) ($config['n8n']['costs'] ?? '');
+    $sources['clients'] = (string) ($config['n8n']['clients'] ?? '');
     $sources['sales'] = (string) ($config['n8n']['sales'] ?? '');
     return array_filter($sources, static fn (string $url): bool => $url !== '');
 }
@@ -309,6 +310,18 @@ function snapshot_validate(string $name, string $body): ?string
         }
         return null;
     }
+    if ($name === 'clients') {
+        $data = snapshot_decode_clients($body);
+        if ($data === null) {
+            return 'n8n returned an unexpected response for the client data (HubSpot).';
+        }
+        // ok=false: alguma etapa do HubSpot falhou; não apaga a última resposta boa.
+        if (($data['ok'] ?? true) === false) {
+            $errors = array_filter(array_map('strval', (array) ($data['errors'] ?? [])));
+            return 'HubSpot clients: ' . ($errors !== [] ? implode(' · ', $errors) : 'the workflow reported a failure.');
+        }
+        return null;
+    }
     if ($name === 'sales') {
         $data = snapshot_decode_sales($body);
         if ($data === null) {
@@ -387,6 +400,16 @@ function snapshot_decode_costs(string $body): ?array
         $data = $data[0];
     }
     return is_array($data) && isset($data['rows']) && is_array($data['rows']) ? $data : null;
+}
+
+/** Resposta do webhook de clientes (HubSpot): objeto com companies e nps. */
+function snapshot_decode_clients(string $body): ?array
+{
+    $data = json_decode($body, true);
+    if (is_array($data) && isset($data[0]) && is_array($data[0]) && !isset($data['nps'])) {
+        $data = $data[0];
+    }
+    return is_array($data) && isset($data['nps'], $data['companies']) && is_array($data['nps']) && is_array($data['companies']) ? $data : null;
 }
 
 function snapshot_save(PDO $pdo, string $name, string $body, ?float $seconds, string $updatedBy): void
