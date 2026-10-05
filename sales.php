@@ -139,6 +139,7 @@ function salesDeals(array $items, array $config, array &$errors): array
             'shares' => serviceShares((string) ($deal['service'] ?? '')),
             'type' => $deal['type'] ?? null,
             '_value' => number(SALES_REVENUE_FIELD === 'mrr' ? ($deal['mrr'] ?? null) : ($deal['amount'] ?? null)),
+            '_mrr' => number($deal['mrr'] ?? null),
             '_home' => SALES_REVENUE_FIELD === 'amount' ? number($deal['amountHome'] ?? null) : null,
             '_currency' => strtoupper(trim((string) ($deal['currency'] ?? ''))) ?: 'USD',
         ];
@@ -169,7 +170,9 @@ function salesDeals(array $items, array $config, array &$errors): array
                 $missing++;
             }
         }
-        unset($row['_value'], $row['_home'], $row['_currency']);
+        // Receita mensal (Monthly recurring revenue do deal) em USD, para "new sales" e as metas por pessoa.
+        $row['mrrUsd'] = $row['_mrr'] !== null && $rate !== null ? round($row['_mrr'] / $rate['units'], 2) : null;
+        unset($row['_value'], $row['_home'], $row['_mrr'], $row['_currency']);
     }
     unset($row);
 

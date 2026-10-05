@@ -4,7 +4,7 @@ declare(strict_types=1);
 /*
  * Dados do n8n guardados no banco (tabela data_snapshots, ver sql/004_data_snapshots.sql).
  *
- * O dashboard não chama mais os webhooks ao abrir a página: api.php, ads.php, costs.php e clients.php leem a última
+ * O dashboard não chama mais os webhooks ao abrir a página: api.php, ads.php, costs.php, clients.php e sales-goals.php leem a última
  * resposta gravada aqui. Quem busca de novo é o snapshot-refresh.php, chamado:
  *   - pelo workflow agendado do n8n (4x por mês, junto com a cotação do FX);
  *   - pelo botão Refresh do dashboard.
@@ -37,6 +37,7 @@ function snapshot_sources(array $config): array
     $sources['ads'] = (string) ($config['n8n']['ads'] ?? '');
     $sources['costs'] = (string) ($config['n8n']['costs'] ?? '');
     $sources['clients'] = (string) ($config['n8n']['clients'] ?? '');
+    $sources['goals'] = (string) ($config['n8n']['goals'] ?? '');
     $sources['sales'] = (string) ($config['n8n']['sales'] ?? '');
     return array_filter($sources, static fn (string $url): bool => $url !== '');
 }
@@ -322,6 +323,18 @@ function snapshot_validate(string $name, string $body): ?string
         }
         return null;
     }
+    if ($name === 'goals') {
+        $data = snapshot_decode_goals($body);
+        if ($data === null) {
+            return 'n8n returned an unexpected response for the sales goals (HubSpot).';
+        }
+        // ok=false: a busca das metas falhou; não apaga a última resposta boa.
+        if (($data['ok'] ?? true) === false) {
+            $errors = array_filter(array_map('strval', (array) ($data['errors'] ?? [])));
+            return 'HubSpot goals: ' . ($errors !== [] ? implode(' · ', $errors) : 'the workflow reported a failure.');
+        }
+        return null;
+    }
     if ($name === 'sales') {
         $data = snapshot_decode_sales($body);
         if ($data === null) {
@@ -410,6 +423,16 @@ function snapshot_decode_clients(string $body): ?array
         $data = $data[0];
     }
     return is_array($data) && isset($data['nps'], $data['companies']) && is_array($data['nps']) && is_array($data['companies']) ? $data : null;
+}
+
+/** Resposta do webhook de metas de vendas (HubSpot): objeto com goals. */
+function snapshot_decode_goals(string $body): ?array
+{
+    $data = json_decode($body, true);
+    if (is_array($data) && isset($data[0]) && is_array($data[0]) && !isset($data['goals'])) {
+        $data = $data[0];
+    }
+    return is_array($data) && isset($data['goals']) && is_array($data['goals']) ? $data : null;
 }
 
 function snapshot_save(PDO $pdo, string $name, string $body, ?float $seconds, string $updatedBy): void

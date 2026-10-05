@@ -206,6 +206,7 @@ function asset(string $path): string
                                 <button class="category-tab" data-category="others" role="tab" title="SMM, Marketing and Web dev">Others</button>
                             </div>
                         </div>
+                        <label class="field"><span>Salesperson</span><select id="sales-owner-select"><option value="all">All salespeople</option></select></label>
                     </div>
                 </div>
 
@@ -216,6 +217,12 @@ function asset(string $path): string
                     <article class="metric-card sales-kpi summary-card" id="sales-target-card" data-state="empty"><span class="metric-label">To target</span><strong id="sales-target">—</strong><div class="summary-bar"><span id="sales-target-bar"></span></div><p id="sales-target-note">—</p></article>
                     <article class="metric-card sales-kpi summary-card" id="sales-quarter-card" data-state="empty"><span class="metric-label" id="sales-quarter-label">Quarter to date</span><strong id="sales-quarter">—</strong><div class="summary-bar"><span id="sales-quarter-bar"></span></div><p id="sales-quarter-note">—</p></article>
                 </div>
+
+                <article class="panel table-panel" id="sales-overview-panel">
+                    <div class="panel-header"><div><p class="eyebrow">Overview</p><h3>New sales against target, by salesperson</h3></div><span class="panel-meta" id="sales-overview-meta">Monthly revenue</span></div>
+                    <div class="table-scroll"><table class="entries-table"><thead><tr><th>Salesperson</th><th class="align-right">New sales</th><th class="align-right">New sales target</th><th class="align-right">Missing from target</th></tr></thead><tbody id="sales-overview-table"></tbody></table></div>
+                    <p class="manual-input-status" id="sales-overview-note" data-tone="muted"></p>
+                </article>
 
                 <article class="panel sales-funnel-panel">
                     <div class="panel-header"><div><p class="eyebrow">Funnel</p><h3>From lead to closed deal</h3></div><span class="panel-meta" id="sales-funnel-meta">Selected period</span></div>

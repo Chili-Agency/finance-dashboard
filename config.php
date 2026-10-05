@@ -83,6 +83,8 @@ return (static function (): array {
             'costs' => $env('N8N_WEBHOOK_COSTS', ''),
             // Opcional: workflow "Chili Finance - Clientes (HubSpot)" (NPS por empresa). Vazio desliga o NPS na página Client view.
             'clients' => $env('N8N_WEBHOOK_CLIENTS', ''),
+            // Opcional: workflow "Chili Finance - Metas de vendas (HubSpot)" (meta por vendedor). Vazio desliga as metas por pessoa na página Sales.
+            'goals' => $env('N8N_WEBHOOK_GOALS', ''),
             // Opcional: workflow "Chili Finance - Sales (HubSpot)". Vazio desliga a página Sales.
             'sales' => $env('N8N_WEBHOOK_SALES', ''),
         ],
