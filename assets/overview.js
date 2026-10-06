@@ -5,7 +5,7 @@ const SUMMARY_ROWS = [
     { key: 'actual', label: 'MRR actual', format: moneyOr },
     { key: 'target', label: 'MRR target', format: moneyOr },
     { key: 'attainment', label: 'Attainment', format: (value) => percentOr(value, 0), tone: 'ratio' },
-    { key: 'newSales', label: 'New sales', format: moneyOr, hint: 'Won deals of new business by monthly recurring revenue (HubSpot), in USD' },
+    { key: 'newSales', label: 'New sales', format: moneyOr, hint: 'First invoice of each new client in the month (Xero account "… - Sales"), without the onboarding fee, in USD' },
     { key: 'newSalesTarget', label: 'New sales target', format: moneyOr, hint: 'Sales target set in Sales > Set sales target (company target, or the sum of the salespeople)' },
     { key: 'newSalesMissing', label: 'Missing from target', format: (value) => percentOr(value, 0), tone: 'missing', hint: 'Share of the new sales target still to close (0% once reached)' },
     { key: 'retention', label: 'Retention', format: percentOr, tone: 'retention' },
@@ -25,6 +25,43 @@ function summaryYear() {
     return years.length ? Math.max(...years) : new Date().getFullYear();
 }
 
+// Vendas novas por mês, pelo Xero: valor da primeira invoice de cada cliente novo, sem onboarding fee.
+// Cliente novo = invoice com linhas na conta "<serviço> - Sales" (cliente que já existe fatura em "- Recurring").
+// Só a primeira invoice de venda de cada cliente conta; as seguintes (mesmo se ainda lançadas em "Sales") ficam de fora.
+// Sem nome de conta na invoice, vale o marcador "first month" do Reference. Segue o mercado e o serviço filtrados.
+function xeroNewSalesByMonth(monthKeys) {
+    const lines = linesInView();
+    const inView = (shares) => lines.reduce((total, line) => total + (Number(shares?.[line]) || 0), 0);
+    const salesOf = (invoice) => {
+        if (invoice.newSalesShares && Object.values(invoice.newSalesShares).some((value) => Number(value) > 0)) {
+            return { isSale: true, value: fullAmount(invoice) * inView(invoice.newSalesShares) };
+        }
+        // Sem plano de contas na invoice: o Reference "first month campaign" aponta a venda.
+        if (!invoice.hasAccountNames && invoice.flags && invoice.flags.firstMonth) {
+            return { isSale: true, value: fullAmount(invoice) * Math.max(0, inView(invoice.categoryShares) - inView(invoice.onboardingShares) - inView(invoice.breakFeeShares)) };
+        }
+        return { isSale: false, value: 0 };
+    };
+
+    const firstSale = new Map();
+    inScopeBillable().forEach((invoice) => {
+        const date = invoiceDate(invoice);
+        if (!date || !salesOf(invoice).isSale) return;
+        const key = contactKey(invoice);
+        const known = firstSale.get(key);
+        if (!known || date < known.date) firstSale.set(key, { date, invoice });
+    });
+
+    const totals = new Map(monthKeys.map((key) => [key, 0]));
+    firstSale.forEach(({ date, invoice }) => {
+        const key = monthKey(date);
+        if (totals.has(key)) totals.set(key, totals.get(key) + salesOf(invoice).value);
+    });
+
+    const current = monthKey(startOfToday());
+    return monthKeys.map((key) => (key > current ? null : totals.get(key)));
+}
+
 function summaryData() {
     if (!state.monthlyRows) state.monthlyRows = buildMonthlyRows();
     const year = summaryYear();
@@ -34,8 +71,8 @@ function summaryData() {
         .find((row) => row.month === month && row.scope === state.scope && row.category === state.category) || null;
 
     const monthKeys = Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`);
-    // Vendas novas do HubSpot (Sales page); null enquanto os dados não chegam ou fora do período que o HubSpot cobre.
-    const newSalesByMonth = typeof overviewNewSales === 'function' ? overviewNewSales(monthKeys) : null;
+    // Vendas novas pelas invoices do Xero (conta "- Sales"); null em mês futuro.
+    const newSalesByMonth = state.invoices.length ? xeroNewSalesByMonth(monthKeys) : null;
     const months = monthKeys.map((month, monthIndex) => {
         const targets = pick('targets', month);
         const newSales = newSalesByMonth ? newSalesByMonth[monthIndex] : null;
@@ -195,13 +232,9 @@ function renderSummaryMatrix(data) {
             : `Manual figures come from Targets and Margin & COGS; the rest is calculated from invoices.`;
     note.dataset.tone = missing.length ? 'sample' : 'muted';
 
-    // As linhas de vendas novas vêm da página Sales (HubSpot + metas de vendas).
-    if (typeof overviewNewSales === 'function' && data.elapsed.length > 0) {
-        const hubspot = state.sales && state.sales.status;
-        if (hubspot === 'off') note.textContent += ' New sales needs the HubSpot connection (see Sales).';
-        else if (hubspot === 'error' && !state.sales.data) note.textContent += ' New sales could not be loaded from HubSpot.';
-        else if (hubspot === 'loading' && !state.sales.data) note.textContent += ' New sales is loading from HubSpot…';
-        else if (!data.months.some((entry) => hasValue(entry.newSalesTarget))) note.textContent += ' New sales target: set it in Sales > Set sales target.';
+    // New sales vem do Xero (conta "- Sales"); a meta vem de Sales > Set sales target.
+    if (typeof overviewSalesTarget === 'function' && data.elapsed.length > 0 && !data.months.some((entry) => hasValue(entry.newSalesTarget))) {
+        note.textContent += ' New sales target: set it in Sales > Set sales target.';
     }
 }
 

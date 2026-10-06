@@ -33,6 +33,11 @@ const COGS_BILL_STATUSES = ['AUTHORISED', 'PAID'];
 // O mesmo vale para a break fee: o Reference só diz que a fatura tem uma multa, não qual linha.
 const LINE_ONLY_MARKERS = ['onboarding', 'breakFee'];
 
+// Linhas de cliente novo: no Xero a conta é "<serviço> - Sales" (ex.: "SEO - Sales"); cliente que já existe usa
+// "<serviço> - Recurring". Só o nome da conta decide (o Reference, em geral "First month campaign", não entra aqui).
+const SALES_ACCOUNT_PATTERNS = ['/(?<!\\p{L})sales(?!\\p{L})/iu', '/(?<!\\p{L})vendas?(?!\\p{L})/iu'];
+const RECURRING_ACCOUNT_PATTERNS = ['/recurring/iu', '/recorrente/iu', '/recurrente/iu'];
+
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
@@ -613,6 +618,8 @@ function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules
                 ? $inLine
                 : $inLine || matchesAny($reference, $markerPatterns[$marker] ?? []);
         }
+        $accountName = (string) ($line['AccountName'] ?? '');
+        $lineFlags['sales'] = matchesAny($accountName, SALES_ACCOUNT_PATTERNS) && !matchesAny($accountName, RECURRING_ACCOUNT_PATTERNS);
         $class = classifyLine($line, $categoryRules, $otherServiceRules);
         $lineWeights[] = [
             'category' => $class['category'] ?? 'other',
@@ -640,6 +647,12 @@ function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules
             ? $categoryShares
             : categoryShares($lineWeights, $categoryKeys, static fn (array $line): bool => !empty($line['flags'][$marker]));
     }
+    // Venda nova: linhas na conta "- Sales", sem onboarding fee nem break fee.
+    $newSalesShares = categoryShares(
+        $lineWeights,
+        $categoryKeys,
+        static fn (array $line): bool => !empty($line['flags']['sales']) && empty($line['flags']['onboarding']) && empty($line['flags']['breakFee'])
+    );
     $categories = [];
     foreach (array_merge(array_keys($categoryRules), ['others']) as $category) {
         if (($categoryShares[$category] ?? 0) > 0) {
@@ -696,6 +709,8 @@ function slimInvoice(array $invoice, array $markerPatterns, array $categoryRules
         // Fatia de cada linha de serviço que é onboarding fee (mesma base de categoryShares).
         'onboardingShares' => $markerShares['onboarding'] ?? null,
         'breakFeeShares' => $markerShares['breakFee'] ?? null,
+        // Fatia de cada linha de serviço que é venda nova (conta "- Sales"), sem onboarding fee (mesma base de categoryShares).
+        'newSalesShares' => $newSalesShares,
         'otherServices' => $otherServices,
         'otherServiceShares' => $otherServiceShares,
         'hasAccountNames' => $hasAccountNames,
