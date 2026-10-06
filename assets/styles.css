@@ -518,3 +518,8 @@ body[data-manual-inputs="off"] [data-row-edit],
 body[data-manual-inputs="off"] [data-unit-edit],
 body[data-sales-targets="off"] [data-permission="sales_targets"]{display:none!important}
 .user-meta .user-role{color:#c7a85f;white-space:normal;line-height:1.35} /* quebra depois do "·" em vez de cortar com reticências */
+.metric-card .metric-link{display:inline-block;margin-top:10px;padding:0;border:0;background:none;font:600 10px Manrope;color:var(--ink);text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+.metric-card .metric-link:hover{color:var(--red-deep)}
+.paid-split{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:5px}
+.paid-split li{display:flex;justify-content:space-between;gap:12px;font-size:11px;border-top:1px solid var(--line);padding-top:5px}
+.paid-split li span{color:var(--muted);font:500 9px 'DM Mono',monospace;text-transform:uppercase;letter-spacing:.08em}
