@@ -11,7 +11,7 @@ const CLIENT_NAME_NOISE = new Set([
 ]);
 
 state.clients = { status: 'loading', data: null, errors: [], warnings: [], fetchedAt: null };
-state.clientView = { selected: null, listCache: null, indexCache: null, optionsFor: null, labels: new Map() };
+state.clientView = { paidOpen: false, selected: null, listCache: null, indexCache: null, optionsFor: null, labels: new Map() };
 
 async function loadClients() {
     state.clients = { ...state.clients, status: 'loading' };
@@ -113,6 +113,31 @@ function outstandingOf(invoice) {
     return Number(invoice.AmountDue || 0) * Number(invoice.usdRate || 1);
 }
 
+const CLIENT_SERVICES = ['seo', 'ppc', 'others'];
+
+/** Fatia de cada serviço (SEO, PPC, Others) numa invoice; linha sem classificação conta como Others. Soma 1. */
+function clientServiceShares(invoice) {
+    const shares = invoice.categoryShares || {};
+    const value = {
+        seo: Math.max(0, Number(shares.seo) || 0),
+        ppc: Math.max(0, Number(shares.ppc) || 0),
+        others: Math.max(0, (Number(shares.others) || 0) + (Number(shares.other) || 0)),
+    };
+    const total = value.seo + value.ppc + value.others;
+    if (total <= 0) return { seo: 0, ppc: 0, others: 1 };
+    return { seo: value.seo / total, ppc: value.ppc / total, others: value.others / total };
+}
+
+function clientServiceCell(row) {
+    const parts = CLIENT_SERVICES.filter((key) => row.services[key] > 0.0001);
+    const pills = parts.map((key) => {
+        const label = key === 'others' && row.otherNames.length ? row.otherNames.join(' + ') : categoryLabels[key];
+        const part = parts.length > 1 ? ` <small>${Math.round(row.services[key] * 100)}%</small>` : '';
+        return `<span class="service-pill">${escapeHtml(label)}${part}</span>`;
+    });
+    return pills.length ? pills.join('') : DASH;
+}
+
 function clientPaymentRow(invoice, today) {
     const bucket = invoiceBucket(invoice);
     const due = dueDate(invoice);
@@ -134,6 +159,8 @@ function clientPaymentRow(invoice, today) {
         days,
         total: fullAmount(invoice),
         outstanding: bucket === 'paid' ? 0 : outstandingOf(invoice),
+        services: clientServiceShares(invoice),
+        otherNames: otherServicesOf(invoice).map((key) => otherServiceLabels[key]),
     };
 }
 
@@ -142,6 +169,12 @@ function clientDetail(client) {
     const rows = client.invoices.map((invoice) => clientPaymentRow(invoice, today)).sort((a, b) => (b.issued || 0) - (a.issued || 0));
     const billed = clientSum(rows.map((row) => row.total));
     const outstanding = clientSum(rows.map((row) => row.outstanding));
+    // Valor já pago (faturado menos em aberto) repartido entre os serviços de cada invoice.
+    const paidByService = { seo: 0, ppc: 0, others: 0 };
+    rows.forEach((row) => {
+        const paid = row.total - row.outstanding;
+        CLIENT_SERVICES.forEach((key) => { paidByService[key] += paid * row.services[key]; });
+    });
     const late = rows.filter((row) => row.bucket === 'late');
     const settled = rows.filter((row) => row.bucket === 'paid' && row.paidOn && row.due);
 
@@ -162,6 +195,7 @@ function clientDetail(client) {
         billed,
         outstanding,
         paid: billed - outstanding,
+        paidByService,
         overdue: clientSum(late.map((row) => row.outstanding)),
         lateCount: late.length,
         averageDelay: settled.length ? clientSum(settled.map((row) => row.days)) / settled.length : null,
@@ -194,7 +228,9 @@ function clientDetailHtml(client, detail) {
     const onboardingFirst = detail.onboarding[0] || null;
 
     const cards = `<div class="metric-grid">
-        <article class="metric-card"><div class="metric-heading"><span class="metric-label">Billed</span><span class="metric-badge">01</span></div><strong>${money(detail.billed)}</strong><p><span>${money(detail.paid)}</span> <span class="metric-muted">paid · ${plural(detail.rows.length, 'invoice')}</span></p></article>
+        <article class="metric-card"><div class="metric-heading"><span class="metric-label">Billed</span><span class="metric-badge">01</span></div><strong>${money(detail.billed)}</strong><p><span>${money(detail.paid)}</span> <span class="metric-muted">paid · ${plural(detail.rows.length, 'invoice')}</span></p>
+            <button type="button" class="link-button metric-link" data-paid-toggle aria-expanded="${state.clientView.paidOpen}">${state.clientView.paidOpen ? 'Hide paid by service' : 'Paid by service'}</button>
+            ${state.clientView.paidOpen ? `<ul class="paid-split">${CLIENT_SERVICES.map((key) => `<li><span>${categoryLabels[key]}</span><b class="mono">${money(detail.paidByService[key])}</b></li>`).join('')}</ul>` : ''}</article>
         <article class="metric-card"><div class="metric-heading"><span class="metric-label">Outstanding</span><span class="metric-badge">02</span></div><strong>${money(detail.outstanding)}</strong><p><span>${money(detail.overdue)}</span> <span class="metric-muted">overdue${detail.lateCount ? ` · ${plural(detail.lateCount, 'invoice')}` : ''}</span></p></article>
         <article class="metric-card"><div class="metric-heading"><span class="metric-label">Latest NPS</span><span class="metric-badge">03</span></div><strong>${latest ? number(latest.score) : DASH}</strong><p><span>${escapeHtml(category.label)}</span> <span class="metric-muted">${latest ? `${escapeHtml(latest.at || '')}${hasValue(delta) ? ` · ${delta > 0 ? '+' : ''}${delta} vs previous` : ''}` : detail.match ? 'no scored response yet' : 'not linked to HubSpot'}</span></p></article>
         <article class="metric-card"><div class="metric-heading"><span class="metric-label">Onboarding</span><span class="metric-badge">04</span></div><strong>${detail.onboardingDate ? shortDate(detail.onboardingDate) : DASH}</strong><p><span>${onboardingFirst ? `${money(onboardingFirst.fee)} fee` : 'no onboarding fee found'}</span> <span class="metric-muted">${onboardingFirst ? escapeHtml(onboardingFirst.number) : `client since ${client.first ? shortDate(client.first) : DASH}`}</span></p></article>
@@ -206,8 +242,8 @@ function clientDetailHtml(client, detail) {
     </article>`;
 
     const payments = `<article class="panel table-panel"><div class="panel-header"><div><p class="eyebrow">Xero</p><h3>Payments</h3></div><span class="panel-meta">${plural(detail.rows.length, 'invoice')}</span></div>
-        <div class="table-scroll"><table class="entries-table"><thead><tr><th>Invoice</th><th>Market</th><th>Issued</th><th>Due</th><th>Paid on</th><th class="align-right">Timing</th><th class="align-right">Amount</th><th class="align-right">Outstanding</th><th>Status</th></tr></thead><tbody>${detail.rows.map((row) => `<tr>
-            <td>${escapeHtml(row.number)}</td><td>${escapeHtml(companyLabels[row.market] || DASH)}</td><td>${row.issued ? shortDate(row.issued) : DASH}</td><td>${row.due ? shortDate(row.due) : DASH}</td><td>${row.paidOn ? shortDate(row.paidOn) : DASH}</td>
+        <div class="table-scroll"><table class="entries-table"><thead><tr><th>Invoice</th><th>Market</th><th>Service</th><th>Issued</th><th>Due</th><th>Paid on</th><th class="align-right">Timing</th><th class="align-right">Amount</th><th class="align-right">Outstanding</th><th>Status</th></tr></thead><tbody>${detail.rows.map((row) => `<tr>
+            <td>${escapeHtml(row.number)}</td><td>${escapeHtml(companyLabels[row.market] || DASH)}</td><td class="client-service">${clientServiceCell(row)}</td><td>${row.issued ? shortDate(row.issued) : DASH}</td><td>${row.due ? shortDate(row.due) : DASH}</td><td>${row.paidOn ? shortDate(row.paidOn) : DASH}</td>
             <td class="align-right mono">${escapeHtml(clientDelay(row))}</td><td class="align-right mono">${money(row.total)}</td><td class="align-right mono">${row.outstanding > 0.005 ? money(row.outstanding) : DASH}</td>
             <td><span class="status-pill ${row.bucket}">${row.bucket === 'paid' ? 'Paid' : row.bucket === 'late' ? 'Late' : 'Open'}</span></td></tr>`).join('')}</tbody></table></div>
         <p class="manual-input-status" data-tone="muted">Amounts are issued values in USD, excluding tax. Invoices load from January 2025 on.</p></article>`;
@@ -303,4 +339,13 @@ const clientSearch = $('#client-search');
 if (clientSearch) {
     clientSearch.addEventListener('input', () => selectClientFromInput(clientSearch.value));
     clientSearch.addEventListener('change', () => selectClientFromInput(clientSearch.value));
+}
+
+const clientDetailNode = $('#client-detail');
+if (clientDetailNode) {
+    clientDetailNode.addEventListener('click', (event) => {
+        if (!event.target.closest('[data-paid-toggle]')) return;
+        state.clientView.paidOpen = !state.clientView.paidOpen;
+        renderClientView();
+    });
 }
