@@ -430,6 +430,14 @@ function setText(selector, value) { const node = $(selector); if (node) node.tex
 
 function contactKey(invoice) { return invoice.Contact?.ContactID || invoice.Contact?.Name || 'unknown-contact'; }
 
+// Chave do cliente na retenção. O ContactID do Xero é diferente em cada organização, então o mesmo cliente
+// que passa de um mercado para outro (ex.: DG para BR) virava um cliente perdido e outro novo. Aqui o nome
+// identifica o cliente entre mercados; sem nome, cai no ContactID.
+function retentionKey(invoice) {
+    const name = String(invoice.Contact?.Name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+    return name || contactKey(invoice);
+}
+
 function isBillable(invoice) { return isRevenue(invoice) && !EXCLUDED_STATUSES.includes(normalStatus(invoice)); }
 
 function inScopeBillable() { return state.invoices.filter((invoice) => isBillable(invoice) && (state.scope === 'all' || invoice.companyKey === state.scope)); }
@@ -485,6 +493,7 @@ function onboardingAmount(invoice) {
 function recurringAmount(invoice) { return mrrAmount(invoice) - onboardingAmount(invoice); }
 
 const SETUP_MONTHS = 3;
+const CHURN_MIN_USD = 0.5;
 const monthsApart = (from, to) => (to.getFullYear() - from.getFullYear()) * 12 + to.getMonth() - from.getMonth();
 
 function upsellAmount(invoice, line) {
@@ -495,7 +504,7 @@ function upsellAmount(invoice, line) {
 function totalsByContactLine(invoices) {
     const map = new Map();
     invoices.forEach((invoice) => {
-        const key = contactKey(invoice);
+        const key = retentionKey(invoice);
         if (!map.has(key)) map.set(key, new Map());
         const lines = map.get(key);
         linesInView().forEach((line) => {
@@ -552,7 +561,7 @@ function previousWindowOf(window) {
 function totalsByContact(invoices) {
     const map = new Map();
     invoices.forEach((invoice) => {
-        const key = contactKey(invoice);
+        const key = retentionKey(invoice);
         map.set(key, (map.get(key) || 0) + mrrAmount(invoice));
     });
     return map;
@@ -582,7 +591,7 @@ function metricContext(invoices) {
         const date = invoiceDate(invoice);
         if (!date) return;
         if (!datasetStart || date < datasetStart) datasetStart = date;
-        const key = contactKey(invoice);
+        const key = retentionKey(invoice);
         const known = firstSeen.get(key);
         if (!known || date < known) firstSeen.set(key, date);
         if (!billedMonths.has(key)) billedMonths.set(key, new Set());
@@ -600,6 +609,20 @@ function isInSetup(ctx, key, month) {
     if (monthKey(firstMonth) <= monthKey(ctx.datasetStart)) return false;
     const index = monthsApart(firstMonth, month);
     return index >= 1 && index <= SETUP_MONTHS;
+}
+
+// Cliente que paga toda semana: faturas em 3 ou mais semanas distintas do mês. Enquanto o mês em andamento
+// não fecha, ele só tem as semanas já faturadas, e comparar isso com o mês cheio vira um downgrade falso.
+function weeklyPayers(invoices) {
+    const weeks = new Map();
+    invoices.forEach((invoice) => {
+        const date = invoiceDate(invoice);
+        if (!date) return;
+        const key = retentionKey(invoice);
+        if (!weeks.has(key)) weeks.set(key, new Set());
+        weeks.get(key).add(Math.floor((date.getDate() - 1) / 7));
+    });
+    return new Set([...weeks].filter(([, set]) => set.size >= 3).map(([key]) => key));
 }
 
 function stoppedForGood(ctx, key, month) {
@@ -664,17 +687,17 @@ function measureWindow(ctx, windows, meta) {
         meta,
     );
     const currentByContact = totalsByContact(current);
-    const baseContacts = new Set(invoicesInWindow(ctx.everyLine, ctx.everyByMonth, windows.previous).map(contactKey));
+    const baseContacts = new Set(invoicesInWindow(ctx.everyLine, ctx.everyByMonth, windows.previous).map(retentionKey));
     const currentLines = totalsByContactLine(current);
     const previousLines = totalsByContactLine(previous);
     const historyAvailable = Boolean(ctx.datasetStart) && ctx.datasetStart < windows.current.start;
 
     const newContacts = new Set();
     current.forEach((invoice) => {
-        if (invoice.flags && invoice.flags.firstMonth) { newContacts.add(contactKey(invoice)); meta.markedFirstMonth += 1; }
+        if (invoice.flags && invoice.flags.firstMonth) { newContacts.add(retentionKey(invoice)); meta.markedFirstMonth += 1; }
         if (invoice.flags && invoice.flags.upsell) {
             meta.markedUpsell += 1;
-            if (!baseContacts.has(contactKey(invoice))) meta.upsellOutsideBase += 1;
+            if (!baseContacts.has(retentionKey(invoice))) meta.upsellOutsideBase += 1;
         }
     });
     if (historyAvailable) {
@@ -697,6 +720,9 @@ function measureWindow(ctx, windows, meta) {
     let setupChange = 0;
     const setupClients = new Set();
     const churnedClients = meta.collectClients ? [] : null;
+    const today = new Date();
+    const partialMonth = monthly && today >= windows.current.start && today <= windows.current.end;
+    const weekly = partialMonth ? weeklyPayers(previous) : new Set();
     baseContacts.forEach((key) => {
         const before = previousLines.get(key) || new Map();
         const after = currentLines.get(key) || new Map();
@@ -724,15 +750,20 @@ function measureWindow(ctx, windows, meta) {
             return;
         }
 
+        // Pagador semanal no mês em andamento: só conta como perdido depois de 2 semanas sem nenhuma fatura.
+        if (weekly.has(key) && !(lost && today.getDate() > 14)) return;
+
         const delta = afterTotal - beforeTotal;
         const up = Math.max(delta, 0, tagged);
-        const clientChurn = up - delta;
+        // Resíduo de câmbio/arredondamento (frações de centavo) não é churn: abaixo de US$ 0,50 o valor exibido seria $0.
+        const rawChurn = up - delta;
+        const clientChurn = rawChurn >= CHURN_MIN_USD ? rawChurn : 0;
         expansion += up;
         churned += clientChurn;
         if (tagged > 0) meta.taggedUpsell += tagged;
         meta.crossSells += newLines;
         if (lost) meta.lostClients += 1;
-        if (churnedClients && clientChurn > 0.005) {
+        if (churnedClients && clientChurn > 0) {
             const lines = droppedLines.length ? droppedLines : linesInView().filter((line) => (before.get(line)?.value || 0) > 0);
             churnedClients.push({ key, month: monthKey(month), before: beforeTotal, after: afterTotal, churned: clientChurn, lines, lost });
         }
@@ -962,7 +993,7 @@ function describeChurnedClients(list, ctx, windows) {
     const wanted = new Set(list.map((item) => item.key));
     const info = new Map();
     ctx.invoices.forEach((invoice) => {
-        const key = contactKey(invoice);
+        const key = retentionKey(invoice);
         if (!wanted.has(key)) return;
         const date = invoiceDate(invoice);
         if (!date || date > windows.current.end) return;
