@@ -236,6 +236,14 @@ function asset(string $path): string
                     <article class="panel"><div class="panel-header"><div><p class="eyebrow">Revenue</p><h3>By salesperson</h3></div><span class="panel-meta">Deal owner</span></div><div class="sales-bars" id="sales-by-owner"></div></article>
                 </div>
 
+                <article class="panel sales-atv-panel">
+                    <div class="panel-header"><div><p class="eyebrow">Deal size</p><h3>Average transaction value per period</h3></div><span class="panel-meta" id="sales-atv-meta" title="Average TCV of won deals: total contract value divided by the number of won deals">Won deals</span></div>
+                    <div class="sales-atv">
+                        <div class="sales-atv-summary"><strong id="sales-atv">—</strong><p id="sales-atv-note">—</p></div>
+                        <div class="sales-chart-wrap"><canvas id="sales-atv-chart"></canvas><div class="chart-empty is-hidden" id="sales-atv-empty">No won deals in these months</div></div>
+                    </div>
+                </article>
+
                 <div class="split-grid">
                     <article class="panel"><div class="panel-header"><div><p class="eyebrow">Plan</p><h3>Revenue against target</h3></div><span class="panel-meta">Last 6 months</span></div><div class="sales-chart-wrap"><canvas id="sales-trend-chart"></canvas><div class="chart-empty is-hidden" id="sales-trend-empty">No won deals in these months</div></div></article>
                     <article class="panel"><div class="panel-header"><div><p class="eyebrow">Marketing</p><h3>Ad spend by month</h3></div><span class="panel-meta">Google + Meta</span></div><div class="sales-chart-wrap"><canvas id="sales-spend-chart"></canvas><div class="chart-empty is-hidden" id="sales-spend-empty">No ad spend in these months</div></div></article>

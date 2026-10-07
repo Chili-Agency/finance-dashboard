@@ -215,6 +215,37 @@ function revenueByMonth(months) {
     return months.map((key) => totals.get(key));
 }
 
+/** Ticket médio (TCV por deal ganho) por mês; null quando não houve deal ganho. */
+function averageDealByMonth(months) {
+    const wanted = new Set(months);
+    const totals = new Map(months.map((key) => [key, { sum: 0, count: 0 }]));
+    state.sales.data.deals.forEach((deal) => {
+        if (deal.outcome !== 'won' || !deal.closedAt || !salesInScope(deal.market) || !salesOwnerMatch(deal.owner) || dealShare(deal) <= 0) return;
+        const key = deal.closedAt.slice(0, 7);
+        if (!wanted.has(key)) return;
+        const entry = totals.get(key);
+        entry.sum += dealValue(deal);
+        entry.count += 1;
+    });
+    return months.map((key) => { const { sum, count } = totals.get(key); return count ? sum / count : null; });
+}
+
+function renderSalesAverageDeal(window, current) {
+    const average = current.won.length ? current.revenue / current.won.length : null;
+    setText('#sales-atv', hasValue(average) ? money(average) : DASH);
+    let note = current.won.length ? `${money(current.revenue)} over ${plural(current.won.length, 'won deal')}` : 'No won deals in this period';
+    if (window.bounded && hasValue(average)) {
+        const previousWindow = previousWindowOf({ start: window.start, end: window.end });
+        const previous = salesMeasure({ ...previousWindow, from: salesDay(previousWindow.start), to: salesDay(previousWindow.end) });
+        if (previous.won.length && previous.revenue > 0) {
+            const before = previous.revenue / previous.won.length;
+            const change = (average - before) / before;
+            note += ` · ${change >= 0 ? '+' : ''}${(change * 100).toFixed(1)}% vs ${money(before)} in ${previousWindow.label}`;
+        }
+    }
+    setText('#sales-atv-note', note);
+}
+
 // ---------- Metas ----------
 
 function exactSalesTarget(month, scope, category, owner = 'all') {
@@ -491,6 +522,17 @@ function renderSalesCharts(window) {
     trendEmpty.textContent = 'No won deals or targets in these months';
     trendEmpty.classList.toggle('is-hidden', revenue.some((value) => value > 0) || targets.some(hasValue));
 
+    const averages = averageDealByMonth(months);
+    if (state.salesCharts.atv) state.salesCharts.atv.destroy();
+    state.salesCharts.atv = new Chart($('#sales-atv-chart'), {
+        type: 'bar',
+        data: { labels, datasets: [{ label: 'Average transaction value', data: averages, backgroundColor: averages.map((_, index) => (index === averages.length - 1 ? '#57745d' : '#b9c8bc')), borderRadius: 2, barPercentage: .62 }] },
+        options: { ...salesChartOptions(money), plugins: { ...salesChartOptions(money).plugins, legend: { display: false } } },
+    });
+    const atvEmpty = $('#sales-atv-empty');
+    atvEmpty.textContent = 'No won deals in these months';
+    atvEmpty.classList.toggle('is-hidden', averages.some(hasValue));
+
     const spend = spendByMonth(months);
     if (state.salesCharts.spend) state.salesCharts.spend.destroy();
     state.salesCharts.spend = new Chart($('#sales-spend-chart'), {
@@ -547,12 +589,14 @@ function clearSalesPage() {
     $('#sales-channels-total').innerHTML = '';
     const wonLink = $('#open-sales-won-modal');
     if (wonLink) wonLink.hidden = true;
-    ['#sales-close-rate', '#sales-cycle', '#sales-lead-mql', '#sales-velocity', '#sales-spend-total'].forEach((selector) => setText(selector, DASH));
-    ['#sales-close-rate-note', '#sales-cycle-note', '#sales-lead-mql-note', '#sales-velocity-note'].forEach((selector) => setText(selector, ''));
+    ['#sales-close-rate', '#sales-cycle', '#sales-lead-mql', '#sales-velocity', '#sales-spend-total', '#sales-atv'].forEach((selector) => setText(selector, DASH));
+    ['#sales-close-rate-note', '#sales-cycle-note', '#sales-lead-mql-note', '#sales-velocity-note', '#sales-atv-note'].forEach((selector) => setText(selector, ''));
     Object.values(state.salesCharts).forEach((chart) => chart.destroy());
     state.salesCharts = {};
     $('#sales-trend-empty').textContent = waiting;
     $('#sales-spend-empty').textContent = waiting;
+    $('#sales-atv-empty').textContent = waiting;
+    $('#sales-atv-empty').classList.remove('is-hidden');
     $('#sales-trend-empty').classList.remove('is-hidden');
     $('#sales-spend-empty').classList.remove('is-hidden');
 }
@@ -571,6 +615,7 @@ function renderSales() {
     renderSalesChannels(window, current);
     renderSalesActivity(window);
     renderSalesStats(window, current);
+    renderSalesAverageDeal(window, current);
     renderSalesCharts(window);
     const wonModal = $('#sales-won-modal');
     if (wonModal && wonModal.open) renderSalesWonModal();
