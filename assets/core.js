@@ -714,7 +714,9 @@ function measureWindow(ctx, windows, meta) {
     const onboardingInBase = previous.reduce((sum, invoice) => sum + onboardingAmount(invoice), 0);
     const month = windows.current.start;
     const monthly = isCalendarMonth(windows.current.start, windows.current.end);
-    let churned = 0;
+    let churnedLost = 0;
+    let churnedDowngrade = 0;
+    let churnedServiceChange = 0;
     let expansion = 0;
     let onboardingChange = 0;
     let setupChange = 0;
@@ -731,11 +733,17 @@ function measureWindow(ctx, windows, meta) {
         let tagged = 0;
         let newLines = 0;
         const droppedLines = [];
+        const removedLines = [];
+        const linesBefore = [];
+        const linesAfter = [];
         linesInView().forEach((line) => {
             const previousValue = before.get(line)?.value || 0;
             const currentValue = after.get(line)?.value || 0;
             tagged += Math.min(after.get(line)?.tagged || 0, Math.max(currentValue, 0));
             if (currentValue < previousValue - 0.005) droppedLines.push(line);
+            if (previousValue > 0.005 && currentValue <= 0.005) removedLines.push(line);
+            if (previousValue > 0.005) linesBefore.push(line);
+            if (currentValue > 0.005) linesAfter.push(line);
             if (line !== 'other' && previousValue <= 0 && currentValue > 0) newLines += 1;
             onboardingChange += (after.get(line)?.onboarding || 0) - (before.get(line)?.onboarding || 0);
             beforeTotal += previousValue;
@@ -758,14 +766,17 @@ function measureWindow(ctx, windows, meta) {
         // Resíduo de câmbio/arredondamento (frações de centavo) não é churn: abaixo de US$ 0,50 o valor exibido seria $0.
         const rawChurn = up - delta;
         const clientChurn = rawChurn >= CHURN_MIN_USD ? rawChurn : 0;
+        const kind = lost ? 'lost' : removedLines.length ? 'serviceChange' : 'downgrade';
         expansion += up;
-        churned += clientChurn;
+        if (kind === 'lost') churnedLost += clientChurn;
+        else if (kind === 'serviceChange') churnedServiceChange += clientChurn;
+        else churnedDowngrade += clientChurn;
         if (tagged > 0) meta.taggedUpsell += tagged;
         meta.crossSells += newLines;
         if (lost) meta.lostClients += 1;
         if (churnedClients && clientChurn > 0) {
             const lines = droppedLines.length ? droppedLines : linesInView().filter((line) => (before.get(line)?.value || 0) > 0);
-            churnedClients.push({ key, month: monthKey(month), before: beforeTotal, after: afterTotal, churned: clientChurn, lines, lost });
+            churnedClients.push({ key, month: monthKey(month), before: beforeTotal, after: afterTotal, churned: clientChurn, lines, lost, kind, linesBefore, linesAfter });
         }
     });
     if (churnedClients) meta.churnedClients = describeChurnedClients(churnedClients, ctx, windows);
@@ -783,10 +794,15 @@ function measureWindow(ctx, windows, meta) {
     meta.invoiceCount = current.length;
     meta.reactivated = reactivated;
 
+    const churned = churnedLost + churnedDowngrade + churnedServiceChange;
+
     return {
         hasBase: baseContacts.size > 0,
         initial,
         churned,
+        churnedLost,
+        churnedDowngrade,
+        churnedServiceChange,
         expansion,
         retained: initial - churned,
         onboardingInBase,
@@ -812,7 +828,7 @@ function retentionOverWindow(ctx, window) {
     const baseWindow = monthWindow(new Date(firstMonth.getFullYear(), firstMonth.getMonth() - 1, 1));
     const endWindow = monthWindow(monthFromKey(months[months.length - 1]));
 
-    const totals = { hasBase: false, initial: null, onboardingInBase: 0, churned: 0, expansion: 0, taggedUpsell: 0, crossSells: 0, upsellOutsideBase: 0, fxRestated: false };
+    const totals = { hasBase: false, initial: null, onboardingInBase: 0, churned: 0, churnedLost: 0, churnedDowngrade: 0, churnedServiceChange: 0, expansion: 0, taggedUpsell: 0, crossSells: 0, upsellOutsideBase: 0, fxRestated: false };
     const monthly = [];
     const events = [];
     const setupMonths = [];
@@ -823,13 +839,16 @@ function retentionOverWindow(ctx, window) {
         const m = measureWindow(ctx, { current, previous, beforePrevious: previousWindowOf(previous) }, meta);
         if (index === 0) { totals.hasBase = m.hasBase; totals.initial = m.initial; totals.onboardingInBase = m.onboardingInBase; }
         totals.churned += m.churned;
+        totals.churnedLost += m.churnedLost;
+        totals.churnedDowngrade += m.churnedDowngrade;
+        totals.churnedServiceChange += m.churnedServiceChange;
         totals.expansion += m.expansion;
         totals.taggedUpsell += meta.taggedUpsell;
         totals.crossSells += meta.crossSells;
         totals.upsellOutsideBase += meta.upsellOutsideBase;
         if (meta.fxRestated) totals.fxRestated = true;
         if (m.hasBase && m.initial > 0) {
-            monthly.push({ key, label: current.label, initial: m.initial, churned: m.churned, expansion: m.expansion, retained: m.retained, rate: share(m.retained, m.initial) });
+            monthly.push({ key, label: current.label, initial: m.initial, churned: m.churned, churnedLost: m.churnedLost, churnedContraction: m.churnedDowngrade + m.churnedServiceChange, expansion: m.expansion, retained: m.retained, rate: share(m.retained, m.initial) });
         }
         (meta.churnedClients || []).forEach((item) => events.push({ ...item, month: key }));
         setupMonths.push({ clients: meta.setupClients, change: m.setupChange });
@@ -850,6 +869,8 @@ function retentionOverWindow(ctx, window) {
         retained: hasValue(totals.initial) ? totals.initial - totals.churned : null,
         rate,
         churnRate: pooledInitial > 0 ? pooled('churned') / pooledInitial : null,
+        lostRate: pooledInitial > 0 ? pooled('churnedLost') / pooledInitial : null,
+        contractionRate: pooledInitial > 0 ? pooled('churnedContraction') / pooledInitial : null,
         expansionRate: pooledInitial > 0 ? pooled('expansion') / pooledInitial : null,
         netRate: pooledInitial > 0 ? (pooled('retained') + pooled('expansion')) / pooledInitial : null,
         monthly,
@@ -862,6 +883,15 @@ function retentionOverWindow(ctx, window) {
     };
 }
 
+function contractionOf(row) {
+    return (Number(row.downgrade) || 0) + (Number(row.serviceChange) || 0);
+}
+
+function churnTotalOf(row) {
+    if (!row || !hasValue(row.lost)) return null;
+    return Number(row.lost) + contractionOf(row);
+}
+
 function emptyScorecardMeta() {
     return { invoiceCount: 0, markedFirstMonth: 0, markedUpsell: 0, taggedUpsell: 0, crossSells: 0, upsellOutsideBase: 0, reactivated: null, newClients: 0, lostClients: 0, detection: 'none' };
 }
@@ -869,7 +899,7 @@ function emptyScorecardMeta() {
 function buildScorecard() {
     const manual = USE_DEMO_TARGETS ? DEMO_MANUAL_INPUTS : MANUAL_INPUTS;
     const scorecard = {
-        retention: { initialPortfolio: null, churned: null, upsells: null, retained: null, rate: null, churnRate: null, expansionRate: null, netRate: null, target: manual.retentionTarget, activeClients: null },
+        retention: { initialPortfolio: null, churned: null, lost: null, downgrade: null, serviceChange: null, contraction: null, lostRate: null, contractionRate: null, upsells: null, retained: null, rate: null, churnRate: null, expansionRate: null, netRate: null, target: manual.retentionTarget, activeClients: null },
         newBusiness: { actual: null, target: manual.newBusinessTarget },
         totalMrr: { actual: null, target: manual.totalMrrTarget, accumulatedGap: manual.accumulatedGap, history: [] },
         cogs: { actual: manual.cogs, target: manual.cogsTarget },
@@ -917,10 +947,11 @@ function buildScorecard() {
     meta.previousLabel = retention.baseLabel;
     meta.retentionEndLabel = retention.endLabel;
     meta.retentionMonths = retention.months;
-    const hiddenDowngrades = meta.latestOnly ? retention.churnedClients.filter((item) => !item.lost) : [];
-    meta.churnedClients = meta.latestOnly ? retention.churnedClients.filter((item) => item.lost) : retention.churnedClients;
-    meta.hiddenDowngrades = hiddenDowngrades.length
-        ? { count: hiddenDowngrades.length, value: hiddenDowngrades.reduce((sum, item) => sum + item.churned, 0), month: retention.endLabel }
+    const contractionEvents = retention.churnedClients.filter((item) => !item.lost);
+    meta.churnedClients = retention.churnedClients.filter((item) => item.lost);
+    meta.contractionClients = meta.latestOnly ? [] : contractionEvents;
+    meta.hiddenDowngrades = meta.latestOnly && contractionEvents.length
+        ? { count: contractionEvents.length, value: contractionEvents.reduce((sum, item) => sum + item.churned, 0), month: retention.endLabel }
         : null;
     meta.lostClients = retention.lostClients;
     meta.retentionMonthly = retention.monthly;
@@ -932,6 +963,12 @@ function buildScorecard() {
     meta.upsellOutsideBase = retention.upsellOutsideBase;
     scorecard.retention.initialPortfolio = retention.hasBase ? retention.initial : null;
     scorecard.retention.churned = retention.hasBase ? retention.churned : null;
+    scorecard.retention.lost = retention.hasBase ? retention.churnedLost : null;
+    scorecard.retention.downgrade = retention.hasBase ? retention.churnedDowngrade : null;
+    scorecard.retention.serviceChange = retention.hasBase ? retention.churnedServiceChange : null;
+    scorecard.retention.contraction = retention.hasBase ? retention.churnedDowngrade + retention.churnedServiceChange : null;
+    scorecard.retention.lostRate = retention.hasBase ? retention.lostRate : null;
+    scorecard.retention.contractionRate = retention.hasBase ? retention.contractionRate : null;
     scorecard.retention.upsells = retention.hasBase ? retention.expansion : null;
     scorecard.retention.retained = retention.hasBase ? retention.retained : null;
     scorecard.retention.rate = retention.hasBase ? retention.rate : null;
@@ -1348,7 +1385,9 @@ function buildMonthlyRows() {
                 rows.retention.push({
                     ...base,
                     initial: m.hasBase ? m.initial : null,
-                    churned: m.hasBase ? m.churned : null,
+                    lost: m.hasBase ? m.churnedLost : null,
+                    downgrade: m.hasBase ? m.churnedDowngrade : null,
+                    serviceChange: m.hasBase ? m.churnedServiceChange : null,
                     upsells: m.hasBase ? m.expansion : null,
                     retained: m.hasBase ? m.retained : null,
                     final: m.recurringMrr,
@@ -1402,7 +1441,8 @@ const MONTHLY_TABLES = {
         emptyAll: 'No billable client invoices yet.',
         columns: [
             (row) => `<td class="align-right mono">${moneyOr(row.initial)}</td>`,
-            (row) => `<td class="align-right mono">${hasValue(row.churned) ? `<span class="${row.churned > 0 ? 'value-down' : ''}">${moneyOr(row.churned)}</span>` : DASH}</td>`,
+            (row) => `<td class="align-right mono">${hasValue(row.lost) ? `<span class="${row.lost > 0 ? 'value-down' : ''}">${moneyOr(row.lost)}</span>` : DASH}</td>`,
+            (row) => `<td class="align-right mono">${hasValue(row.downgrade) ? `<span class="${contractionOf(row) > 0 ? 'value-down' : ''}">${moneyOr(contractionOf(row))}</span>` : DASH}</td>`,
             (row) => `<td class="align-right mono">${moneyOr(row.retained)}</td>`,
             (row) => `<td class="align-right mono">${hasValue(row.rate) ? `<span class="${hasValue(row.target) ? (row.rate >= row.target ? 'value-up' : 'value-down') : ''}">${percentOr(row.rate)}</span>` : 'N/A'}</td>`,
             (row) => `<td class="align-right mono">${percentOr(row.target)}</td>`,

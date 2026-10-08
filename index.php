@@ -491,7 +491,7 @@ function asset(string $path): string
                     </div>
                 </div>
 
-                <div class="scorecard-grid">
+                <div class="scorecard-grid is-five">
                     <article class="stat-card">
                         <span class="stat-label">Initial portfolio value</span>
                         <strong id="ret-initial">—</strong>
@@ -503,6 +503,13 @@ function asset(string $path): string
                         <p class="stat-note"><span id="ret-churn-rate">—</span> <span id="ret-churn-rate-label">of the initial base</span> · <span id="ret-churn-note">—</span></p>
                         <p class="stat-scope" id="ret-churn-scope" hidden></p>
                         <button type="button" class="stat-link" id="open-churn-modal" aria-haspopup="dialog" aria-controls="churn-modal" hidden>See clients <span aria-hidden="true">→</span></button>
+                    </article>
+                    <article class="stat-card is-negative">
+                        <span class="stat-label">Downgrades &amp; service changes</span>
+                        <strong id="ret-contraction">—</strong>
+                        <p class="stat-note"><span id="ret-contraction-rate">—</span> <span id="ret-contraction-rate-label">of the initial base</span> · <span id="ret-contraction-note">—</span></p>
+                        <p class="stat-scope" id="ret-contraction-scope" hidden></p>
+                        <button type="button" class="stat-link" id="open-contraction-modal" aria-haspopup="dialog" aria-controls="churn-modal" hidden>See clients <span aria-hidden="true">→</span></button>
                     </article>
                     <article class="stat-card is-positive">
                         <span class="stat-label">Upsells &amp; cross-sells</span>
@@ -546,7 +553,7 @@ function asset(string $path): string
                     </div>
                     <div class="table-scroll monthly-scroll">
                         <table class="entries-table">
-                            <thead><tr><th>Month</th><th>Market</th><th>Service</th><th class="align-right" title="Final portfolio of the previous month, without onboarding fees">Initial base</th><th class="align-right">Churned</th><th class="align-right" title="Initial base minus churn">Retained</th><th class="align-right" title="(Initial base − churn) / initial base, against the previous month">Retention</th><th class="align-right">Target</th><th class="align-right">Upsells</th><th class="align-right" title="MRR of the month without onboarding fees; becomes next month's initial base">Final portfolio</th><th class="align-right">Clients lost</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
+                            <thead><tr><th>Month</th><th>Market</th><th>Service</th><th class="align-right" title="Final portfolio of the previous month, without onboarding fees">Initial base</th><th class="align-right" title="Clients that stopped billing entirely">Churned</th><th class="align-right" title="Downgrades and service changes: clients still billing, but less">Downgrades &amp; changes</th><th class="align-right" title="Initial base minus churn, downgrades and service changes">Retained</th><th class="align-right" title="(Initial base − churn) / initial base, against the previous month">Retention</th><th class="align-right">Target</th><th class="align-right">Upsells</th><th class="align-right" title="MRR of the month without onboarding fees; becomes next month's initial base">Final portfolio</th><th class="align-right">Clients lost</th><th><span class="visually-hidden">Actions</span></th></tr></thead>
                             <tbody id="retention-entries-table"></tbody>
                         </table>
                         <div class="table-empty is-hidden" id="retention-entries-empty"></div>
@@ -767,23 +774,23 @@ function asset(string $path): string
                             <th>Client</th>
                             <th>Market</th>
                             <th>Month</th>
-                            <th>Service lost</th>
+                            <th id="churn-col-lines">Service lost</th>
                             <th class="align-right" id="churn-col-previous">Previous</th>
                             <th class="align-right" id="churn-col-current">Current</th>
-                            <th class="align-right">Churned</th>
+                            <th class="align-right" id="churn-col-value">Churned</th>
                             <th>Status</th>
                         </tr>
                     </thead>
                     <tbody id="churn-table"></tbody>
                     <tfoot id="churn-table-total">
-                        <tr><td colspan="6">Total churned</td><td class="align-right mono"><span class="value-down" id="churn-total-value">—</span></td><td></td></tr>
+                        <tr><td colspan="6" id="churn-total-label">Total churned</td><td class="align-right mono"><span class="value-down" id="churn-total-value">—</span></td><td></td></tr>
                     </tfoot>
                 </table>
                 <div class="table-empty is-hidden" id="churn-table-empty">No client lost value in this period.</div>
             </div>
 
             <footer class="modal-footer">
-                <p class="modal-hint">Lost stopped billing entirely; Downgrade still bills, but less in at least one service line. Each drop is shown in the month it happened, by client total (moving value between service lines is not a drop). Onboarding fees and new clients’ first 4 months are not churn. Values in USD.</p>
+                <p class="modal-hint" id="churn-modal-hint">Lost means the client stopped billing entirely. Downgrades and service changes are listed in their own widget. Each drop is shown in the month it happened, by client total. Onboarding fees and new clients’ first 4 months are not churn. Values in USD.</p>
                 <div class="modal-actions">
                     <button type="button" class="button-secondary" data-close-modal>Close</button>
                 </div>

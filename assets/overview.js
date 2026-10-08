@@ -92,7 +92,7 @@ function summaryData() {
             newSalesMissing: hasValue(newSales) && hasValue(newSalesTarget) && Number(newSalesTarget) > 0 ? Math.max(0, 1 - Number(newSales) / Number(newSalesTarget)) : null,
             retention: retention ? retention.rate : null,
             retentionTarget: retention ? retention.target : manual.retentionTarget,
-            churned: retention ? retention.churned : null,
+            churned: churnTotalOf(retention),
             upsells: retention ? retention.upsells : null,
             initial: retention ? retention.initial : null,
             clients: mrr ? mrr.clients : null,
@@ -305,6 +305,11 @@ function summaryPeriod() {
         return values.length ? values.reduce((total, row) => total + Number(row[field]), 0) : null;
     };
 
+    const churnSum = () => {
+        const values = months.map((month) => churnTotalOf(summaryRow('retention', month))).filter(hasValue);
+        return values.length ? values.reduce((total, value) => total + value, 0) : null;
+    };
+
     const invoices = scopedInvoices();
     const bonusEntries = months.map((month) => marginEntryFor(month, invoices)).filter((entry) => entry && hasValue(entry.bonusPool));
 
@@ -316,7 +321,7 @@ function summaryPeriod() {
         newBusiness: hasValue(firstMonths) || hasValue(setup) ? (firstMonths || 0) + (setup || 0) : null,
         upsells: sumOf('retention', 'upsells'),
         reactivated: sumOf('retention', 'reactivated'),
-        churned: sumOf('retention', 'churned'),
+        churned: churnSum(),
         onboarding: sumOf('retention', 'onboardingChange'),
     };
     const explained = base

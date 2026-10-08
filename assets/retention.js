@@ -10,39 +10,48 @@ function renderRetentionSection() {
     const fxNote = meta.fxRestated ? ' · at current exchange rates' : '';
     const baseHint = `${meta.previousLabel ? `Final portfolio of ${meta.previousLabel}` : 'Final portfolio of the previous month'}${onboardingNote}${fxNote}`;
     const summed = !meta.latestOnly && meta.retentionMonths > 1;
-    const churnRate = hasValue(data.churnRate) ? data.churnRate : share(data.churned, data.initialPortfolio);
+    const lostRate = hasValue(data.lostRate) ? data.lostRate : share(data.lost, data.initialPortfolio);
+    const contractionRate = hasValue(data.contractionRate) ? data.contractionRate : share(data.contraction, data.initialPortfolio);
     const expansionRate = hasValue(data.expansionRate) ? data.expansionRate : share(data.upsells, data.initialPortfolio);
 
     setText('#ret-initial', moneyOr(data.initialPortfolio));
-    setText('#ret-churned', moneyOr(data.churned));
+    setText('#ret-churned', moneyOr(data.lost));
+    setText('#ret-contraction', moneyOr(data.contraction));
     setText('#ret-upsells', moneyOr(data.upsells));
     setText('#ret-clients', hasValue(data.activeClients) ? number(data.activeClients) : DASH);
-    setText('#ret-churn-rate', percentOr(churnRate));
+    setText('#ret-churn-rate', percentOr(lostRate));
     setText('#ret-churn-rate-label', summed ? 'of the base per month' : 'of the initial base');
+    setText('#ret-contraction-rate', percentOr(contractionRate));
+    setText('#ret-contraction-rate-label', summed ? 'of the base per month' : 'of the initial base');
     setText('#ret-expansion-rate', percentOr(expansionRate));
     setText('#ret-expansion-rate-label', summed ? 'expansion per month' : 'expansion');
     setText('#ret-initial-note', baseHint);
     setText('#ret-clients-note', meta.invoiceCount ? `${plural(meta.invoiceCount, 'invoice')} in the period` : 'No invoices in the period');
     setText('#ret-churn-note', meta.lostClients ? `${plural(meta.lostClients, 'client')} stopped billing` : 'No client stopped billing');
+    setText('#ret-contraction-note', contractionNote(data));
     setText('#ret-upsell-note', upsellNote(meta));
     const churnScope = $('#ret-churn-scope');
     if (churnScope) {
         churnScope.hidden = !meta.latestOnly && !summed;
         churnScope.textContent = meta.latestOnly
-            ? `Latest month only: ${meta.currentLabel} vs ${meta.previousLabel}${meta.hiddenDowngrades ? ` · downgrades listed when ${meta.hiddenDowngrades.month} is selected` : ''}`
+            ? `Latest month only: ${meta.currentLabel} vs ${meta.previousLabel}`
             : summed ? `Summed month by month, ${plural(meta.retentionMonths, 'month')} through ${meta.retentionEndLabel}` : '';
     }
-    const churnLink = $('#open-churn-modal');
-    if (churnLink) {
-        const count = hasValue(data.churned) && Array.isArray(meta.churnedClients) ? new Set(meta.churnedClients.map((item) => item.key)).size : 0;
-        churnLink.hidden = count === 0;
-        churnLink.firstChild.textContent = `See ${plural(count, 'client')} `;
+    const contractionScope = $('#ret-contraction-scope');
+    if (contractionScope) {
+        contractionScope.hidden = !meta.latestOnly && !summed;
+        contractionScope.textContent = meta.latestOnly
+            ? `Latest month only: ${meta.currentLabel} vs ${meta.previousLabel}${meta.hiddenDowngrades ? ` · clients listed when ${meta.hiddenDowngrades.month} is selected` : ''}`
+            : summed ? `Summed month by month, ${plural(meta.retentionMonths, 'month')} through ${meta.retentionEndLabel}` : '';
     }
+    updateChurnLink('#open-churn-modal', hasValue(data.lost), meta.churnedClients);
+    updateChurnLink('#open-contraction-modal', hasValue(data.contraction), meta.contractionClients);
 
     const rows = [
         { label: 'Initial portfolio value', hint: baseHint, value: data.initialPortfolio, tone: '', signed: false },
-        { label: 'Churned value', hint: 'Lost clients and downgrades', value: hasValue(data.churned) ? -Number(data.churned) : null, tone: 'is-negative', signed: true },
-        { label: 'Retained portfolio', hint: 'Initial portfolio minus churn', value: retained, tone: 'is-total', signed: false },
+        { label: 'Churned value', hint: 'Lost clients', value: hasValue(data.lost) ? -Number(data.lost) : null, tone: 'is-negative', signed: true },
+        { label: 'Downgrades & service changes', hint: 'Clients still billing, but less', value: hasValue(data.contraction) ? -Number(data.contraction) : null, tone: 'is-negative', signed: true },
+        { label: 'Retained portfolio', hint: 'Initial portfolio minus churn, downgrades and service changes', value: retained, tone: 'is-total', signed: false },
         { label: 'Upsells & cross-sells', hint: `${meta.taggedUpsell > 0 ? `${money(meta.taggedUpsell)} tagged in Xero · ` : ''}not counted in retention`, value: data.upsells, tone: 'is-positive', signed: true },
     ];
     const max = Math.max(...rows.map((row) => Math.abs(Number(row.value) || 0)), 1);
@@ -62,7 +71,7 @@ function renderRetentionSection() {
         ? 'Needs billing in the previous month to compare.'
         : summed && monthly.length > 1
             ? `Average of ${plural(monthly.length, 'month')}, each against the month before, weighted by its base: ${monthly.map((row) => `${row.label} ${percentOr(row.rate)}`).join(' · ')}. With upsells: ${percentOr(netRate)}.`
-            : `${moneyOr(retained)} kept of the ${moneyOr(data.initialPortfolio)} ${meta.previousLabel ? `${meta.previousLabel} ` : ''}portfolio after ${moneyOr(data.churned)} churned. With upsells: ${percentOr(netRate)}.`;
+            : `${moneyOr(retained)} kept of the ${moneyOr(data.initialPortfolio)} ${meta.previousLabel ? `${meta.previousLabel} ` : ''}portfolio after ${moneyOr(data.churned)} lost to churn, downgrades and service changes. With upsells: ${percentOr(netRate)}.`;
     $('#retention-target').innerHTML = targetBlock({
         caption: summed ? 'Retention (existing), monthly avg.' : 'Retention (existing)',
         value: retentionRate,
@@ -71,6 +80,25 @@ function renderRetentionSection() {
         naLabel: 'N/A',
         note,
     });
+}
+
+function serviceChangeTip(item) {
+    const names = (list) => (list || []).map((line) => SERVICE_LINE_LABELS[line] || line).join(' + ') || DASH;
+    const removed = (item.linesBefore || []).filter((line) => !(item.linesAfter || []).includes(line));
+    return `${names(item.linesBefore)} → ${names(item.linesAfter)}${removed.length ? ` (dropped ${names(removed)})` : ''}`;
+}
+
+function updateChurnLink(selector, available, events) {
+    const link = $(selector);
+    if (!link) return;
+    const count = available && Array.isArray(events) ? new Set(events.map((item) => item.key)).size : 0;
+    link.hidden = count === 0;
+    link.firstChild.textContent = `See ${plural(count, 'client')} `;
+}
+
+function contractionNote(data) {
+    if (!hasValue(data.contraction)) return 'No data yet';
+    return `${money(data.downgrade)} downgrades · ${money(data.serviceChange)} service changes`;
 }
 
 function upsellNote(meta) {
@@ -85,13 +113,51 @@ const SERVICE_LINE_LABELS = { ...categoryLabels, other: 'Unclassified' };
 
 const churnModal = $('#churn-modal');
 
-function renderChurnModal() {
+const MODAL_KINDS = {
+    lost: {
+        title: 'Churned clients',
+        field: 'churnedClients',
+        lines: 'Service lost',
+        column: 'Churned',
+        total: 'Total churned',
+        empty: 'No client was lost in this period.',
+        opener: '#open-churn-modal',
+        hint: 'Lost means the client stopped billing entirely. Downgrades and service changes are listed in their own widget. Each drop is shown in the month it happened, by client total. Onboarding fees and new clients’ first 4 months are not churn. Values in USD.',
+    },
+    contraction: {
+        title: 'Downgrades & service changes',
+        field: 'contractionClients',
+        lines: 'Services',
+        column: 'Reduction',
+        total: 'Total reduction',
+        empty: 'No downgrade or service change in this period.',
+        opener: '#open-contraction-modal',
+        hint: 'Downgrade: the client still bills the same services, but for less. Service change: the client dropped at least one service line (for example SEO + PPC to SEO only) and still bills. Each drop is shown in the month it happened, by client total (moving value between service lines is not a drop). Onboarding fees and new clients’ first 4 months are not churn. Values in USD.',
+    },
+};
+
+let activeModalKind = 'lost';
+
+const KIND_PILLS = {
+    lost: { cls: 'is-lost', label: 'Lost' },
+    downgrade: { cls: 'is-downgrade', label: 'Downgrade' },
+    serviceChange: { cls: 'is-service-change', label: 'Service change' },
+};
+
+function renderChurnModal(kindKey = activeModalKind) {
+    const kind = MODAL_KINDS[kindKey];
     const meta = state.scorecardMeta || {};
-    const events = Array.isArray(meta.churnedClients) ? meta.churnedClients : [];
+    const events = Array.isArray(meta[kind.field]) ? meta[kind.field] : [];
     const total = events.reduce((sum, item) => sum + item.churned, 0);
     const clientCount = new Set(events.map((item) => item.key)).size;
-    const lost = events.filter((item) => item.lost).length;
-    const downgrades = events.length - lost;
+    const downgrades = events.filter((item) => item.kind === 'downgrade').length;
+    const serviceChanges = events.filter((item) => item.kind === 'serviceChange').length;
+    setText('#churn-modal-title', kind.title);
+    setText('#churn-col-lines', kind.lines);
+    setText('#churn-col-value', kind.column);
+    setText('#churn-total-label', kind.total);
+    setText('#churn-table-empty', kind.empty);
+    setText('#churn-modal-hint', kind.hint);
     const previous = meta.previousLabel || 'Previous period';
     const window = meta.currentWindow;
     const current = meta.retentionEndLabel
@@ -102,9 +168,11 @@ function renderChurnModal() {
     const hidden = meta.hiddenDowngrades;
     setText('#churn-modal-summary', [
         events.length
-            ? `${plural(clientCount, 'client')} · ${money(total)} churned · ${plural(lost, 'client')} lost, ${plural(downgrades, 'downgrade')}`
-            : 'No client lost value in this period.',
-        hidden ? `${plural(hidden.count, 'downgrade')} (${money(hidden.value)}) from ${hidden.month} not listed: select ${hidden.month} in Reporting period to see them.` : '',
+            ? kindKey === 'lost'
+                ? `${plural(clientCount, 'client')} · ${money(total)} churned`
+                : `${plural(clientCount, 'client')} · ${money(total)} reduced · ${plural(downgrades, 'downgrade')}, ${plural(serviceChanges, 'service change')}`
+            : kind.empty,
+        kindKey === 'contraction' && hidden ? `${hidden.count} downgrade/service change ${hidden.count === 1 ? 'client' : 'clients'} (${money(hidden.value)}) from ${hidden.month} not listed: select ${hidden.month} in Reporting period to see them.` : '',
         meta.fxRestated ? 'Currency moves are not churn: the previous month is restated at the current month’s exchange rates, so only a drop in local-currency value counts.' : '',
         meta.setupClients
             ? `${plural(meta.setupClients, 'new client')} still in the first ${SETUP_MONTHS + 1} months ${meta.setupClients === 1 ? 'is' : 'are'} left out: changes while a contract is being set up (onboarding fee, services phased in, prepaid months) are not churn.`
@@ -123,6 +191,8 @@ function renderChurnModal() {
 
     $('#churn-table').innerHTML = events.map((item) => {
         const lines = item.lines.map((line) => SERVICE_LINE_LABELS[line] || line).join(' + ');
+        const pill = KIND_PILLS[item.kind] || KIND_PILLS[item.lost ? 'lost' : 'downgrade'];
+        const pillTip = item.kind === 'serviceChange' ? serviceChangeTip(item) : '';
         const when = item.lost && item.returned ? `Billing again in ${current}` : '';
         return `<tr>
             <td>${escapeHtml(item.name)}<span class="entry-sub">Last invoice ${escapeHtml(shortDate(item.lastDate))}</span></td>
@@ -132,7 +202,7 @@ function renderChurnModal() {
             <td class="align-right mono">${money(item.before)}</td>
             <td class="align-right mono">${money(item.after)}</td>
             <td class="align-right mono"><span class="value-down">${signedMoney(-item.churned)}</span></td>
-            <td><span class="status-pill ${item.lost ? 'is-lost' : 'is-downgrade'}">${item.lost ? 'Lost' : 'Downgrade'}</span>${when ? `<span class="entry-sub">${escapeHtml(when)}</span>` : ''}</td>
+            <td><span class="status-pill ${pill.cls}"${pillTip ? ` title="${escapeHtml(pillTip)}" tabindex="0"` : ''}>${pill.label}</span>${when ? `<span class="entry-sub">${escapeHtml(when)}</span>` : ''}</td>
         </tr>`;
     }).join('');
     $('#churn-table-empty').classList.toggle('is-hidden', events.length > 0);
@@ -141,18 +211,20 @@ function renderChurnModal() {
     setText('#churn-total-value', signedMoney(-total));
 }
 
-function openChurnModal() {
-    renderChurnModal();
+function openChurnModal(kindKey) {
+    activeModalKind = kindKey;
+    renderChurnModal(kindKey);
     churnModal.showModal();
 }
 
 function closeChurnModal() {
     churnModal.close();
-    $('#open-churn-modal').focus();
+    $(MODAL_KINDS[activeModalKind].opener).focus();
 }
 
 if (churnModal) {
-    $('#open-churn-modal').addEventListener('click', openChurnModal);
+    $('#open-churn-modal').addEventListener('click', () => openChurnModal('lost'));
+    $('#open-contraction-modal').addEventListener('click', () => openChurnModal('contraction'));
     churnModal.querySelectorAll('[data-close-modal]').forEach((button) => button.addEventListener('click', closeChurnModal));
     churnModal.addEventListener('click', (event) => { if (event.target === churnModal) closeChurnModal(); });
 }
