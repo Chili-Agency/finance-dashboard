@@ -14,6 +14,9 @@ const AUTH_IDLE_SECONDS = 8 * 60 * 60;
 const AUTH_MAX_ATTEMPTS = 5;
 const AUTH_LOCK_SECONDS = 5 * 60;
 
+/* Origens que podem embutir o dashboard em <iframe> (CSP frame-ancestors). */
+const AUTH_FRAME_ANCESTORS = ['https://app.clickup.com', 'https://*.clickup.com'];
+
 /*
  * Perfis (coluna role de dashboard_users, ver sql/006_user_roles.sql) e o que cada um pode gravar.
  * Todos os perfis veem todas as páginas; a diferença está nos dados que podem inserir.
@@ -37,13 +40,17 @@ function auth_start(): void
     $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
         || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
 
+    // Permite o embed (ClickUp) e bloqueia qualquer outra origem.
+    header('Content-Security-Policy: frame-ancestors \'self\' ' . implode(' ', AUTH_FRAME_ANCESTORS));
+
     session_name(AUTH_SESSION_NAME);
     session_set_cookie_params([
         'lifetime' => 0,
         'path' => '/',
         'secure' => $https,
         'httponly' => true,
-        'samesite' => 'Lax',
+        // Em iframe de outro site o cookie só é enviado com SameSite=None (exige HTTPS).
+        'samesite' => $https ? 'None' : 'Lax',
     ]);
     ini_set('session.use_strict_mode', '1');
     session_start();
