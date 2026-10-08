@@ -15,7 +15,6 @@ function e(string $value): string
 }
 
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-header('X-Frame-Options: DENY');
 
 if (auth_user() !== null) {
     header('Location: index.php', true, 302);
