@@ -6,6 +6,7 @@
 .date-range[hidden]{display:none}
 .scorecard-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
 .scorecard-grid.is-three{grid-template-columns:repeat(3,1fr)}
+.scorecard-grid.is-five{grid-template-columns:repeat(5,1fr)}
 .stat-card{background:var(--panel);box-shadow:var(--shadow);padding:19px 20px 17px;border-top:2px solid var(--line);display:flex;flex-direction:column}
 .stat-card.is-positive{border-top-color:var(--green)}
 .stat-card.is-negative{border-top-color:var(--red)}
@@ -76,11 +77,11 @@
 
 @media(max-width:1050px){
   .scorecard-grid{grid-template-columns:repeat(2,1fr)}
-  .scorecard-grid.is-three{grid-template-columns:repeat(2,1fr)}
+  .scorecard-grid.is-three,.scorecard-grid.is-five{grid-template-columns:repeat(2,1fr)}
   .split-grid,.split-grid.is-wide-left{grid-template-columns:1fr}
 }
 @media(max-width:700px){
-  .scorecard-grid,.scorecard-grid.is-three{grid-template-columns:1fr}
+  .scorecard-grid,.scorecard-grid.is-three,.scorecard-grid.is-five{grid-template-columns:1fr}
   .waterfall-row{grid-template-columns:1fr 92px;row-gap:10px}
   .waterfall-label{grid-column:1;grid-row:1}
   .waterfall-value{grid-column:2;grid-row:1;text-align:right}
@@ -386,6 +387,7 @@ table.shows-service .service-col{display:table-cell}
 .churn-table tfoot td{font-weight:700;border-bottom:0;border-top:1px solid var(--line)}
 .status-pill.is-lost{background:#fae2dc;color:var(--red-deep)}
 .status-pill.is-downgrade{background:#f7ebce;color:#a06f18}
+.status-pill.is-service-change{background:#e1ecf0;color:#4b6b7b}
 /* Aviso de que "All available" compara só o último mês */
 .stat-scope{margin:10px 0 0;color:var(--muted);font:500 9px 'DM Mono',monospace;letter-spacing:.02em}
 .stat-scope[hidden]{display:none}
