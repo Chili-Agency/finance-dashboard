@@ -494,6 +494,10 @@ function recurringAmount(invoice) { return mrrAmount(invoice) - onboardingAmount
 
 const SETUP_MONTHS = 3;
 const CHURN_MIN_USD = 0.5;
+// Clientes com contrato pago de uma vez só (sem parcelas mensais): ficar sem fatura nos meses seguintes não é churn.
+// Comparado pelo nome normalizado (retentionKey), por trecho.
+const ONE_TIME_PAYMENT_CLIENTS = ['schneider'];
+const isOneTimePayment = (key) => ONE_TIME_PAYMENT_CLIENTS.some((name) => key.includes(name));
 const monthsApart = (from, to) => (to.getFullYear() - from.getFullYear()) * 12 + to.getMonth() - from.getMonth();
 
 function upsellAmount(invoice, line) {
@@ -751,6 +755,11 @@ function measureWindow(ctx, windows, meta) {
         });
         const lost = beforeTotal > 0 && Math.abs(afterTotal) < 0.005;
 
+        if (isOneTimePayment(key)) {
+            initial -= beforeTotal;
+            return;
+        }
+
         if (monthly && isInSetup(ctx, key, month) && !(lost && stoppedForGood(ctx, key, month))) {
             initial -= beforeTotal;
             setupChange += afterTotal - beforeTotal;
@@ -784,7 +793,7 @@ function measureWindow(ctx, windows, meta) {
     let newBusiness = 0;
     let reactivated = 0;
     currentByContact.forEach((value, key) => {
-        if (baseContacts.has(key)) return;
+        if (baseContacts.has(key) || isOneTimePayment(key)) return;
         if (newContacts.has(key)) { newBusiness += value; meta.newClients += 1; return; }
         if (monthly && isInSetup(ctx, key, month)) { setupChange += value; setupClients.add(key); return; }
         reactivated += value;
