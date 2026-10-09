@@ -39,6 +39,7 @@ function snapshot_sources(array $config): array
     $sources['clients'] = (string) ($config['n8n']['clients'] ?? '');
     $sources['goals'] = (string) ($config['n8n']['goals'] ?? '');
     $sources['sales'] = (string) ($config['n8n']['sales'] ?? '');
+    $sources['seo'] = (string) ($config['n8n']['seo'] ?? '');
     return array_filter($sources, static fn (string $url): bool => $url !== '');
 }
 
@@ -335,6 +336,17 @@ function snapshot_validate(string $name, string $body): ?string
         }
         return null;
     }
+    if ($name === 'seo') {
+        $data = snapshot_decode_seo($body);
+        if ($data === null) {
+            return 'n8n returned an unexpected response for the SEO KPIs.';
+        }
+        if (($data['ok'] ?? true) === false) {
+            $errors = array_filter(array_map('strval', (array) ($data['errors'] ?? [])));
+            return 'SEO KPIs: ' . ($errors !== [] ? implode(' · ', $errors) : 'the workflow reported a failure.');
+        }
+        return null;
+    }
     if ($name === 'sales') {
         $data = snapshot_decode_sales($body);
         if ($data === null) {
@@ -423,6 +435,15 @@ function snapshot_decode_clients(string $body): ?array
         $data = $data[0];
     }
     return is_array($data) && isset($data['nps'], $data['companies']) && is_array($data['nps']) && is_array($data['companies']) ? $data : null;
+}
+
+function snapshot_decode_seo(string $body): ?array
+{
+    $data = json_decode($body, true);
+    if (is_array($data) && isset($data[0]) && is_array($data[0]) && !isset($data['clients'])) {
+        $data = $data[0];
+    }
+    return is_array($data) && isset($data['clients']) && is_array($data['clients']) ? $data : null;
 }
 
 /** Resposta do webhook de metas de vendas (HubSpot): objeto com goals. */

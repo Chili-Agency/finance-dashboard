@@ -87,6 +87,7 @@ return (static function (): array {
             'goals' => $env('N8N_WEBHOOK_GOALS', ''),
             // Opcional: workflow "Chili Finance - Sales (HubSpot)". Vazio desliga a página Sales.
             'sales' => $env('N8N_WEBHOOK_SALES', ''),
+            'seo' => $env('N8N_WEBHOOK_SEO', ''),
         ],
         'fx' => [
             // App ID da Open Exchange Rates. Vazio = usa só o que já está em fx_monthly_rates.
