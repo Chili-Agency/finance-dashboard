@@ -1,4 +1,4 @@
-function renderAll() { renderInvoices(); renderLate(); renderMrr(); renderScorecard(); if (typeof renderSales === 'function') renderSales(); if (typeof renderClientView === 'function') renderClientView(); syncViewToUrl(); }
+function renderAll() { renderInvoices(); renderLate(); renderMrr(); renderScorecard(); if (typeof renderSales === 'function') renderSales(); if (typeof renderClientView === 'function') renderClientView(); if (typeof renderSeo === 'function') renderSeo(); syncViewToUrl(); }
 
 $('#period-select').addEventListener('change', (event) => { state.period = event.target.value; state.periodFromUrl = true; $('#date-range').hidden = state.period !== 'custom'; renderAll(); });
 $('#date-from').addEventListener('input', (event) => { state.customStart = event.target.value; });
@@ -39,7 +39,7 @@ async function refreshData() {
         problem = error.message;
     }
     state.sync.inFlight = false;
-    await Promise.all([loadInvoices(), typeof loadAds === 'function' ? loadAds() : null, typeof loadCosts === 'function' ? loadCosts() : null, typeof loadClients === 'function' ? loadClients() : null, typeof loadSales === 'function' ? loadSales() : null, typeof loadSalesGoals === 'function' ? loadSalesGoals() : null]);
+    await Promise.all([loadInvoices(), typeof loadAds === 'function' ? loadAds() : null, typeof loadCosts === 'function' ? loadCosts() : null, typeof loadClients === 'function' ? loadClients() : null, typeof loadSales === 'function' ? loadSales() : null, typeof loadSalesGoals === 'function' ? loadSalesGoals() : null, typeof loadSeo === 'function' ? loadSeo() : null]);
     if (problem) {
         const notice = $('#error-notice');
         notice.classList.remove('is-info');
@@ -51,7 +51,7 @@ async function refreshData() {
 $('#refresh-button').addEventListener('click', refreshData);
 document.querySelectorAll('.scope-tab').forEach((button) => button.addEventListener('click', () => { state.scope = button.dataset.scope; document.querySelectorAll('.scope-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.scope === state.scope)); renderAll(); }));
 document.querySelectorAll('.category-tab').forEach((button) => button.addEventListener('click', () => { state.category = button.dataset.category; document.querySelectorAll('.category-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.category === state.category)); renderAll(); }));
-document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => { document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('is-active')); button.classList.add('is-active'); document.querySelectorAll('.view').forEach((view) => view.classList.remove('is-visible')); $(`#${button.dataset.view}-view`).classList.add('is-visible'); $('#page-title').textContent = button.dataset.title || button.textContent.trim(); }));
+document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => { document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('is-active')); button.classList.add('is-active'); document.querySelectorAll('.view').forEach((view) => view.classList.remove('is-visible')); $(`#${button.dataset.view}-view`).classList.add('is-visible'); $('#page-title').textContent = button.dataset.title || button.textContent.trim(); if (button.dataset.view === 'seo' && typeof renderSeo === 'function') renderSeo(); }));
 
 function renderScorecard() {
     buildScorecard();
@@ -83,3 +83,4 @@ loadAds();
 loadCosts();
 loadClients();
 loadSalesGoals();
+loadSeo();

@@ -39,6 +39,7 @@ function asset(string $path): string
             <nav class="main-nav" aria-label="Main navigation">
                 <button class="nav-item is-active" data-view="overview" data-title="Overview"><span class="nav-icon">◍</span>Overview</button>
                 <button class="nav-item" data-view="sales" data-title="Sales"><span class="nav-icon">◆</span>Sales</button>
+                <button class="nav-item" data-view="seo" data-title="SEO"><span class="nav-icon">◑</span>SEO</button>
                 <button class="nav-item" data-view="clients" data-title="Client view"><span class="nav-icon">◉</span>Client view</button>
                 <button class="nav-item" data-view="invoices" data-title="Invoices"><span class="nav-icon">◒</span>Invoices</button>
                 <button class="nav-item" data-view="late" data-title="Late invoices"><span class="nav-icon">◔</span>Late invoices</button>
@@ -273,6 +274,152 @@ function asset(string $path): string
                     <article class="stat-card is-warning"><span class="stat-label">Lead to MQL</span><strong id="sales-lead-mql">—</strong><p class="stat-note" id="sales-lead-mql-note">—</p></article>
                     <article class="stat-card"><span class="stat-label">Deals won per month</span><strong id="sales-velocity">—</strong><p class="stat-note" id="sales-velocity-note">—</p></article>
                 </div>
+            </section>
+
+            <section class="view" id="seo-view" aria-labelledby="page-title">
+                <div class="section-intro">
+                    <div>
+                        <p class="eyebrow">SEO team</p>
+                        <h2>SEO scorecard</h2>
+                        <p class="section-copy">Month close of the SEO line from Xero and HubSpot, plus keyword, PageSpeed and DR KPIs.</p>
+                        <p class="manual-input-status" id="seo-sources-note" data-tone="muted" aria-live="polite"></p>
+                    </div>
+                    <div class="filter-stack">
+                        <div class="scope-tabs" role="tablist" aria-label="Company scope">
+                            <button class="scope-tab is-active" data-scope="all" role="tab">Global</button>
+                            <button class="scope-tab" data-scope="br" role="tab">Brazil</button>
+                            <button class="scope-tab" data-scope="mx" role="tab">Mexico</button>
+                            <button class="scope-tab" data-scope="pa" role="tab">Panama</button>
+                            <button class="scope-tab" data-scope="int" role="tab">International</button>
+                        </div>
+                        <p class="stat-scope" id="seo-period-note"></p>
+                    </div>
+                </div>
+
+                <div class="scorecard-grid is-five">
+                    <article class="stat-card is-neutral">
+                        <span class="stat-label">SEO Total MRR</span>
+                        <strong id="seo-mrr">—</strong>
+                        <p class="stat-note" id="seo-mrr-note">—</p>
+                    </article>
+                    <article class="stat-card is-warning">
+                        <span class="stat-label">Gap to target</span>
+                        <strong id="seo-gap">—</strong>
+                        <p class="stat-note" id="seo-gap-note">—</p>
+                    </article>
+                    <article class="stat-card is-negative">
+                        <span class="stat-label">Churn</span>
+                        <strong id="seo-churn">—</strong>
+                        <p class="stat-note" id="seo-churn-note">—</p>
+                    </article>
+                    <article class="stat-card is-positive">
+                        <span class="stat-label">Recovered revenue</span>
+                        <strong id="seo-recovered">—</strong>
+                        <p class="stat-note" id="seo-recovered-note">—</p>
+                    </article>
+                    <article class="stat-card is-neutral">
+                        <span class="stat-label">NPS response rate</span>
+                        <strong id="seo-nps-rate">—</strong>
+                        <p class="stat-note" id="seo-nps-rate-note">—</p>
+                    </article>
+                </div>
+
+                <div class="split-grid is-wide-left">
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Movement</p><h3>MRR composition</h3></div>
+                            <span class="panel-meta">USD view</span>
+                        </div>
+                        <div class="waterfall" id="seo-waterfall"></div>
+                    </article>
+
+                    <article class="panel target-panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Goal</p><h3>MRR vs target</h3></div>
+                        </div>
+                        <div class="target-block" id="seo-mrr-target"></div>
+                    </article>
+                </div>
+
+                <div class="split-grid">
+                    <article class="panel table-panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Retention</p><h3>Churn</h3></div>
+                            <span class="panel-meta" id="seo-churn-count">0 events</span>
+                        </div>
+                        <div class="target-block" id="seo-churn-target"></div>
+                        <div class="table-scroll">
+                            <table class="entries-table seo-table">
+                                <thead><tr><th>Client</th><th>Type</th><th class="align-right">Reduction</th></tr></thead>
+                                <tbody id="seo-churn-table"></tbody>
+                            </table>
+                            <div class="table-empty is-hidden" id="seo-churn-empty"></div>
+                        </div>
+                    </article>
+
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Growth</p><h3>Upsells &amp; cross-sells</h3></div>
+                        </div>
+                        <div class="target-block" id="seo-growth"></div>
+                        <p class="stat-scope" id="seo-growth-detail"></p>
+                    </article>
+                </div>
+
+                <article class="panel table-panel">
+                    <div class="panel-header">
+                        <div><p class="eyebrow">HubSpot</p><h3>NPS</h3></div>
+                        <span class="panel-meta" id="seo-nps-meta">—</span>
+                    </div>
+                    <div class="seo-nps-summary">
+                        <div><span class="stat-label">NPS</span><strong id="seo-nps-score">—</strong></div>
+                        <div id="seo-nps-gate"></div>
+                    </div>
+                    <div class="table-scroll">
+                        <table class="entries-table seo-table">
+                            <thead><tr><th>Client</th><th class="align-right">Score</th><th>Category</th><th>Answered</th></tr></thead>
+                            <tbody id="seo-nps-table"></tbody>
+                        </table>
+                        <div class="table-empty is-hidden" id="seo-nps-empty"></div>
+                    </div>
+                </article>
+
+                <p class="manual-input-status" id="seo-kpi-scope" data-tone="muted"></p>
+
+                <div class="scorecard-grid is-three">
+                    <article class="stat-card is-positive">
+                        <span class="stat-label">Keywords on page 1 of Google</span>
+                        <strong id="seo-kw">—</strong>
+                        <p class="stat-note" id="seo-kw-note">—</p>
+                        <div class="target-block" id="seo-kw-progress"></div>
+                        <p class="stat-scope" id="seo-kw-movers"></p>
+                    </article>
+                    <article class="stat-card is-neutral">
+                        <span class="stat-label">Sites meeting the PageSpeed goal</span>
+                        <strong id="seo-ps">—</strong>
+                        <p class="stat-note" id="seo-ps-note">—</p>
+                    </article>
+                    <article class="stat-card is-warning">
+                        <span class="stat-label">Clients meeting the DR growth goal</span>
+                        <strong id="seo-dr">—</strong>
+                        <p class="stat-note" id="seo-dr-note">—</p>
+                    </article>
+                </div>
+
+                <article class="panel table-panel">
+                    <div class="panel-header">
+                        <div><p class="eyebrow">Per client</p><h3>Keywords, PageSpeed and DR</h3></div>
+                        <span class="panel-meta" id="seo-clients-meta">No data</span>
+                    </div>
+                    <div class="table-scroll">
+                        <table class="entries-table seo-table">
+                            <thead><tr><th>Client</th><th class="align-right">Page 1 / ranking</th><th class="align-right">Vs previous month</th><th class="align-right">PageSpeed</th><th class="align-right">DR start → end</th><th class="align-right">DR change</th></tr></thead>
+                            <tbody id="seo-clients-table"></tbody>
+                        </table>
+                        <div class="table-empty is-hidden" id="seo-clients-empty"></div>
+                    </div>
+                    <button type="button" class="seo-toggle" id="seo-clients-toggle" hidden></button>
+                </article>
             </section>
 
             <section class="view" id="invoices-view" aria-labelledby="page-title">
@@ -1236,6 +1383,7 @@ function asset(string $path): string
     <script src="<?= asset('assets/retention.js') ?>"></script>
     <script src="<?= asset('assets/targets.js') ?>"></script>
     <script src="<?= asset('assets/margin-cogs.js') ?>"></script>
+    <script src="<?= asset('assets/seo.js') ?>"></script>
     <script src="<?= asset('assets/app.js') ?>"></script>
 </body>
 </html>
