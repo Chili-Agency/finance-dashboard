@@ -39,7 +39,7 @@ async function refreshData() {
         problem = error.message;
     }
     state.sync.inFlight = false;
-    await Promise.all([loadInvoices(), typeof loadAds === 'function' ? loadAds() : null, typeof loadCosts === 'function' ? loadCosts() : null, typeof loadClients === 'function' ? loadClients() : null, typeof loadSales === 'function' ? loadSales() : null, typeof loadSalesGoals === 'function' ? loadSalesGoals() : null, typeof loadSeo === 'function' ? loadSeo() : null]);
+    await Promise.all([loadInvoices(), typeof loadAds === 'function' ? loadAds() : null, typeof loadCosts === 'function' ? loadCosts() : null, typeof loadClients === 'function' ? loadClients() : null, typeof loadSales === 'function' ? loadSales() : null, typeof loadSalesGoals === 'function' ? loadSalesGoals() : null, typeof loadSeo === 'function' ? loadSeo() : null, typeof loadPpc === 'function' ? loadPpc() : null, typeof loadPpcNps === 'function' && state.ppcNps.status !== 'idle' ? loadPpcNps() : null]);
     if (problem) {
         const notice = $('#error-notice');
         notice.classList.remove('is-info');
@@ -51,7 +51,7 @@ async function refreshData() {
 $('#refresh-button').addEventListener('click', refreshData);
 document.querySelectorAll('.scope-tab').forEach((button) => button.addEventListener('click', () => { state.scope = button.dataset.scope; document.querySelectorAll('.scope-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.scope === state.scope)); renderAll(); }));
 document.querySelectorAll('.category-tab').forEach((button) => button.addEventListener('click', () => { state.category = button.dataset.category; document.querySelectorAll('.category-tab').forEach((item) => item.classList.toggle('is-active', item.dataset.category === state.category)); renderAll(); }));
-document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => { document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('is-active')); button.classList.add('is-active'); document.querySelectorAll('.view').forEach((view) => view.classList.remove('is-visible')); $(`#${button.dataset.view}-view`).classList.add('is-visible'); $('#page-title').textContent = button.dataset.title || button.textContent.trim(); if (button.dataset.view === 'seo' && typeof renderSeo === 'function') renderSeo(); }));
+document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => { document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('is-active')); button.classList.add('is-active'); document.querySelectorAll('.view').forEach((view) => view.classList.remove('is-visible')); $(`#${button.dataset.view}-view`).classList.add('is-visible'); $('#page-title').textContent = button.dataset.title || button.textContent.trim(); if (button.dataset.view === 'seo' && typeof renderSeo === 'function') renderSeo(); if (button.dataset.view === 'ppc' && typeof renderPpc === 'function') { renderPpc(); if (state.ppcNps.status === 'idle') loadPpcNps(); } }));
 
 function renderScorecard() {
     buildScorecard();
@@ -84,3 +84,4 @@ loadCosts();
 loadClients();
 loadSalesGoals();
 loadSeo();
+loadPpc();

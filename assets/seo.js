@@ -79,7 +79,7 @@ function seoNps(meta) {
     const scores = [];
     if (index) {
         active.forEach((name, key) => {
-            const answers = (index.get(key)?.nps || [])
+            const answers = (hubspotMatch(key)?.nps || [])
                 .filter((row) => hasValue(row.score) && inWindow(clientDay(row.at), span))
                 .sort((a, b) => String(b.at).localeCompare(String(a.at)));
             if (answers.length) scores.push({ name, score: Number(answers[0].score), at: answers[0].at });
@@ -120,7 +120,7 @@ function renderSeoSources() {
         const extra = [...seo.errors, ...seo.warnings];
         if (extra.length) { kpis += ` ${extra.join(' · ')}`; tone = 'sample'; }
     }
-    const nps = state.clients.status === 'off' ? ' NPS is not connected: set N8N_WEBHOOK_CLIENTS in the .env.' : state.clients.status === 'error' ? ' NPS could not be loaded.' : '';
+    const nps = state.clients.status === 'off' ? ' NPS is not connected: set N8N_WEBHOOK_SEO_NPS in the .env.' : state.clients.status === 'error' ? ' NPS could not be loaded.' : '';
     node.dataset.tone = tone;
     node.textContent = `${state.invoices.length ? `Xero: ${plural(state.invoices.filter(isBillable).length, 'invoice')}.` : 'Loading Xero invoices…'} ${kpis}${nps}`;
 }
@@ -144,7 +144,7 @@ function renderSeoFinance() {
     setText('#seo-recovered', hasValue(recovered) ? percentOr(Math.min(1, recovered), 0) : DASH);
     setText('#seo-recovered-note', 'Upsells and cross-sells against churned value');
     setText('#seo-nps-rate', nps && hasValue(nps.rate) ? percentOr(nps.rate, 0) : DASH);
-    setText('#seo-nps-rate-note', nps && nps.ready ? `${nps.scores.length} of ${nps.active} clients answered · minimum ${percentOr(SEO_NPS_MIN_RESPONSE, 0)}` : 'Waiting for HubSpot NPS');
+    setText('#seo-nps-rate-note', nps && nps.ready ? `${nps.scores.length} of ${nps.active} clients answered · minimum ${percentOr(SEO_NPS_MIN_RESPONSE, 0)}` : 'Waiting for WeHelp NPS');
     setText('#seo-period-note', meta.currentLabel ? `${meta.currentLabel}${meta.latestOnly ? ' (latest month with invoices)' : ''}` : 'No SEO invoices yet');
 
     const rows = [
@@ -215,13 +215,13 @@ function renderSeoFinance() {
 function renderSeoNps(nps) {
     const rate = nps && hasValue(nps.rate) ? nps.rate : null;
     const counts = !nps || !nps.ready
-        ? 'Waiting for HubSpot NPS'
+        ? 'Waiting for WeHelp NPS'
         : `${nps.scores.length} of ${nps.active} clients answered · average ${hasValue(nps.average) ? nps.average.toFixed(1) : DASH}`;
     setText('#seo-nps-meta', counts);
     $('#seo-nps-score').textContent = nps && hasValue(nps.nps) ? number(nps.nps) : DASH;
     const counted = hasValue(rate) && rate >= SEO_NPS_MIN_RESPONSE;
     $('#seo-nps-gate').innerHTML = !nps || !nps.ready
-        ? '<p class="manual-input-status" data-tone="muted">NPS needs the HubSpot client data.</p>'
+        ? '<p class="manual-input-status" data-tone="muted">NPS needs the WeHelp client data.</p>'
         : counted
             ? `<p class="manual-input-status" data-tone="manual">Response rate is above the ${percentOr(SEO_NPS_MIN_RESPONSE, 0)} minimum: the NPS KPI counts.</p>`
             : `<p class="manual-input-status" data-tone="sample">Below ${percentOr(SEO_NPS_MIN_RESPONSE, 0)} of responses the NPS KPI does not count. Chase the missing answers.</p>`;
@@ -231,7 +231,7 @@ function renderSeoNps(nps) {
         return `<tr><td>${escapeHtml(item.name)}</td><td class="align-right mono">${number(item.score)}</td><td><span class="status-pill ${kind.pill}">${escapeHtml(kind.label)}</span></td><td>${escapeHtml(item.at || DASH)}</td></tr>`;
     }).join('');
     $('#seo-nps-empty').classList.toggle('is-hidden', rows.length > 0);
-    $('#seo-nps-empty').textContent = nps && nps.ready ? 'No SEO client answered the NPS in this period.' : 'Waiting for HubSpot NPS.';
+    $('#seo-nps-empty').textContent = nps && nps.ready ? 'No SEO client answered the NPS in this period.' : 'Waiting for WeHelp NPS.';
 }
 
 function renderSeoKpis() {

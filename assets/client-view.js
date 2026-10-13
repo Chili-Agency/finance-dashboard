@@ -1,8 +1,8 @@
 // ---- Client view ----
-// Uma tela por cliente para acompanhar escalações: pagamentos (Xero), histórico de NPS (HubSpot) e a data de
-// onboarding (invoice com onboarding fee no Xero). O vínculo HubSpot <-> Xero é pelo nome normalizado da empresa.
+// Uma tela por cliente para acompanhar escalações: pagamentos (Xero), histórico de NPS (WeHelp) e a data de
+// onboarding (invoice com onboarding fee no Xero). O vínculo WeHelp <-> Xero é pelo nome normalizado da empresa.
 
-const CLIENTS_ENDPOINT = 'clients.php';
+const CLIENTS_ENDPOINT = 'ppc-nps.php?service=seo';
 const CLIENT_DAY_MS = 24 * 60 * 60 * 1000;
 // Palavras que não distinguem uma empresa da outra: tipo societário e conectores (LTDA, S.A. de C.V., Inc...).
 const CLIENT_NAME_NOISE = new Set([
@@ -21,11 +21,24 @@ async function loadClients() {
         const body = await response.json().catch(() => null);
         if (!body) throw new Error(`The server answered HTTP ${response.status}.`);
         if (body.configured === false) {
-            state.clients = { status: 'off', data: null, errors: body.errors || [], warnings: [], fetchedAt: null };
+            state.clients = { status: 'off', data: null, errors: body.error ? [body.error] : [], warnings: [], fetchedAt: null };
         } else if (!response.ok) {
-            throw new Error((body.errors || []).join(' · ') || `The server answered HTTP ${response.status}.`);
+            throw new Error(body.error || `The server answered HTTP ${response.status}.`);
         } else {
-            state.clients = { status: 'ready', data: { companies: body.companies || [], nps: body.nps || [] }, errors: body.errors || [], warnings: body.warnings || [], fetchedAt: body.fetchedAt || null };
+            const companies = new Map();
+            (body.rows || []).forEach((row) => {
+                if (row.company && row.company !== '__summary__' && !companies.has(row.company)) companies.set(row.company, { id: String(row.company), name: row.dashboard_name || row.company, domain: null });
+            });
+            const nps = (body.responses || []).filter((row) => row.company).map((row) => ({
+                id: String(row.response_id),
+                companyId: String(row.company),
+                score: hasValue(row.evaluation) ? Number(row.evaluation) : null,
+                at: String(row.date_reply || '').slice(0, 10) || null,
+                type: 'NPS',
+                survey: 'WeHelp',
+                comment: row.comment || null,
+            }));
+            state.clients = { status: 'ready', data: { companies: [...companies.values()], nps }, errors: [], warnings: [], fetchedAt: body.fetchedAt || null };
         }
     } catch (error) {
         state.clients = { status: 'error', data: null, errors: [error.message], warnings: [], fetchedAt: null };
@@ -75,7 +88,7 @@ function xeroClientList() {
     return list;
 }
 
-// Empresas do HubSpot por nome normalizado, já com as respostas de NPS de cada uma.
+// Clientes do WeHelp por nome normalizado, já com as respostas de NPS de cada uma.
 function hubspotIndex() {
     const data = state.clients.data;
     const cache = state.clientView.indexCache;
@@ -98,6 +111,14 @@ function hubspotIndex() {
     }
     state.clientView.indexCache = { source: data, map };
     return map;
+}
+
+function hubspotMatch(norm) {
+    const map = hubspotIndex();
+    if (map.has(norm)) return map.get(norm);
+    if (!norm || norm.length < 4) return null;
+    const found = [...map.keys()].filter((key) => key.length >= 4 && (key.includes(norm) || norm.includes(key)));
+    return found.length === 1 ? map.get(found[0]) : null;
 }
 
 function npsCategory(score) {
@@ -186,7 +207,7 @@ function clientDetail(client) {
         .filter(Boolean)
         .sort((a, b) => a.date - b.date);
 
-    const match = hubspotIndex().get(client.norm) || null;
+    const match = hubspotMatch(client.norm);
     const nps = match ? [...match.nps].sort((a, b) => String(b.at).localeCompare(String(a.at))) : [];
     const scored = nps.filter((row) => hasValue(row.score));
 
@@ -251,10 +272,10 @@ function clientDetailHtml(client, detail) {
     let npsBody;
     if (!detail.match) {
         npsBody = `<p class="manual-input-status" data-tone="sample">${state.clients.status === 'ready'
-            ? `No HubSpot company matched this client. The match uses the normalized name: “${escapeHtml(client.norm)}”.`
-            : state.clients.status === 'loading' ? 'Loading HubSpot data…' : 'HubSpot data is not available (see the note at the top).'}</p>`;
+            ? `No WeHelp client matched this client. The match uses the normalized name: “${escapeHtml(client.norm)}”.`
+            : state.clients.status === 'loading' ? 'Loading WeHelp data…' : 'WeHelp data is not available (see the note at the top).'}</p>`;
     } else if (!detail.nps.length) {
-        npsBody = `<p class="manual-input-status" data-tone="muted">HubSpot company “${escapeHtml(detail.match.companies[0].name || '')}” found, with no NPS responses since the workflow start date.</p>`;
+        npsBody = `<p class="manual-input-status" data-tone="muted">WeHelp client “${escapeHtml(detail.match.companies[0].name || '')}” found, with no NPS responses in the saved period.</p>`;
     } else {
         const counts = { promoter: 0, passive: 0, detractor: 0 };
         detail.nps.forEach((row) => { const key = npsCategory(row.score).key; if (counts[key] !== undefined) counts[key] += 1; });
@@ -264,7 +285,7 @@ function clientDetailHtml(client, detail) {
             return `<tr><td>${escapeHtml(row.at || DASH)}</td><td class="align-right mono">${hasValue(row.score) ? number(row.score) : DASH}</td><td><span class="status-pill ${kind.pill}">${escapeHtml(kind.label)}</span></td><td>${escapeHtml(row.survey || row.type || DASH)}</td><td>${escapeHtml(row.comment || '')}</td></tr>`;
         }).join('')}</tbody></table></div>`;
     }
-    const nps = `<article class="panel table-panel"><div class="panel-header"><div><p class="eyebrow">HubSpot</p><h3>NPS history</h3></div><span class="panel-meta">${plural(detail.nps.length, 'response')}</span></div>${npsBody}</article>`;
+    const nps = `<article class="panel table-panel"><div class="panel-header"><div><p class="eyebrow">WeHelp</p><h3>NPS history</h3></div><span class="panel-meta">${plural(detail.nps.length, 'response')}</span></div>${npsBody}</article>`;
 
     const onboarding = `<article class="panel table-panel"><div class="panel-header"><div><p class="eyebrow">Xero</p><h3>Onboarding</h3></div><span class="panel-meta">${detail.onboardingDate ? shortDate(detail.onboardingDate) : 'no date'}</span></div>${detail.onboarding.length
         ? `<div class="table-scroll"><table class="entries-table"><thead><tr><th>Date</th><th>Invoice</th><th>Market</th><th class="align-right">Onboarding fee</th></tr></thead><tbody>${detail.onboarding.map((row) => `<tr><td>${row.date ? shortDate(row.date) : DASH}</td><td>${escapeHtml(row.number)}</td><td>${escapeHtml(companyLabels[row.market] || DASH)}</td><td class="align-right mono">${money(row.fee)}</td></tr>`).join('')}</tbody></table></div>`
@@ -280,12 +301,12 @@ function renderClientSources() {
     const invoices = state.invoices.length ? `Xero: ${plural(xeroClientList().length, 'client')} from ${plural(state.invoices.filter(isBillable).length, 'invoice')}.` : 'Loading Xero invoices…';
     let hubspot;
     let tone = 'muted';
-    if (clients.status === 'loading') hubspot = 'Loading HubSpot NPS…';
-    else if (clients.status === 'off') { hubspot = 'NPS is not connected: set N8N_WEBHOOK_CLIENTS in the .env with the webhook of the n8n workflow.'; tone = 'sample'; }
+    if (clients.status === 'loading') hubspot = 'Loading WeHelp NPS…';
+    else if (clients.status === 'off') { hubspot = clients.errors.join(' · ') || 'NPS is not connected: set N8N_WEBHOOK_SEO_NPS in the .env.'; tone = 'sample'; }
     else if (clients.status === 'error') { hubspot = `Could not load NPS: ${clients.errors.join(' · ')}`; tone = 'error'; }
     else {
-        const linked = xeroClientList().filter((client) => hubspotIndex().has(client.norm)).length;
-        hubspot = `HubSpot: ${plural(clients.data.nps.length, 'NPS response')} for ${plural(clients.data.companies.length, 'company')}, ${linked} linked to a Xero client by name${clients.fetchedAt ? `, fetched ${relativeTime(new Date(clients.fetchedAt).getTime())}` : ''}.`;
+        const linked = xeroClientList().filter((client) => hubspotMatch(client.norm)).length;
+        hubspot = `WeHelp: ${plural(clients.data.nps.length, 'NPS response')} for ${plural(clients.data.companies.length, 'client')}, ${linked} linked to a Xero client by name${clients.fetchedAt ? `, fetched ${relativeTime(new Date(clients.fetchedAt).getTime())}` : ''}.`;
         const extra = [...clients.errors, ...clients.warnings];
         if (extra.length) { hubspot += ` ${extra.join(' · ')}`; tone = 'sample'; }
     }

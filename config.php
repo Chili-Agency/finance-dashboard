@@ -88,6 +88,17 @@ return (static function (): array {
             // Opcional: workflow "Chili Finance - Sales (HubSpot)". Vazio desliga a página Sales.
             'sales' => $env('N8N_WEBHOOK_SALES', ''),
             'seo' => $env('N8N_WEBHOOK_SEO', ''),
+            'ppc' => $env('N8N_WEBHOOK_PPC', ''),
+            'ppc_campaigns' => $env('N8N_WEBHOOK_PPC_CAMPAIGNS', ''),
+            'ppc_honeymoon' => $env('N8N_WEBHOOK_PPC_HONEYMOON', ''),
+            'ppc_late' => $env('N8N_WEBHOOK_PPC_LATE_TASKS', ''),
+            'ppc_nps' => $env('N8N_WEBHOOK_PPC_NPS', ''),
+            'ppc_nps_responses' => $env('N8N_WEBHOOK_PPC_NPS_RESPONSES', ''),
+            'seo_nps' => $env('N8N_WEBHOOK_SEO_NPS', ''),
+            'seo_nps_responses' => $env('N8N_WEBHOOK_SEO_NPS_RESPONSES', ''),
+        ],
+        'ppc' => [
+            'api_key' => $env('PPC_API_KEY', ''),
         ],
         'fx' => [
             // App ID da Open Exchange Rates. Vazio = usa só o que já está em fx_monthly_rates.

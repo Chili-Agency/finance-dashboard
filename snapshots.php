@@ -23,6 +23,7 @@ const SNAPSHOT_SESSION_TIMEOUT = 900;  // wait_timeout da conexão durante a bus
 // Fontes que rodam em segundo plano: o webhook só responde "comecei" e o n8n envia o resultado
 // depois para snapshot-push.php (a busca do HubSpot passa dos 100 s que o n8n cloud aceita).
 const SNAPSHOT_ASYNC = ['sales'];
+const SNAPSHOT_PPC = ['ppc_accounts', 'ppc_campaigns', 'ppc_honeymoon', 'ppc_late'];
 // Enquanto uma busca em segundo plano não devolve o resultado, não dispara outra (cliques repetidos
 // no Refresh somavam execuções simultâneas e estouravam o limite de requisições do HubSpot).
 const SNAPSHOT_ASYNC_GUARD = 600; // s
@@ -40,6 +41,10 @@ function snapshot_sources(array $config): array
     $sources['goals'] = (string) ($config['n8n']['goals'] ?? '');
     $sources['sales'] = (string) ($config['n8n']['sales'] ?? '');
     $sources['seo'] = (string) ($config['n8n']['seo'] ?? '');
+    $sources['ppc_accounts'] = (string) ($config['n8n']['ppc'] ?? '');
+    $sources['ppc_campaigns'] = (string) ($config['n8n']['ppc_campaigns'] ?? '');
+    $sources['ppc_honeymoon'] = (string) ($config['n8n']['ppc_honeymoon'] ?? '');
+    $sources['ppc_late'] = (string) ($config['n8n']['ppc_late'] ?? '');
     return array_filter($sources, static fn (string $url): bool => $url !== '');
 }
 
@@ -75,7 +80,7 @@ function snapshot_refresh(PDO $pdo, array $config, string $updatedBy, ?array $on
         $fresh = snapshot_fresh_sources($pdo, array_keys($sources));
         $running = array_values(array_filter(array_keys($sources), static fn (string $name): bool => snapshot_async_running($pdo, $name)));
         $pending = array_diff_key($sources, array_flip($fresh), array_flip($running));
-        $fetched = $pending === [] ? [] : snapshot_fetch_all($pending);
+        $fetched = $pending === [] ? [] : snapshot_fetch_all($pending, $config);
 
         // Se a conexão caiu durante a busca, a trava caiu junto; segue com uma conexão nova.
         $pdo = snapshot_alive($pdo, $config);
@@ -246,7 +251,7 @@ function snapshot_fresh_sources(PDO $pdo, array $names): array
  * @param array<string, string> $sources
  * @return array<string, array{body:?string, seconds:float, error:?string}>
  */
-function snapshot_fetch_all(array $sources): array
+function snapshot_fetch_all(array $sources, array $config = []): array
 {
     $multi = curl_multi_init();
     $handles = [];
@@ -260,6 +265,17 @@ function snapshot_fetch_all(array $sources): array
             CURLOPT_HTTPHEADER => ['Accept: application/json'],
             CURLOPT_USERAGENT => 'Chili Finance Dashboard/1.0',
         ]);
+        if (in_array($name, SNAPSHOT_PPC, true)) {
+            curl_setopt_array($curl, [
+                CURLOPT_POST => true,
+                CURLOPT_POSTFIELDS => '{}',
+                CURLOPT_HTTPHEADER => [
+                    'Accept: application/json',
+                    'Content-Type: application/json',
+                    'X-API-Key: ' . (string) ($config['ppc']['api_key'] ?? ''),
+                ],
+            ]);
+        }
         curl_multi_add_handle($multi, $curl);
         $handles[$name] = $curl;
     }
@@ -333,6 +349,16 @@ function snapshot_validate(string $name, string $body): ?string
         if (($data['ok'] ?? true) === false) {
             $errors = array_filter(array_map('strval', (array) ($data['errors'] ?? [])));
             return 'HubSpot goals: ' . ($errors !== [] ? implode(' · ', $errors) : 'the workflow reported a failure.');
+        }
+        return null;
+    }
+    if (in_array($name, SNAPSHOT_PPC, true)) {
+        $rows = snapshot_decode_ppc($body);
+        if ($rows === null) {
+            return "n8n returned an unexpected response for {$name}.";
+        }
+        if ($name === 'ppc_accounts' && !array_filter($rows, static fn (array $row): bool => trim((string) ($row['account_name'] ?? '')) !== '')) {
+            return 'n8n returned no PPC accounts.';
         }
         return null;
     }
@@ -435,6 +461,21 @@ function snapshot_decode_clients(string $body): ?array
         $data = $data[0];
     }
     return is_array($data) && isset($data['nps'], $data['companies']) && is_array($data['nps']) && is_array($data['companies']) ? $data : null;
+}
+
+function snapshot_decode_ppc(string $body): ?array
+{
+    $data = json_decode($body, true);
+    if (!is_array($data)) {
+        return null;
+    }
+    if ($data !== [] && array_keys($data) !== range(0, count($data) - 1)) {
+        if (isset($data['message']) || isset($data['error'])) {
+            return null;
+        }
+        $data = [$data];
+    }
+    return array_values(array_filter($data, static fn (mixed $row): bool => is_array($row) && $row !== []));
 }
 
 function snapshot_decode_seo(string $body): ?array
