@@ -57,12 +57,12 @@ if ($token !== '') {
 $only = null;
 $requested = trim((string) ($_GET['sources'] ?? ''));
 if ($requested !== '') {
-    $aliases = ['invoices' => ['invoices_br', 'invoices_int', 'invoices_pa', 'invoices_mx']];
-    $known = ['invoices_br', 'invoices_int', 'invoices_pa', 'invoices_mx', 'ads', 'costs', 'clients', 'goals', 'sales', 'seo'];
+    $aliases = ['invoices' => ['invoices_br', 'invoices_int', 'invoices_pa', 'invoices_mx'], 'ppc' => SNAPSHOT_PPC];
+    $known = ['invoices_br', 'invoices_int', 'invoices_pa', 'invoices_mx', 'ads', 'costs', 'clients', 'goals', 'sales', 'seo', 'ppc_accounts', 'ppc_campaigns', 'ppc_honeymoon', 'ppc_late'];
     $only = [];
     foreach (array_filter(array_map('trim', explode(',', strtolower($requested)))) as $name) {
         if (!isset($aliases[$name]) && !in_array($name, $known, true)) {
-            respond(400, ['ok' => false, 'error' => "Unknown source: {$name}. Use invoices, ads, costs, clients, goals, sales or seo."]);
+            respond(400, ['ok' => false, 'error' => "Unknown source: {$name}. Use invoices, ads, costs, clients, goals, sales, seo or ppc."]);
         }
         array_push($only, ...($aliases[$name] ?? [$name]));
     }
@@ -80,7 +80,7 @@ try {
     respond(503, ['ok' => false, 'error' => $error->getMessage()]);
 }
 
-$labels = ['invoices_br' => 'Brazil', 'invoices_int' => 'International', 'invoices_pa' => 'Panama', 'invoices_mx' => 'Mexico', 'ads' => 'Ads', 'costs' => 'Subscription costs (Xero)', 'clients' => 'Clients and NPS (HubSpot)', 'goals' => 'Sales goals (HubSpot)', 'sales' => 'Sales (HubSpot)', 'seo' => 'SEO KPIs'];
+$labels = ['invoices_br' => 'Brazil', 'invoices_int' => 'International', 'invoices_pa' => 'Panama', 'invoices_mx' => 'Mexico', 'ads' => 'Ads', 'costs' => 'Subscription costs (Xero)', 'clients' => 'Clients and NPS (HubSpot)', 'goals' => 'Sales goals (HubSpot)', 'sales' => 'Sales (HubSpot)', 'seo' => 'SEO KPIs', 'ppc_accounts' => 'PPC accounts', 'ppc_campaigns' => 'PPC campaigns', 'ppc_honeymoon' => 'PPC Honeymoon', 'ppc_late' => 'PPC late tasks'];
 $errors = [];
 foreach ($result['sources'] as $source) {
     if (!$source['ok']) {

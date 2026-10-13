@@ -40,6 +40,7 @@ function asset(string $path): string
                 <button class="nav-item is-active" data-view="overview" data-title="Overview"><span class="nav-icon">◍</span>Overview</button>
                 <button class="nav-item" data-view="sales" data-title="Sales"><span class="nav-icon">◆</span>Sales</button>
                 <button class="nav-item" data-view="seo" data-title="SEO"><span class="nav-icon">◑</span>SEO</button>
+                <button class="nav-item" data-view="ppc" data-title="PPC"><span class="nav-icon">◧</span>PPC</button>
                 <button class="nav-item" data-view="clients" data-title="Client view"><span class="nav-icon">◉</span>Client view</button>
                 <button class="nav-item" data-view="invoices" data-title="Invoices"><span class="nav-icon">◒</span>Invoices</button>
                 <button class="nav-item" data-view="late" data-title="Late invoices"><span class="nav-icon">◔</span>Late invoices</button>
@@ -420,6 +421,21 @@ function asset(string $path): string
                     </div>
                     <button type="button" class="seo-toggle" id="seo-clients-toggle" hidden></button>
                 </article>
+            </section>
+
+            <section class="view" id="ppc-view" aria-labelledby="page-title">
+                <div class="section-intro">
+                    <div>
+                        <p class="eyebrow">PPC team</p>
+                        <h2>Goals in focus</h2>
+                        <p class="section-copy">Google Ads and Meta Ads performance against each account's goal for the current month, plus client NPS, Honeymoon progress and late tasks. The reporting period above does not apply to this page.</p>
+                        <p class="manual-input-status" id="ppc-sources-note" data-tone="muted" aria-live="polite"></p>
+                    </div>
+                </div>
+                <div id="ppc-overview"></div>
+                <div id="ppc-nps"></div>
+                <div id="ppc-honeymoon"></div>
+                <div id="ppc-late"></div>
             </section>
 
             <section class="view" id="invoices-view" aria-labelledby="page-title">
@@ -1371,6 +1387,18 @@ function asset(string $path): string
             </footer>
         </form>
     </dialog>
+    <dialog class="modal is-wide" id="ppc-campaigns-modal" aria-labelledby="ppc-campaigns-title">
+        <div class="modal-form">
+            <header class="modal-header">
+                <div>
+                    <p class="eyebrow" id="ppc-campaigns-sub">Campaigns</p>
+                    <h2 id="ppc-campaigns-title">Campaigns</h2>
+                </div>
+                <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+            </header>
+            <div id="ppc-campaigns-body"></div>
+        </div>
+    </dialog>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     <script src="<?= asset('assets/core.js') ?>"></script>
     <script src="<?= asset('assets/overview.js') ?>"></script>
@@ -1384,6 +1412,7 @@ function asset(string $path): string
     <script src="<?= asset('assets/targets.js') ?>"></script>
     <script src="<?= asset('assets/margin-cogs.js') ?>"></script>
     <script src="<?= asset('assets/seo.js') ?>"></script>
+    <script src="<?= asset('assets/ppc.js') ?>"></script>
     <script src="<?= asset('assets/app.js') ?>"></script>
 </body>
 </html>
