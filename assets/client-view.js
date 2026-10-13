@@ -2,7 +2,7 @@
 // Uma tela por cliente para acompanhar escalações: pagamentos (Xero), histórico de NPS (WeHelp) e a data de
 // onboarding (invoice com onboarding fee no Xero). O vínculo WeHelp <-> Xero é pelo nome normalizado da empresa.
 
-const CLIENTS_ENDPOINT = 'ppc-nps.php?service=seo';
+const CLIENTS_ENDPOINTS = ['ppc-nps.php?service=seo', 'ppc-nps.php'];
 const CLIENT_DAY_MS = 24 * 60 * 60 * 1000;
 // Palavras que não distinguem uma empresa da outra: tipo societário e conectores (LTDA, S.A. de C.V., Inc...).
 const CLIENT_NAME_NOISE = new Set([
@@ -13,36 +13,57 @@ const CLIENT_NAME_NOISE = new Set([
 state.clients = { status: 'loading', data: null, errors: [], warnings: [], fetchedAt: null };
 state.clientView = { paidOpen: false, selected: null, listCache: null, indexCache: null, optionsFor: null, labels: new Map() };
 
+// O n8n separa o NPS por serviço: ppc-nps.php?service=seo devolve só SEO e ppc-nps.php só os que não são SEO.
+// A Client view precisa dos dois, então busca em paralelo e junta (uma das duas falhar não derruba a outra).
+async function fetchClientsSource(url) {
+    const response = redirectIfSignedOut(await fetch(url, { cache: 'no-store' }));
+    const body = await response.json().catch(() => null);
+    if (!body) throw new Error(`The server answered HTTP ${response.status}.`);
+    if (body.configured === false) return { off: true, error: body.error || null };
+    if (!response.ok) throw new Error(body.error || `The server answered HTTP ${response.status}.`);
+    return { off: false, rows: body.rows || [], responses: body.responses || [], fetchedAt: body.fetchedAt || null };
+}
+
 async function loadClients() {
     state.clients = { ...state.clients, status: 'loading' };
     renderClientView();
-    try {
-        const response = redirectIfSignedOut(await fetch(CLIENTS_ENDPOINT, { cache: 'no-store' }));
-        const body = await response.json().catch(() => null);
-        if (!body) throw new Error(`The server answered HTTP ${response.status}.`);
-        if (body.configured === false) {
-            state.clients = { status: 'off', data: null, errors: body.error ? [body.error] : [], warnings: [], fetchedAt: null };
-        } else if (!response.ok) {
-            throw new Error(body.error || `The server answered HTTP ${response.status}.`);
-        } else {
-            const companies = new Map();
-            (body.rows || []).forEach((row) => {
-                if (row.company && row.company !== '__summary__' && !companies.has(row.company)) companies.set(row.company, { id: String(row.company), name: row.dashboard_name || row.company, domain: null });
-            });
-            const nps = (body.responses || []).filter((row) => row.company).map((row) => ({
-                id: String(row.response_id),
+    const settled = await Promise.allSettled(CLIENTS_ENDPOINTS.map(fetchClientsSource));
+    const loaded = settled.filter((item) => item.status === 'fulfilled' && !item.value.off).map((item) => item.value);
+    const errors = settled.filter((item) => item.status === 'rejected').map((item) => item.reason?.message || 'Request failed.');
+    if (!loaded.length) {
+        const offErrors = settled.filter((item) => item.status === 'fulfilled' && item.value.off).map((item) => item.value.error).filter(Boolean);
+        state.clients = errors.length
+            ? { status: 'error', data: null, errors, warnings: [], fetchedAt: null }
+            : { status: 'off', data: null, errors: [...new Set(offErrors)], warnings: [], fetchedAt: null };
+        renderClientView();
+        return;
+    }
+    const companies = new Map();
+    const nps = [];
+    const seen = new Set();
+    loaded.forEach((source) => {
+        source.rows.forEach((row) => {
+            if (row.company && row.company !== '__summary__' && !companies.has(row.company)) companies.set(row.company, { id: String(row.company), name: row.dashboard_name || row.company, domain: null });
+        });
+        source.responses.filter((row) => row.company).forEach((row) => {
+            const id = String(row.response_id);
+            if (seen.has(id)) return;
+            seen.add(id);
+            // Cliente com respostas mas sem linha de agregado ainda aparece, pelo próprio nome da empresa.
+            if (!companies.has(row.company)) companies.set(row.company, { id: String(row.company), name: row.dashboard_name || row.company, domain: null });
+            nps.push({
+                id,
                 companyId: String(row.company),
                 score: hasValue(row.evaluation) ? Number(row.evaluation) : null,
                 at: String(row.date_reply || '').slice(0, 10) || null,
                 type: 'NPS',
                 survey: 'WeHelp',
                 comment: row.comment || null,
-            }));
-            state.clients = { status: 'ready', data: { companies: [...companies.values()], nps }, errors: [], warnings: [], fetchedAt: body.fetchedAt || null };
-        }
-    } catch (error) {
-        state.clients = { status: 'error', data: null, errors: [error.message], warnings: [], fetchedAt: null };
-    }
+            });
+        });
+    });
+    const fetchedAt = loaded.map((source) => source.fetchedAt).filter(Boolean).sort().pop() || null;
+    state.clients = { status: 'ready', data: { companies: [...companies.values()], nps }, errors: [], warnings: errors, fetchedAt };
     renderClientView();
 }
 
