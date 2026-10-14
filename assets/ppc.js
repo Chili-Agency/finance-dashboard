@@ -31,7 +31,7 @@ state.ppcUi = {
     channel: [],
     collapsedGroups: [PPC_NO_DATA],
     hm: { status: null, week: null, expanded: null, legacyOpen: false },
-    nps: { period: null, expanded: null },
+    nps: { period: null, expanded: null, search: '' },
     drawer: { row: null, status: 'idle', items: [], message: '' },
     charts: {},
     sections: { nps: ppcStored('nps'), hm: ppcStored('hm'), late: ppcStored('late') },
@@ -415,7 +415,11 @@ function renderPpcNps() {
     const noDataCount = rows.filter((item) => !item.entry.responses).length;
 
     const select = model.months.length ? `<select id="ppc-nps-period" aria-label="NPS period"><optgroup label="Month">${model.months.map((month) => `<option value="month:${month}"${period && period.type === 'month' && period.value === month ? ' selected' : ''}>${escapeHtml(ppcNpsMonth(month))}</option>`).join('')}</optgroup>${model.years.length ? `<optgroup label="Year (cumulative)">${model.years.map((year) => `<option value="year:${year}"${period && period.type === 'year' && period.value === year ? ' selected' : ''}>Year ${year}</option>`).join('')}</optgroup>` : ''}</select>` : '';
-    const head = `<div class="ppc-nps-tools">${select}</div>`;
+    const search = state.ppcUi.nps.search;
+    const query = search.trim().toLowerCase();
+    const visibleRows = query ? rows.filter((item) => `${item.entry.company || ''} ${item.entry.dashboard_name || ''}`.toLowerCase().includes(query)) : rows;
+    const searchBox = `<input type="search" id="ppc-nps-search" class="ppc-nps-search" placeholder="Search client…" aria-label="Filter NPS by client" autocomplete="off" value="${escapeHtml(search)}">`;
+    const head = `<div class="ppc-nps-tools">${searchBox}${select}</div>`;
     const summaryBlock = summary ? `
         <div class="ppc-nps-summary">
             <div><span class="stat-label">${showAverage ? 'Average score' : 'Overall NPS'} · ${escapeHtml(periodLabel)}</span>
@@ -425,15 +429,21 @@ function renderPpcNps() {
             <div class="ppc-nps-side"><span>${plural(summaryResponses, 'response')} · ${ppcHas(summary.fill_rate) ? `${Math.round(summary.fill_rate)}% fill rate` : DASH}</span>${summary.updated_at ? `<small>Updated ${escapeHtml(ppcDateTimeText(new Date(summary.updated_at)))}</small>` : ''}</div>
             <div class="ppc-nps-pills"><span><b>${number(lowSample)}</b> Low sample</span><span><b>${number(noDataCount)}</b> No data</span></div>
         </div>` : '';
-    const table = rows.length ? `
+    const table = !rows.length ? ppcMessage('No NPS data available.') : !visibleRows.length ? ppcMessage(`No clients match "${escapeHtml(search.trim())}".`) : `
         <div class="table-scroll">
             <table class="entries-table ppc-nps-table">
                 <thead><tr><th>Client</th><th class="align-right">NPS / average</th><th class="align-right">Status</th><th>Fill rate</th></tr></thead>
-                <tbody>${rows.map((item) => ppcNpsRow(item, evaluationsFor(item.entry.company), model, periodLabel)).join('')}</tbody>
+                <tbody>${visibleRows.map((item) => ppcNpsRow(item, evaluationsFor(item.entry.company), model, periodLabel)).join('')}</tbody>
             </table>
         </div>
-        <p class="manual-input-status" data-tone="muted">Excellent: NPS ≥ 50 or average ≥ 9 · Neutral: NPS 0–49 or average 7–8.9 · Critical: NPS &lt; 0 or average &lt; 7.</p>` : ppcMessage('No NPS data available.');
+        <p class="manual-input-status" data-tone="muted">Excellent: NPS ≥ 50 or average ≥ 9 · Neutral: NPS 0–49 or average 7–8.9 · Critical: NPS &lt; 0 or average &lt; 7.</p>`;
+    const hadFocus = document.activeElement && document.activeElement.id === 'ppc-nps-search';
+    const caret = hadFocus ? document.activeElement.selectionStart : null;
     host.innerHTML = ppcSection('nps', 'NPS · via WeHelp', 'Client NPS', head, `${summaryBlock}${table}`);
+    if (hadFocus) {
+        const input = $('#ppc-nps-search');
+        if (input) { input.focus(); input.setSelectionRange(caret, caret); }
+    }
 }
 
 function ppcTrend(delta) {
@@ -736,6 +746,12 @@ if (ppcView) {
         if (!action) return;
         event.preventDefault();
         handlePpcAction(action);
+    });
+    ppcView.addEventListener('input', (event) => {
+        if (event.target.id !== 'ppc-nps-search') return;
+        state.ppcUi.nps.search = event.target.value;
+        state.ppcUi.nps.expanded = null;
+        renderPpc();
     });
     ppcView.addEventListener('change', (event) => {
         if (event.target.id !== 'ppc-nps-period') return;
