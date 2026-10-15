@@ -216,7 +216,7 @@ targetsForm.addEventListener('submit', async (event) => {
     try {
         const { entry: saved } = await targetsRequest({
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
             body: JSON.stringify(entry),
         });
         storeTargetEntry(saved);

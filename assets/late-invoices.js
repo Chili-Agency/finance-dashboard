@@ -313,7 +313,7 @@ if (rulesForm) {
         try {
             const body = await lateRulesRequest({
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
                 body: JSON.stringify({ rules }),
             });
             storeLateRules(body.rules);

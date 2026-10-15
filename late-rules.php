@@ -23,6 +23,9 @@ try {
         case 'POST':
 
             auth_require_permission($currentUser, 'manual_inputs');
+            if (!auth_check_csrf($_SERVER['HTTP_X_CSRF_TOKEN'] ?? null)) {
+                respond(403, ['error' => 'This page expired. Reload it and try again.']);
+            }
             $input = json_decode((string) file_get_contents('php://input'), true);
             if (!is_array($input) || !isset($input['rules']) || !is_array($input['rules']) || $input['rules'] === []) {
                 respond(400, ['error' => 'Send the rates as { "rules": [...] }.']);
