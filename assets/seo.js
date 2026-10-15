@@ -243,7 +243,10 @@ function renderSeoKpis() {
     const goals = ready ? source.goals : SEO_DEFAULT_GOALS;
     const kwTotal = clients.reduce((sum, client) => sum + (Number(client.kwTotal) || 0), 0);
     const kwPage1 = clients.reduce((sum, client) => sum + (Number(client.kwPage1) || 0), 0);
-    const kwPrev = clients.reduce((sum, client) => sum + (Number(client.kwPrev) || 0), 0);
+    // Variação só entre clientes que têm o mês anterior; sem ele, o total inteiro virava "alta".
+    const kwComparable = clients.filter((client) => hasValue(client.kwPage1) && hasValue(client.kwPrev));
+    const kwPage1Compared = kwComparable.reduce((sum, client) => sum + Number(client.kwPage1), 0);
+    const kwPrev = kwComparable.reduce((sum, client) => sum + Number(client.kwPrev), 0);
     const scored = clients.filter((client) => hasValue(client.pagespeed));
     const passing = scored.filter((client) => client.pagespeed >= goals.pagespeed).length;
     const withDr = (list) => list.filter((client) => hasValue(client.drStart) && hasValue(client.drEnd));
@@ -267,7 +270,7 @@ function renderSeoKpis() {
             ? 'Example data. Once connected, keywords, PageSpeed and DR show the current month up to yesterday and do not follow the reporting period above.'
             : 'Keywords, PageSpeed and DR do not follow the reporting period above.';
     setText('#seo-kw', ready ? number(kwPage1) : blank);
-    setText('#seo-kw-note', ready ? `${deltaText(kwPage1 - kwPrev)} vs previous month · of ${number(kwTotal)} ranking (${percentOr(share(kwPage1, kwTotal), 0)})` : 'Waiting for SEO KPIs');
+    setText('#seo-kw-note', ready ? `${deltaText(kwPage1Compared - kwPrev)} vs previous month · of ${number(kwTotal)} ranking (${percentOr(share(kwPage1, kwTotal), 0)})` : 'Waiting for SEO KPIs');
     setText('#seo-kw-movers', movers.length ? `Top climbers: ${movers.map((item) => `${item.name} +${item.delta}`).join(' · ')}` : '');
     $('#seo-kw-progress').innerHTML = ready ? seoProgress({
         caption: '',
