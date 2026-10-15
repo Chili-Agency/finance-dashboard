@@ -171,7 +171,12 @@ function salesPeriodLabel(window) {
 
 const salesWithin = (day, window) => Boolean(day) && (!window.from || day >= window.from) && (!window.to || day <= window.to);
 const salesInScope = (market) => state.scope === 'all' || market === state.scope;
-const dealShare = (deal) => (state.category === 'all' ? 1 : Number((deal.shares || {})[state.category]) || 0);
+const dealShare = (deal) => {
+    if (state.category === 'all') return 1;
+    const shares = deal.shares || {};
+    // Deal sem serviço mapeado vem em "other"; na visão Others ele conta junto.
+    return state.category === 'others' ? (Number(shares.others) || 0) + (Number(shares.other) || 0) : Number(shares[state.category]) || 0;
+};
 const dealValue = (deal) => (Number(deal.valueUsd) || 0) * dealShare(deal);
 const sumOf = (items, valueOf) => items.reduce((total, item) => total + valueOf(item), 0);
 
