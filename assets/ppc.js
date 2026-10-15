@@ -237,7 +237,7 @@ function renderPpcCharts(rows, channels, regionGroups) {
     const sets = {
         status: PPC_STATUSES.map((status, index) => ({ label: status, value: rows.filter((account) => account.status === status).length, color: PPC_STATUS_COLORS[index], filter: 'status', active: ui.status.includes(status) })),
         channel: channels.map((channel) => ({ label: channel, value: rows.filter((account) => account.channel === channel).length, color: ppcChannelColor(channel), filter: 'channel', active: ui.channel.includes(channel) })),
-        region: regionGroups.map((group) => ({ label: ppcRegionLabel(group.name), value: rows.filter((account) => ppcRegion(account.region) === group.name).length, color: PPC_REGION_COLORS[group.name], filter: null, active: false })),
+        region: regionGroups.map((group) => ({ label: ppcRegionLabel(group.name), value: group.rows.length, color: PPC_REGION_COLORS[group.name], filter: null, active: false })),
     };
     Object.entries(sets).forEach(([key, items]) => {
         const canvas = $(`#ppc-chart-${key}`);
