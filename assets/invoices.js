@@ -14,7 +14,7 @@ function renderMetrics(invoices) {
 
 function renderStatusChart(invoices) {
     const data = { authorised: 0, paid: 0, voided: 0 };
-    invoices.forEach((invoice) => { const status = normalStatus(invoice); if (status === 'PAID') data.paid++; else if (status === 'VOIDED') data.voided++; else data.authorised++; });
+    invoices.forEach((invoice) => { const status = normalStatus(invoice); if (status === 'PAID') data.paid++; else if (status === 'VOIDED') data.voided++; else if (!EXCLUDED_STATUSES.includes(status)) data.authorised++; });
     const values = [data.authorised, data.paid, data.voided];
     if (state.statusChart) state.statusChart.destroy();
     state.statusChart = new Chart($('#status-chart'), { type: 'doughnut', data: { labels: ['Authorised', 'Paid', 'Voided'], datasets: [{ data: values, backgroundColor: [colors.authorised, colors.paid, colors.voided], borderWidth: 0, spacing: 3 }] }, options: { responsive: true, maintainAspectRatio: false, cutout: '73%', plugins: { legend: { display: false }, tooltip: { callbacks: { label: (context) => ` ${context.label}: ${context.raw}` } } } } });
@@ -24,7 +24,7 @@ function renderStatusChart(invoices) {
 }
 
 function renderMarkets(invoices) {
-    const totals = {}; invoices.forEach((invoice) => { totals[invoice.companyKey] = (totals[invoice.companyKey] || 0) + amount(invoice); });
+    const totals = {}; invoices.filter(isBillable).forEach((invoice) => { totals[invoice.companyKey] = (totals[invoice.companyKey] || 0) + amount(invoice); });
     const max = Math.max(...Object.values(totals), 1);
     $('#market-list').innerHTML = Object.entries(companyLabels).map(([key, label]) => `<div class="market-row"><span class="market-name">${label}</span><div class="market-bar"><span style="width:${((totals[key] || 0) / max) * 100}%"></span></div><span class="market-value">${money(totals[key] || 0)}</span></div>`).join('');
 }
