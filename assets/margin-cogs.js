@@ -105,7 +105,7 @@ async function loadMarginInputs() {
 async function saveMarginInput(entry) {
     const { entry: saved } = await marginRequest({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(entry),
     });
     storeMarginEntry(saved);
@@ -189,7 +189,7 @@ function fillMarginValues(entry) {
 function loadMarginEntryIntoForm() {
     const { month, scope, category } = marginForm.elements;
     const entry = month.value ? state.marginInputs[marginInputKey(month.value, scope.value, category.value)] : null;
-    if (entry) fillMarginValues(entry);
+    fillMarginValues(entry);
     $('#margin-form-submit').textContent = entry ? 'Update figures' : 'Save figures';
 }
 
