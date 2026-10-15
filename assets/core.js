@@ -846,7 +846,7 @@ function retentionOverWindow(ctx, window) {
         const previous = previousWindowOf(current);
         const meta = { ...emptyScorecardMeta(), collectClients: true };
         const m = measureWindow(ctx, { current, previous, beforePrevious: previousWindowOf(previous) }, meta);
-        if (index === 0) { totals.hasBase = m.hasBase; totals.initial = m.initial; totals.onboardingInBase = m.onboardingInBase; }
+        if (m.hasBase && !totals.hasBase) { totals.hasBase = true; totals.initial = m.initial; totals.onboardingInBase = m.onboardingInBase; }
         totals.churned += m.churned;
         totals.churnedLost += m.churnedLost;
         totals.churnedDowngrade += m.churnedDowngrade;
