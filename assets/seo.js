@@ -4,25 +4,6 @@ const SEO_CLIENT_ROWS = 6;
 const SEO_EVENT_ROWS = 6;
 const SEO_MOVERS = 3;
 const SEO_DEFAULT_GOALS = { kwPage1: 400, pagespeed: 80, drDelta: 2 };
-const SEO_MOCK = {
-    month: null,
-    goals: SEO_DEFAULT_GOALS,
-    clients: [
-        { name: 'Pulsar', kwTotal: 60, kwPage1: 14, kwPrev: 11, pagespeed: 62, drStart: 31, drEnd: 33 },
-        { name: 'Schneider Electric', kwTotal: 120, kwPage1: 71, kwPrev: 68, pagespeed: 84, drStart: 78, drEnd: 78 },
-        { name: 'Dportenis', kwTotal: 80, kwPage1: 41, kwPrev: 36, pagespeed: 71, drStart: 52, drEnd: 54 },
-        { name: 'Diunsa', kwTotal: 70, kwPage1: 29, kwPrev: 30, pagespeed: 58, drStart: 44, drEnd: 45 },
-        { name: 'Mapei', kwTotal: 50, kwPage1: 18, kwPrev: 15, pagespeed: 88, drStart: 47, drEnd: 50 },
-        { name: 'Virbac', kwTotal: 40, kwPage1: 9, kwPrev: 10, pagespeed: 76, drStart: 39, drEnd: 39 },
-        { name: 'Multinational PR', kwTotal: 35, kwPage1: 17, kwPrev: 13, pagespeed: 91, drStart: 22, drEnd: 25 },
-        { name: 'Salesforge', kwTotal: 60, kwPage1: 22, kwPrev: 18, pagespeed: 93, drStart: 35, drEnd: 38 },
-        { name: 'Sacflow', kwTotal: 30, kwPage1: 4, kwPrev: 2, pagespeed: 69, drStart: 18, drEnd: 21 },
-        { name: 'Nexyun', kwTotal: 45, kwPage1: 8, kwPrev: 6, pagespeed: 82, drStart: 15, drEnd: 16 },
-        { name: 'ECX Pay', kwTotal: 50, kwPage1: 6, kwPrev: 3, pagespeed: 74, drStart: 12, drEnd: 15 },
-        { name: 'Joico', kwTotal: 40, kwPage1: 19, kwPrev: 19, pagespeed: 86, drStart: 41, drEnd: 42 },
-    ],
-};
-
 state.seo = { status: 'loading', data: null, errors: [], warnings: [], fetchedAt: null };
 state.seoView = { allClients: false };
 
@@ -113,7 +94,7 @@ function renderSeoSources() {
     let tone = 'muted';
     let kpis;
     if (seo.status === 'loading') kpis = 'Loading SEO KPIs…';
-    else if (seo.status === 'off') { kpis = 'Keywords, PageSpeed and DR show example data until N8N_WEBHOOK_SEO is set in the .env with the webhook of the n8n workflow.'; tone = 'sample'; }
+    else if (seo.status === 'off') { kpis = 'SEO KPIs are not connected: set N8N_WEBHOOK_SEO in the .env with the webhook of the n8n workflow.'; tone = 'error'; }
     else if (seo.status === 'error') { kpis = `Could not load the SEO KPIs: ${seo.errors.join(' · ')}`; tone = 'error'; }
     else {
         kpis = `SEO KPIs: ${plural(seo.data.clients.length, 'client')}${seo.data.month ? ` for ${monthLabel(monthFromKey(seo.data.month))}` : ''}${seo.fetchedAt ? `, fetched ${relativeTime(new Date(seo.fetchedAt).getTime())}` : ''}.`;
@@ -236,8 +217,7 @@ function renderSeoNps(nps) {
 
 function renderSeoKpis() {
     const seo = state.seo;
-    const example = seo.status === 'off';
-    const source = seo.status === 'ready' ? seo.data : example ? SEO_MOCK : null;
+    const source = seo.status === 'ready' ? seo.data : null;
     const ready = source !== null;
     const clients = ready ? source.clients : [];
     const goals = ready ? source.goals : SEO_DEFAULT_GOALS;
@@ -247,8 +227,7 @@ function renderSeoKpis() {
     const scored = clients.filter((client) => hasValue(client.pagespeed));
     const passing = scored.filter((client) => client.pagespeed >= goals.pagespeed).length;
     const withDr = (list) => list.filter((client) => hasValue(client.drStart) && hasValue(client.drEnd));
-    const drExample = ready && withDr(clients).length === 0;
-    const ranked = drExample ? withDr(SEO_MOCK.clients) : withDr(clients);
+    const ranked = withDr(clients);
     const growing = ranked.filter((client) => client.drEnd - client.drStart >= goals.drDelta).length;
     const movers = clients
         .filter((client) => hasValue(client.kwPage1) && hasValue(client.kwPrev))
@@ -260,12 +239,10 @@ function renderSeoKpis() {
     const blank = ready ? '' : DASH;
     const scope = $('#seo-kpi-scope');
     const monthName = seo.status === 'ready' && seo.data.month ? monthLabel(monthFromKey(seo.data.month)) : 'the current month';
-    scope.dataset.tone = example ? 'sample' : 'muted';
+    scope.dataset.tone = 'muted';
     scope.textContent = seo.status === 'ready'
         ? `Keywords, PageSpeed and DR show ${monthName} up to yesterday, compared with the end of the previous month. They do not follow the reporting period above.`
-        : example
-            ? 'Example data. Once connected, keywords, PageSpeed and DR show the current month up to yesterday and do not follow the reporting period above.'
-            : 'Keywords, PageSpeed and DR do not follow the reporting period above.';
+        : 'Keywords, PageSpeed and DR do not follow the reporting period above.';
     setText('#seo-kw', ready ? number(kwPage1) : blank);
     setText('#seo-kw-note', ready ? `${deltaText(kwPage1 - kwPrev)} vs previous month · of ${number(kwTotal)} ranking (${percentOr(share(kwPage1, kwTotal), 0)})` : 'Waiting for SEO KPIs');
     setText('#seo-kw-movers', movers.length ? `Top climbers: ${movers.map((item) => `${item.name} +${item.delta}`).join(' · ')}` : '');
@@ -280,7 +257,7 @@ function renderSeoKpis() {
     setText('#seo-ps', ready ? number(passing) : blank);
     setText('#seo-ps-note', ready ? `of ${plural(scored.length, 'site')} with PageSpeed ${goals.pagespeed} or more` : 'Waiting for SEO KPIs');
     setText('#seo-dr', ready ? number(growing) : blank);
-    setText('#seo-dr-note', ready ? `${drExample ? 'Example data, DR is not connected yet · ' : ''}of ${plural(ranked.length, 'client')} gaining ${goals.drDelta}+ DR points in the month` : 'Waiting for SEO KPIs');
+    setText('#seo-dr-note', ready ? `of ${plural(ranked.length, 'client')} gaining ${goals.drDelta}+ DR points in the month` : 'Waiting for SEO KPIs');
 
     const sorted = [...clients].sort((a, b) => (Number(b.kwPage1) || 0) - (Number(a.kwPage1) || 0) || a.name.localeCompare(b.name));
     const shown = state.seoView.allClients ? sorted : sorted.slice(0, SEO_CLIENT_ROWS);
@@ -308,7 +285,7 @@ function renderSeoKpis() {
     const toggle = $('#seo-clients-toggle');
     toggle.hidden = clients.length <= SEO_CLIENT_ROWS;
     toggle.textContent = state.seoView.allClients ? 'Show fewer clients' : `Show all ${clients.length} clients`;
-    setText('#seo-clients-meta', clients.length ? `${plural(clients.length, 'client')}${example ? ' · example data' : ''}` : 'No data');
+    setText('#seo-clients-meta', clients.length ? `${plural(clients.length, 'client')}` : 'No data');
 }
 
 function deltaText(value) {
