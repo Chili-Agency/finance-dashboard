@@ -103,7 +103,7 @@ async function loadUnitInputs() {
 async function saveUnitInput(entry) {
     const { entry: saved } = await unitRequest({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(entry),
     });
     storeUnitEntry(saved);
@@ -152,7 +152,7 @@ function clientLifetimes() {
     invoices.forEach((invoice) => {
         const date = invoiceDate(invoice);
         if (!date) return;
-        const key = contactKey(invoice);
+        const key = retentionKey(invoice);
         const entry = clients.get(key) || { key, name: invoice.Contact?.Name || 'Unknown client', scope: invoice.companyKey, first: date, last: date, revenue: 0, months: new Set(), invoices: 0 };
         if (date < entry.first) entry.first = date;
         if (date > entry.last) entry.last = date;
@@ -228,13 +228,13 @@ function newClientsInWindow(window) {
     inScopeBillable().forEach((invoice) => {
         const date = invoiceDate(invoice);
         if (!date) return;
-        const key = contactKey(invoice);
+        const key = retentionKey(invoice);
         const known = firstSeen.get(key);
         if (!known || date < known) firstSeen.set(key, date);
     });
     if (!firstSeen.size) return null;
     const historyStart = monthKey(new Date(Math.min(...[...firstSeen.values()].map((date) => date.getTime()))));
-    const inView = new Set(scopedInvoices().filter((invoice) => inWindow(invoiceDate(invoice), window)).map(contactKey));
+    const inView = new Set(scopedInvoices().filter((invoice) => inWindow(invoiceDate(invoice), window)).map(retentionKey));
     let count = 0;
     firstSeen.forEach((date, key) => {
         if (inView.has(key) && inWindow(date, window) && monthKey(date) > historyStart) count += 1;

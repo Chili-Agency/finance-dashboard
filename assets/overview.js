@@ -47,7 +47,7 @@ function xeroNewSalesByMonth(monthKeys) {
     inScopeBillable().forEach((invoice) => {
         const date = invoiceDate(invoice);
         if (!date || !salesOf(invoice).isSale) return;
-        const key = contactKey(invoice);
+        const key = retentionKey(invoice);
         const known = firstSale.get(key);
         if (!known || date < known.date) firstSale.set(key, { date, invoice });
     });
