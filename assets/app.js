@@ -82,6 +82,5 @@ loadLateRules();
 loadAds();
 loadCosts();
 loadClients();
-loadSalesGoals();
 loadSeo();
 loadPpc();
