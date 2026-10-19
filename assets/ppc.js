@@ -333,7 +333,10 @@ function ppcNpsMonth(month) {
 }
 
 function ppcAggregateYear(history, year) {
-    const months = (history || []).filter((item) => String(item.month).startsWith(`${year}-`));
+    return ppcAggregateMonths((history || []).filter((item) => String(item.month).startsWith(`${year}-`)), `${year}`);
+}
+
+function ppcAggregateMonths(months, label) {
     if (!months.length) return null;
     const totals = months.reduce((acc, item) => ({
         promoters: acc.promoters + (item.promoters ?? 0),
@@ -347,7 +350,7 @@ function ppcAggregateYear(history, year) {
     const base = months[months.length - 1];
     return {
         ...base,
-        month: `${year}`,
+        month: label,
         nps: totals.responses > 0 ? Math.round(((totals.promoters - totals.detractors) / totals.responses) * 100) : null,
         fill_rate: totals.total_sent > 0 ? (totals.total_answered / totals.total_sent) * 100 : null,
         updated_at: updated || base.updated_at,
@@ -461,6 +464,12 @@ function ppcNpsRow(item, evaluations, model, periodLabel) {
     const color = showAverage ? ppcScoreColor(average) : ppcNpsColor(row.nps);
     const status = !responses ? 'No data' : showAverage ? `Low sample · ${responses} resp.` : ppcNpsLabel(row.nps);
     const fill = Math.min(100, Math.max(0, row.fill_rate ?? 0));
+    const allEvaluations = model.evaluationsByCompany[row.company] || [];
+    const overall = ppcAggregateMonths(item.history, 'all') || row;
+    const overallResponses = overall.responses ?? 0;
+    const overallAverage = ppcAverage(allEvaluations);
+    const overallNps = ppcHas(overall.nps) ? overall.nps : null;
+    const overallLow = overallResponses > 0 && overallResponses < PPC_NPS_MIN_RESPONSES;
     const link = (evaluations[0] && evaluations[0].wehelp_url) || 'https://app.wehelpsoftware.com/en-US/responses';
     const main = `<tr class="ppc-row${expanded ? ' is-open' : ''}" data-ppc-action="toggle-nps" data-value="${escapeHtml(row.company)}" tabindex="0" role="button" aria-expanded="${expanded}">
         <td style="box-shadow:inset 3px 0 0 ${color}"><i class="ppc-chevron${expanded ? ' is-open' : ''}" aria-hidden="true"></i>${escapeHtml(row.dashboard_name || row.company)}</td>
@@ -473,10 +482,12 @@ function ppcNpsRow(item, evaluations, model, periodLabel) {
     const history = ppcNpsHistory(item.history, model.evaluationsByCompany[row.company] || []);
     const ratings = evaluations.length ? evaluations.map((entry) => `<div class="ppc-rating"><b style="color:${ppcScoreColor(Number(entry.evaluation))}">${escapeHtml(entry.evaluation)}</b><div>${entry.comment ? `<p>“${escapeHtml(entry.comment)}”</p>` : '<p class="is-muted">No comment</p>'}<small>${entry.date_reply ? escapeHtml(ppcDateText(new Date(entry.date_reply))) : DASH}</small></div></div>`).join('') : '<p class="stat-scope">No ratings submitted in this period.</p>';
     return `${main}<tr class="ppc-detail"><td colspan="4">
-        ${responses ? '' : '<p class="stat-scope">No NPS responses in this period for this client.</p>'}
-        <div class="ppc-facts">${cell('Promoters', row.promoters ?? DASH, 'var(--green)')}${cell('Passives', row.passives ?? DASH, 'var(--yellow)')}${cell('Detractors', row.detractors ?? DASH, 'var(--red-deep)')}${cell('Responses', responses)}${cell('Average score', average !== null ? `${average.toFixed(1)}/10` : DASH, ppcScoreColor(average))}${cell('Last updated', row.updated_at ? escapeHtml(ppcDateTimeText(new Date(row.updated_at))) : DASH)}</div>
+        <span class="stat-label ppc-subhead">Overall · all time</span>
+        ${overallResponses ? '' : '<p class="stat-scope">No NPS responses for this client yet.</p>'}
+        <div class="ppc-facts">${cell('NPS', overallNps !== null ? `${escapeHtml(overallNps)}${overallLow ? ' <span class="ppc-tag" style="color:var(--yellow)">Low sample</span>' : ''}` : DASH, ppcNpsColor(overallNps))}${cell('Promoters', overall.promoters ?? DASH, 'var(--green)')}${cell('Passives', overall.passives ?? DASH, 'var(--yellow)')}${cell('Detractors', overall.detractors ?? DASH, 'var(--red-deep)')}${cell('Responses', overallResponses)}${cell('Average score', overallAverage !== null ? `${overallAverage.toFixed(1)}/10` : DASH, ppcScoreColor(overallAverage))}${cell('Last updated', overall.updated_at ? escapeHtml(ppcDateTimeText(new Date(overall.updated_at))) : DASH)}</div>
+        ${overallLow ? `<p class="stat-scope">Low sample: only ${overallResponses} ${overallResponses === 1 ? 'response' : 'responses'} so far. NPS needs at least ${PPC_NPS_MIN_RESPONSES} responses to be representative, so read it together with the average score.</p>` : ''}
         <a class="ppc-link" href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer">Open in WeHelp</a>
-        ${showAverage ? `<p class="stat-scope">With ${responses} ${responses === 1 ? 'response' : 'responses'}, the NPS (${escapeHtml(row.nps)}) is not representative, so the average score is shown.</p>` : ''}
+        ${showAverage ? `<p class="stat-scope">In ${escapeHtml(periodLabel)}, with ${responses} ${responses === 1 ? 'response' : 'responses'}, the NPS (${escapeHtml(row.nps)}) is not representative, so the average score is shown.</p>` : ''}
         ${history}
         <span class="stat-label ppc-subhead">Ratings · ${escapeHtml(periodLabel)}</span>${ratings}
     </td></tr>`;
