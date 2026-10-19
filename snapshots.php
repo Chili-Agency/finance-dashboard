@@ -23,10 +23,12 @@ const SNAPSHOT_SESSION_TIMEOUT = 900;  // wait_timeout da conexão durante a bus
 // Fontes que rodam em segundo plano: o webhook só responde "comecei" e o n8n envia o resultado
 // depois para snapshot-push.php (a busca do HubSpot passa dos 100 s que o n8n cloud aceita).
 const SNAPSHOT_ASYNC = ['sales'];
-const SNAPSHOT_PPC = ['ppc_accounts', 'ppc_campaigns', 'ppc_honeymoon', 'ppc_late'];
+const SNAPSHOT_PPC = ['ppc_accounts', 'ppc_campaigns', 'ppc_honeymoon', 'ppc_late', 'ppc_creatives'];
 // Enquanto uma busca em segundo plano não devolve o resultado, não dispara outra (cliques repetidos
 // no Refresh somavam execuções simultâneas e estouravam o limite de requisições do HubSpot).
 const SNAPSHOT_ASYNC_GUARD = 600; // s
+// Coleta de PPC iniciada pelo botao Refresh: nao dispara outra enquanto a anterior pode estar rodando.
+const SNAPSHOT_PPC_COLLECT_GUARD = 600; // s
 
 /** @return array<string, string> fonte => URL do webhook */
 function snapshot_sources(array $config): array
@@ -45,6 +47,7 @@ function snapshot_sources(array $config): array
     $sources['ppc_campaigns'] = (string) ($config['n8n']['ppc_campaigns'] ?? '');
     $sources['ppc_honeymoon'] = (string) ($config['n8n']['ppc_honeymoon'] ?? '');
     $sources['ppc_late'] = (string) ($config['n8n']['ppc_late'] ?? '');
+    $sources['ppc_creatives'] = (string) ($config['n8n']['ppc_creatives'] ?? '');
     return array_filter($sources, static fn (string $url): bool => $url !== '');
 }
 
@@ -151,6 +154,54 @@ function snapshot_started_in_background(string $name, array $result): bool
         return $name === 'sales' && snapshot_decode_sales((string) $result['body']) === null;
     }
     return str_contains((string) $result['error'], 'HTTP 524');
+}
+
+/**
+ * Inicia no n8n a coleta de PPC (workflow "PPC- Campaign Review Automation"): o webhook responde na hora e o
+ * n8n grava as tabelas dele. No fim, o proprio n8n chama snapshot-refresh.php?sources=ppc para copiar o
+ * resultado para data_snapshots. Ate la, o dashboard continua mostrando a ultima copia.
+ * @return array{state:string, error:?string} state: started | running | off | failed
+ */
+function snapshot_ppc_collect(PDO $pdo, array $config): array
+{
+    $url = trim((string) ($config['n8n']['ppc_refresh'] ?? ''));
+    if ($url === '') {
+        return ['state' => 'off', 'error' => null];
+    }
+    try {
+        $select = $pdo->prepare("SELECT DATE_FORMAT(fetched_at, '%Y-%m-%d %H:%i:%s') FROM data_snapshots WHERE source = ?");
+        $select->execute([snapshot_request_key('ppc')]);
+        $requested = $select->fetchColumn();
+        if (is_string($requested) && strtotime($requested . ' UTC') > time() - SNAPSHOT_PPC_COLLECT_GUARD) {
+            return ['state' => 'running', 'error' => null];
+        }
+    } catch (Throwable $error) {
+        error_log('[snapshots] ppc collect guard: ' . $error->getMessage());
+    }
+
+    $curl = curl_init($url);
+    curl_setopt_array($curl, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => '{}',
+        CURLOPT_CONNECTTIMEOUT => 10,
+        CURLOPT_TIMEOUT => 20,
+        CURLOPT_HTTPHEADER => [
+            'Accept: application/json',
+            'Content-Type: application/json',
+            'X-API-Key: ' . (string) ($config['ppc']['api_key'] ?? ''),
+        ],
+        CURLOPT_USERAGENT => 'Chili Finance Dashboard/1.0',
+    ]);
+    curl_exec($curl);
+    $code = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($curl);
+    curl_close($curl);
+    if ($curlError !== '' || $code < 200 || $code >= 300) {
+        return ['state' => 'failed', 'error' => $curlError !== '' ? "Could not reach n8n ({$curlError})." : "n8n answered HTTP {$code}."];
+    }
+    snapshot_mark_requested($pdo, 'ppc');
+    return ['state' => 'started', 'error' => null];
 }
 
 /** Linha de controle em data_snapshots (sem payload) que guarda quando a busca foi disparada. */

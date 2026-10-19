@@ -73,6 +73,16 @@ foreach (snapshot_decode_ppc((string) $accountsSnapshot['body']) ?? [] as $row) 
         'leadsConverted' => ppc_number($row['leads_converted'] ?? null),
         'cpl' => ppc_number($row['cpl'] ?? null),
         'gap' => ppc_number($row['gap'] ?? null),
+        'conversions' => ppc_number($row['conversions'] ?? null),
+        'ctr' => ppc_number($row['ctr'] ?? null),
+        'cpc' => ppc_number($row['cpc'] ?? null),
+        'pacing' => ppc_number($row['pacing'] ?? null),
+        'attainment' => ppc_number($row['attainment'] ?? null),
+        'elapsed' => ppc_number($row['elapsed'] ?? null),
+        'maxCpl' => ppc_number($row['maximum_cpl'] ?? null),
+        'typeOfGoal' => (string) ($row['type_of_goal'] ?? ''),
+        // Aviso do workflow (ex.: acesso negado na API da plataforma); a coluna campaign so guarda isso.
+        'note' => trim((string) ($row['campaign'] ?? '')) !== '' ? trim((string) $row['campaign']) : null,
         'campaigns' => ppc_number($row['campaigns'] ?? null),
         'activeCampaigns' => ppc_number($row['active_campaigns'] ?? null),
         'updatedAt' => isset($row['updatedAt']) ? (string) $row['updatedAt'] : null,
@@ -156,7 +166,7 @@ function ppc_number(mixed $value): ?float
 
 function ppc_label(string $source): string
 {
-    return ['ppc_accounts' => 'Accounts', 'ppc_campaigns' => 'Campaigns', 'ppc_honeymoon' => 'Honeymoon', 'ppc_late' => 'Late tasks'][$source] ?? $source;
+    return ['ppc_accounts' => 'Accounts', 'ppc_campaigns' => 'Campaigns', 'ppc_honeymoon' => 'Honeymoon', 'ppc_late' => 'Late tasks', 'ppc_creatives' => 'Creatives'][$source] ?? $source;
 }
 
 function ppc_respond(int $status, array $body): void

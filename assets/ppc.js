@@ -1,6 +1,7 @@
 const PPC_ENDPOINT = 'ppc.php';
 const PPC_CAMPAIGNS_ENDPOINT = 'ppc-campaigns.php';
 const PPC_NPS_ENDPOINT = 'ppc-nps.php';
+const PPC_CREATIVES_ENDPOINT = 'ppc-creatives.php';
 const PPC_STATUSES = ['Off Track', 'On Track', 'No Objective', 'No Data'];
 const PPC_STATUS_CLASS = { 'Off Track': 'is-off', 'On Track': 'is-on', 'No Objective': 'is-muted', 'No Data': 'is-muted' };
 const PPC_KPI_CLASS = { 'Off Track': 'is-negative', 'On Track': 'is-positive', 'No Objective': 'is-neutral' };
@@ -26,15 +27,18 @@ const PPC_CLICKUP_TEAM = '9014972154';
 
 state.ppc = { status: 'loading', data: null, errors: [], warnings: [], fetchedAt: null, updatedAt: null };
 state.ppcNps = { status: 'idle', rows: [], responses: [], error: null, fetchedAt: null };
+state.ppcCreatives = { status: 'idle', items: [], month: null, error: null, fetchedAt: null };
 state.ppcUi = {
     status: [],
     channel: [],
     collapsedGroups: [PPC_NO_DATA],
     hm: { status: null, week: null, expanded: null, legacyOpen: false },
     nps: { period: null, expanded: null, search: '' },
+    creatives: { client: '', sort: 'conversions' },
     drawer: { row: null, status: 'idle', items: [], message: '' },
+    collecting: false,
     charts: {},
-    sections: { nps: ppcStored('nps'), hm: ppcStored('hm'), late: ppcStored('late') },
+    sections: { nps: ppcStored('nps'), hm: ppcStored('hm'), late: ppcStored('late'), creatives: ppcStored('creatives') },
 };
 
 function ppcStored(key) {
@@ -72,9 +76,11 @@ function ppcSortRows(rows) {
     return [...rows].sort((a, b) => rank(a) - rank(b) || (b.spend || 0) - (a.spend || 0));
 }
 
-async function loadPpc() {
-    state.ppc = { ...state.ppc, status: 'loading' };
-    renderPpc();
+async function loadPpc(silent = false) {
+    if (!silent) {
+        state.ppc = { ...state.ppc, status: 'loading' };
+        renderPpc();
+    }
     try {
         const response = redirectIfSignedOut(await fetch(PPC_ENDPOINT, { cache: 'no-store' }));
         const body = await response.json().catch(() => null);
@@ -96,9 +102,52 @@ async function loadPpc() {
             };
         }
     } catch (error) {
+        if (silent) return;
         state.ppc = { status: 'error', data: null, errors: [error.message], warnings: [], fetchedAt: null, updatedAt: null };
     }
     renderPpc();
+    if (state.ppc.status === 'ready') loadPpcCreatives();
+    if (!silent) ppcWatchCollection();
+}
+
+// O botao Refresh inicia a coleta de PPC no n8n (snapshot-refresh.php devolve ppcCollection). Os dados novos
+// chegam ao banco em alguns minutos, entao a tela recarrega sozinha ate a copia mudar (maximo 8 minutos).
+let ppcPollTimer = null;
+function ppcWatchCollection() {
+    const collection = state.lastRefresh && state.lastRefresh.ppcCollection;
+    if (collection !== 'started' && collection !== 'running') return;
+    state.lastRefresh = { ...state.lastRefresh, ppcCollection: null };
+    const stop = () => { clearInterval(ppcPollTimer); ppcPollTimer = null; state.ppcUi.collecting = false; renderPpcSources(); };
+    const before = state.ppc.fetchedAt;
+    let ticks = 0;
+    clearInterval(ppcPollTimer);
+    state.ppcUi.collecting = true;
+    renderPpcSources();
+    ppcPollTimer = setInterval(async () => {
+        ticks += 1;
+        await loadPpc(true);
+        if (state.ppc.fetchedAt !== before || ticks >= 8) stop();
+    }, 60000);
+}
+
+async function loadPpcCreatives() {
+    state.ppcCreatives = { ...state.ppcCreatives, status: state.ppcCreatives.status === 'ready' ? 'ready' : 'loading' };
+    renderPpcCreatives();
+    try {
+        const response = redirectIfSignedOut(await fetch(PPC_CREATIVES_ENDPOINT, { cache: 'no-store' }));
+        const body = await response.json().catch(() => null);
+        if (!body) throw new Error(`The server answered HTTP ${response.status}.`);
+        if (body.configured === false) {
+            state.ppcCreatives = { status: 'off', items: [], month: null, error: body.error || null, fetchedAt: null };
+        } else if (!response.ok || body.error) {
+            throw new Error(body.error || `The server answered HTTP ${response.status}.`);
+        } else {
+            state.ppcCreatives = { status: 'ready', items: body.items || [], month: body.month || null, error: null, fetchedAt: body.fetchedAt || null };
+        }
+    } catch (error) {
+        state.ppcCreatives = { status: 'error', items: [], month: null, error: error.message, fetchedAt: null };
+    }
+    renderPpcCreatives();
 }
 
 async function loadPpcNps() {
@@ -131,6 +180,7 @@ function renderPpc() {
     renderPpcSources();
     renderPpcOverview();
     renderPpcNps();
+    renderPpcCreatives();
     renderPpcHoneymoon();
     renderPpcLate();
     renderPpcDrawer();
@@ -150,6 +200,9 @@ function renderPpcSources() {
         const clients = new Set(ppc.data.accounts.map((account) => account.client)).size;
         text = `PPC: ${plural(ppc.data.accounts.length, 'account')} from ${plural(clients, 'client')}${ppc.fetchedAt ? `, saved ${relativeTime(new Date(ppc.fetchedAt).getTime())}` : ''}.`;
         if (ppc.warnings.length) { text += ` ${ppc.warnings.join(' · ')}`; tone = 'sample'; }
+        if (state.ppcUi.collecting) { text += ' Collecting fresh data from the ad platforms. This takes a few minutes and the page updates by itself.'; tone = 'sample'; }
+        const withErrors = ppc.data.accounts.filter((account) => account.note).length;
+        if (withErrors) { text += ` ${plural(withErrors, 'account')} could not be read from the ad platform (see the No Data group).`; tone = 'sample'; }
     }
     node.dataset.tone = tone;
     node.textContent = text;
@@ -213,7 +266,7 @@ function renderPpcOverview() {
             <div class="panel-header"><div><p class="eyebrow">Operational detail</p><h3>Accounts by region</h3></div><span class="panel-meta">${plural(rows.length, 'record')} displayed</span></div>
             <div class="table-scroll">
                 <table class="entries-table ppc-table">
-                    <thead><tr><th>Client / channel</th><th>Goal status</th><th class="align-right">Budget</th><th class="align-right">Investment</th><th class="align-right">Goal</th><th class="align-right">Generated</th><th class="align-right">Gap</th><th class="align-right">CPL</th><th class="align-right">Converted</th><th class="align-right">CPA</th><th class="align-right">Campaigns</th></tr></thead>
+                    <thead><tr><th>Client / channel</th><th>Goal status</th><th class="align-right">Budget</th><th class="align-right">Investment</th><th class="align-right">Goal</th><th class="align-right">Generated</th><th class="align-right">Gap</th><th class="align-right">CPL</th><th class="align-right">Conversions</th><th class="align-right">CPA</th><th class="align-right">Campaigns</th></tr></thead>
                     <tbody>${regionGroups.map((group) => ppcGroupRows(ppcRegionLabel(group.name), PPC_REGION_BADGES[group.name], group.rows, ppcAccountRow)).join('')}${noData.length ? ppcGroupRows(PPC_NO_DATA, 'ND', noData, ppcNoDataRow) : ''}</tbody>
                 </table>
                 ${rows.length ? '' : ppcMessage(filtering ? 'No accounts match these filters.' : 'No accounts available.')}
@@ -270,19 +323,50 @@ function ppcCampaignsCell(account) {
     return `${number(account.campaigns)} total${active}`;
 }
 
+// "Generated" e "Conversions" vem dos campos manuais do ClickUp (zeram na virada do mes). Sem valor manual,
+// usa as conversoes da plataforma, que e a mesma base que o workflow usa para o Gap e o CPL.
+function ppcLeadsOf(account) {
+    if (ppcHas(account.leadsGenerated)) return { value: account.leadsGenerated, source: 'ClickUp' };
+    if (ppcHas(account.conversions) && (account.spend || account.clicks || account.impressions)) return { value: account.conversions, source: 'platform' };
+    return { value: null, source: null };
+}
+
+function ppcConversionsOf(account) {
+    if (ppcHas(account.leadsConverted)) return { value: account.leadsConverted, source: 'ClickUp' };
+    if (ppcHas(account.conversions) && account.conversions > 0) return { value: account.conversions, source: 'platform' };
+    return { value: null, source: null };
+}
+
+const ppcSourceNote = (source) => source ? `<span class="entry-sub">${source}</span>` : '';
+
+function ppcGapCell(account, leads) {
+    if (!ppcHas(account.leadGoal)) return `<td class="align-right mono">${DASH}</td>`;
+    const generated = leads.value ?? 0;
+    const remaining = account.leadGoal - generated;
+    const parts = [];
+    if (account.leadGoal > 0) parts.push(`${ppcNum(generated / account.leadGoal * 100, 0)}% of goal`);
+    if (ppcHas(account.elapsed) && account.elapsed < 100 && account.leadGoal > 0) {
+        const pace = generated - account.leadGoal * account.elapsed / 100;
+        parts.push(`${pace >= 0 ? '+' : '−'}${ppcNum(Math.abs(pace), 0)} vs pace`);
+    }
+    return `<td class="align-right mono"><span class="${remaining > 0 ? 'value-down' : 'value-up'}">${ppcNum(remaining, 0)}</span><span class="entry-sub">${parts.join(' · ')}</span></td>`;
+}
+
 function ppcAccountRow(account) {
-    const cpa = ppcHas(account.spend) && account.leadsConverted > 0 ? account.spend / account.leadsConverted : null;
-    const gapClass = !ppcHas(account.gap) ? '' : account.gap > 0 ? 'value-down' : 'value-up';
+    const leads = ppcLeadsOf(account);
+    const conversions = ppcConversionsOf(account);
+    const cpl = ppcHas(account.cpl) ? account.cpl : (ppcHas(account.spend) && leads.value > 0 ? account.spend / leads.value : null);
+    const cpa = ppcHas(account.spend) && conversions.value > 0 ? account.spend / conversions.value : null;
     return `<tr class="ppc-row" data-ppc-action="open-campaigns" data-id="${escapeHtml(account.id)}" tabindex="0" role="button">
         <td>${escapeHtml(account.client || DASH)}<span class="entry-sub">${escapeHtml(account.channel || DASH)}</span></td>
         <td>${ppcStatusPill(account.status)}</td>
-        <td class="align-right mono">${ppcMoney(account.budget, account.currency)}</td>
+        <td class="align-right mono">${ppcMoney(account.budget, account.currency)}${ppcHas(account.pacing) ? `<span class="entry-sub">${ppcNum(account.pacing, 0)}% spent</span>` : ''}</td>
         <td class="align-right mono">${ppcMoney(account.spend, account.currency)}</td>
         <td class="align-right mono">${ppcCell(account.leadGoal)}</td>
-        <td class="align-right mono">${ppcCell(account.leadsGenerated)}</td>
-        <td class="align-right mono"><span class="${gapClass}">${ppcCell(account.gap)}</span></td>
-        <td class="align-right mono">${ppcMoney(account.cpl, account.currency)}</td>
-        <td class="align-right mono">${ppcCell(account.leadsConverted)}</td>
+        <td class="align-right mono">${ppcCell(leads.value)}${ppcSourceNote(leads.source)}</td>
+        ${ppcGapCell(account, leads)}
+        <td class="align-right mono">${ppcMoney(cpl, account.currency)}${ppcHas(account.maxCpl) ? `<span class="entry-sub">max ${ppcNum(account.maxCpl)}</span>` : ''}</td>
+        <td class="align-right mono">${ppcCell(conversions.value)}${ppcSourceNote(conversions.source)}</td>
         <td class="align-right mono">${ppcMoney(cpa, account.currency)}</td>
         <td class="align-right mono">${escapeHtml(ppcCampaignsCell(account))}</td>
     </tr>`;
@@ -290,7 +374,7 @@ function ppcAccountRow(account) {
 
 function ppcNoDataRow(account) {
     return `<tr class="ppc-row" data-ppc-action="open-campaigns" data-id="${escapeHtml(account.id)}" tabindex="0" role="button">
-        <td>${escapeHtml(account.client || DASH)}<span class="entry-sub">${escapeHtml(account.channel || DASH)} · ${escapeHtml(ppcRegionLabel(ppcRegion(account.region)))}</span></td>
+        <td>${escapeHtml(account.client || DASH)}<span class="entry-sub">${escapeHtml(account.channel || DASH)} · ${escapeHtml(ppcRegionLabel(ppcRegion(account.region)))}</span>${account.note ? `<span class="entry-sub" style="color:var(--red-deep)">${escapeHtml(account.note)}</span>` : ''}</td>
         <td>${ppcStatusPill(account.status)}</td>
         <td class="align-right mono">${DASH}</td>
         <td class="align-right mono">${ppcMoney(account.spend, account.currency)}</td>
@@ -333,7 +417,10 @@ function ppcNpsMonth(month) {
 }
 
 function ppcAggregateYear(history, year) {
-    const months = (history || []).filter((item) => String(item.month).startsWith(`${year}-`));
+    return ppcAggregateMonths((history || []).filter((item) => String(item.month).startsWith(`${year}-`)), `${year}`);
+}
+
+function ppcAggregateMonths(months, label) {
     if (!months.length) return null;
     const totals = months.reduce((acc, item) => ({
         promoters: acc.promoters + (item.promoters ?? 0),
@@ -347,7 +434,7 @@ function ppcAggregateYear(history, year) {
     const base = months[months.length - 1];
     return {
         ...base,
-        month: `${year}`,
+        month: label,
         nps: totals.responses > 0 ? Math.round(((totals.promoters - totals.detractors) / totals.responses) * 100) : null,
         fill_rate: totals.total_sent > 0 ? (totals.total_answered / totals.total_sent) * 100 : null,
         updated_at: updated || base.updated_at,
@@ -461,6 +548,12 @@ function ppcNpsRow(item, evaluations, model, periodLabel) {
     const color = showAverage ? ppcScoreColor(average) : ppcNpsColor(row.nps);
     const status = !responses ? 'No data' : showAverage ? `Low sample · ${responses} resp.` : ppcNpsLabel(row.nps);
     const fill = Math.min(100, Math.max(0, row.fill_rate ?? 0));
+    const allEvaluations = model.evaluationsByCompany[row.company] || [];
+    const overall = ppcAggregateMonths(item.history, 'all') || row;
+    const overallResponses = overall.responses ?? 0;
+    const overallAverage = ppcAverage(allEvaluations);
+    const overallNps = ppcHas(overall.nps) ? overall.nps : null;
+    const overallLow = overallResponses > 0 && overallResponses < PPC_NPS_MIN_RESPONSES;
     const link = (evaluations[0] && evaluations[0].wehelp_url) || 'https://app.wehelpsoftware.com/en-US/responses';
     const main = `<tr class="ppc-row${expanded ? ' is-open' : ''}" data-ppc-action="toggle-nps" data-value="${escapeHtml(row.company)}" tabindex="0" role="button" aria-expanded="${expanded}">
         <td style="box-shadow:inset 3px 0 0 ${color}"><i class="ppc-chevron${expanded ? ' is-open' : ''}" aria-hidden="true"></i>${escapeHtml(row.dashboard_name || row.company)}</td>
@@ -470,29 +563,87 @@ function ppcNpsRow(item, evaluations, model, periodLabel) {
     </tr>`;
     if (!expanded) return main;
     const cell = (label, content, tone) => `<div><span class="stat-label">${label}</span><strong${tone ? ` style="color:${tone}"` : ''}>${content}</strong></div>`;
-    const history = ppcNpsHistory(item.history, model.evaluationsByCompany[row.company] || []);
+    const history = ppcNpsHistory(item.history);
     const ratings = evaluations.length ? evaluations.map((entry) => `<div class="ppc-rating"><b style="color:${ppcScoreColor(Number(entry.evaluation))}">${escapeHtml(entry.evaluation)}</b><div>${entry.comment ? `<p>“${escapeHtml(entry.comment)}”</p>` : '<p class="is-muted">No comment</p>'}<small>${entry.date_reply ? escapeHtml(ppcDateText(new Date(entry.date_reply))) : DASH}</small></div></div>`).join('') : '<p class="stat-scope">No ratings submitted in this period.</p>';
     return `${main}<tr class="ppc-detail"><td colspan="4">
-        ${responses ? '' : '<p class="stat-scope">No NPS responses in this period for this client.</p>'}
-        <div class="ppc-facts">${cell('Promoters', row.promoters ?? DASH, 'var(--green)')}${cell('Passives', row.passives ?? DASH, 'var(--yellow)')}${cell('Detractors', row.detractors ?? DASH, 'var(--red-deep)')}${cell('Responses', responses)}${cell('Average score', average !== null ? `${average.toFixed(1)}/10` : DASH, ppcScoreColor(average))}${cell('Last updated', row.updated_at ? escapeHtml(ppcDateTimeText(new Date(row.updated_at))) : DASH)}</div>
+        <span class="stat-label ppc-subhead">Overall · all time</span>
+        ${overallResponses ? '' : '<p class="stat-scope">No NPS responses for this client yet.</p>'}
+        <div class="ppc-facts">${cell('NPS', overallNps !== null ? `${escapeHtml(overallNps)}${overallLow ? ' <span class="ppc-tag" style="color:var(--yellow)">Low sample</span>' : ''}` : DASH, ppcNpsColor(overallNps))}${cell('Promoters', overall.promoters ?? DASH, 'var(--green)')}${cell('Passives', overall.passives ?? DASH, 'var(--yellow)')}${cell('Detractors', overall.detractors ?? DASH, 'var(--red-deep)')}${cell('Responses', overallResponses)}${cell('Fill rate', ppcHas(overall.fill_rate) ? `${Math.round(overall.fill_rate)}%` : DASH)}${cell('Average score', overallAverage !== null ? `${overallAverage.toFixed(1)}/10` : DASH, ppcScoreColor(overallAverage))}${cell('Last updated', overall.updated_at ? escapeHtml(ppcDateTimeText(new Date(overall.updated_at))) : DASH)}</div>
+        ${overallLow ? `<p class="stat-scope">Low sample: only ${overallResponses} ${overallResponses === 1 ? 'response' : 'responses'} so far. NPS needs at least ${PPC_NPS_MIN_RESPONSES} responses to be representative, so read it together with the average score.</p>` : ''}
         <a class="ppc-link" href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer">Open in WeHelp</a>
-        ${showAverage ? `<p class="stat-scope">With ${responses} ${responses === 1 ? 'response' : 'responses'}, the NPS (${escapeHtml(row.nps)}) is not representative, so the average score is shown.</p>` : ''}
+        ${showAverage ? `<p class="stat-scope">In ${escapeHtml(periodLabel)}, with ${responses} ${responses === 1 ? 'response' : 'responses'}, the NPS (${escapeHtml(row.nps)}) is not representative, so the average score is shown.</p>` : ''}
         ${history}
         <span class="stat-label ppc-subhead">Ratings · ${escapeHtml(periodLabel)}</span>${ratings}
     </td></tr>`;
 }
 
-function ppcNpsHistory(history, allEvaluations) {
+function ppcNpsHistory(history) {
     if (!history || !history.length) return '';
     if (history.length === 1) return `<span class="stat-label ppc-subhead">Monthly history</span><p class="stat-scope">Only ${escapeHtml(history[0].month)} has data so far.</p>`;
     const body = history.slice().reverse().map((entry, index, list) => {
         const before = list[index + 1];
-        const delta = ppcHas(entry.nps) && before && ppcHas(before.nps) ? entry.nps - before.nps : null;
-        const average = ppcAverage(allEvaluations.filter((item) => item.month === entry.month));
-        const enough = (entry.responses ?? 0) >= PPC_NPS_MIN_RESPONSES;
-        return `<tr><td>${escapeHtml(entry.month)}</td><td class="align-right mono"><b style="color:${enough ? ppcNpsColor(entry.nps) : 'var(--muted)'}">${enough && ppcHas(entry.nps) ? entry.nps : DASH}</b></td><td class="align-right mono"><b style="color:${ppcScoreColor(average)}">${average !== null ? average.toFixed(1) : DASH}</b></td><td class="align-right">${enough ? ppcTrend(delta) : DASH}</td><td class="align-right mono">${entry.responses ?? DASH}</td><td class="align-right mono">${ppcHas(entry.fill_rate) ? `${Math.round(entry.fill_rate)}%` : DASH}</td></tr>`;
+        const hasNps = ppcHas(entry.nps);
+        const low = hasNps && (entry.responses ?? 0) < PPC_NPS_MIN_RESPONSES;
+        const delta = hasNps && before && ppcHas(before.nps) ? entry.nps - before.nps : null;
+        return `<tr><td>${escapeHtml(entry.month)}</td><td class="align-right mono">${low ? '<span class="ppc-tag" style="color:var(--yellow)">Low sample</span> ' : ''}<b style="color:${hasNps ? ppcNpsColor(entry.nps) : 'var(--muted)'}">${hasNps ? entry.nps : DASH}</b></td><td class="align-right">${delta !== null ? ppcTrend(delta) : DASH}</td></tr>`;
     }).join('');
-    return `<span class="stat-label ppc-subhead">Monthly history</span><div class="table-scroll"><table class="entries-table ppc-history"><thead><tr><th>Month</th><th class="align-right">NPS</th><th class="align-right">Average</th><th class="align-right">Change</th><th class="align-right">Responses</th><th class="align-right">Fill rate</th></tr></thead><tbody>${body}</tbody></table></div><p class="stat-scope">NPS is only shown from ${PPC_NPS_MIN_RESPONSES} responses per month. Below that, use the average score.</p>`;
+    return `<span class="stat-label ppc-subhead">Monthly history</span><div class="table-scroll"><table class="entries-table ppc-history"><thead><tr><th>Month</th><th class="align-right">NPS</th><th class="align-right">Change</th></tr></thead><tbody>${body}</tbody></table></div><p class="stat-scope">Months with fewer than ${PPC_NPS_MIN_RESPONSES} responses are marked Low sample: the NPS is not representative. Responses, fill rate and average score are in the totals above.</p>`;
+}
+
+const PPC_CREATIVE_SORTS = {
+    conversions: { label: 'Most conversions', compare: (a, b) => (b.conversions || 0) - (a.conversions || 0) || (b.spend || 0) - (a.spend || 0) },
+    cpa: { label: 'Lowest cost per conversion', compare: (a, b) => (ppcHas(a.costPerConversion) ? a.costPerConversion : Infinity) - (ppcHas(b.costPerConversion) ? b.costPerConversion : Infinity) || (b.conversions || 0) - (a.conversions || 0) },
+    ctr: { label: 'Highest CTR', compare: (a, b) => (b.ctr || 0) - (a.ctr || 0) },
+    spend: { label: 'Highest investment', compare: (a, b) => (b.spend || 0) - (a.spend || 0) },
+};
+
+function renderPpcCreatives() {
+    let host = $('#ppc-creatives');
+    if (!host) {
+        const anchor = $('#ppc-late');
+        if (!anchor) return;
+        host = document.createElement('div');
+        host.id = 'ppc-creatives';
+        anchor.before(host);
+    }
+    const data = state.ppcCreatives;
+    const eyebrow = 'Creatives · top ads of the month';
+    if (data.status !== 'ready') {
+        const text = data.status === 'loading' || data.status === 'idle' ? 'Loading creatives…' : data.status === 'off' ? data.error || 'Creatives are not connected.' : `Could not load the creatives. ${data.error || ''}`;
+        host.innerHTML = ppcSection('creatives', eyebrow, 'Creative performance', '', ppcMessage(text));
+        return;
+    }
+    const ui = state.ppcUi.creatives;
+    const clients = [...new Set(data.items.map((item) => item.client).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    if (!clients.includes(ui.client)) ui.client = clients[0] || '';
+    const sort = PPC_CREATIVE_SORTS[ui.sort] ? ui.sort : 'conversions';
+    const items = data.items.filter((item) => item.client === ui.client).sort(PPC_CREATIVE_SORTS[sort].compare);
+    const shown = items.slice(0, 30);
+    const monthText = data.month ? monthLabel(monthFromKey(data.month)) : DASH;
+    const tools = clients.length ? `<div class="ppc-nps-tools">
+        <select id="ppc-creatives-client" aria-label="Client">${clients.map((client) => `<option value="${escapeHtml(client)}"${client === ui.client ? ' selected' : ''}>${escapeHtml(client)}</option>`).join('')}</select>
+        <select id="ppc-creatives-sort" aria-label="Sort creatives">${Object.entries(PPC_CREATIVE_SORTS).map(([key, item]) => `<option value="${key}"${key === sort ? ' selected' : ''}>${item.label}</option>`).join('')}</select>
+    </div>` : '';
+    const tone = (status) => { const key = String(status || '').trim().toUpperCase(); return key === 'ENABLED' || key === 'ACTIVE' ? 'is-on' : key === 'PAUSED' ? 'is-muted' : 'is-warn'; };
+    const table = !shown.length ? ppcMessage(clients.length ? 'No creatives for this client.' : 'No creatives saved yet. Press Refresh to fetch them.') : `
+        <div class="table-scroll">
+            <table class="entries-table ppc-table">
+                <thead><tr><th>#</th><th>Creative</th><th>Channel</th><th class="align-right">Investment</th><th class="align-right">Impressions</th><th class="align-right">Clicks</th><th class="align-right">CTR</th><th class="align-right">Conversions</th><th class="align-right">Cost / conversion</th></tr></thead>
+                <tbody>${shown.map((item, index) => `<tr>
+                    <td class="mono">${index + 1}</td>
+                    <td>${escapeHtml(item.name || DASH)}<span class="entry-sub">${escapeHtml([item.campaign, item.group].filter(Boolean).join(' · ') || DASH)}</span>${item.headline && item.headline !== item.name ? `<span class="entry-sub">${escapeHtml(item.headline)}</span>` : ''}</td>
+                    <td>${escapeHtml(item.channel || DASH)}${item.status ? `<span class="status-pill ppc-pill ${tone(item.status)}">${escapeHtml(item.status)}</span>` : ''}</td>
+                    <td class="align-right mono">${ppcMoney(item.spend, item.currency)}</td>
+                    <td class="align-right mono">${ppcCell(item.impressions, 0)}</td>
+                    <td class="align-right mono">${ppcCell(item.clicks, 0)}</td>
+                    <td class="align-right mono">${ppcHas(item.ctr) ? `${ppcNum(item.ctr)}%` : DASH}</td>
+                    <td class="align-right mono">${ppcCell(item.conversions)}</td>
+                    <td class="align-right mono">${ppcMoney(item.costPerConversion, item.currency)}</td>
+                </tr>`).join('')}</tbody>
+            </table>
+        </div>
+        <p class="manual-input-status" data-tone="muted">${monthText} · the 25 ads with the highest investment per account${items.length > shown.length ? ` · showing ${shown.length} of ${items.length}` : ''}. Meta clicks are link clicks. Google Performance Max campaigns have no ads and are not listed. Amounts are in each account's own currency.</p>`;
+    host.innerHTML = ppcSection('creatives', eyebrow, 'Creative performance', clients.length ? `<span class="panel-meta">${plural(items.length, 'creative')}</span>` : '', `${tools}${table}`);
 }
 
 function ppcHmRank(status) {
@@ -754,6 +905,11 @@ if (ppcView) {
         renderPpc();
     });
     ppcView.addEventListener('change', (event) => {
+        if (event.target.id === 'ppc-creatives-client' || event.target.id === 'ppc-creatives-sort') {
+            state.ppcUi.creatives[event.target.id === 'ppc-creatives-client' ? 'client' : 'sort'] = event.target.value;
+            renderPpcCreatives();
+            return;
+        }
         if (event.target.id !== 'ppc-nps-period') return;
         const [type, value] = event.target.value.split(':');
         state.ppcUi.nps.period = { type, value };

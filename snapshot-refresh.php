@@ -58,7 +58,7 @@ $only = null;
 $requested = trim((string) ($_GET['sources'] ?? ''));
 if ($requested !== '') {
     $aliases = ['invoices' => ['invoices_br', 'invoices_int', 'invoices_pa', 'invoices_mx'], 'ppc' => SNAPSHOT_PPC];
-    $known = ['invoices_br', 'invoices_int', 'invoices_pa', 'invoices_mx', 'ads', 'costs', 'clients', 'goals', 'sales', 'seo', 'ppc_accounts', 'ppc_campaigns', 'ppc_honeymoon', 'ppc_late'];
+    $known = ['invoices_br', 'invoices_int', 'invoices_pa', 'invoices_mx', 'ads', 'costs', 'clients', 'goals', 'sales', 'seo', 'ppc_accounts', 'ppc_campaigns', 'ppc_honeymoon', 'ppc_late', 'ppc_creatives'];
     $only = [];
     foreach (array_filter(array_map('trim', explode(',', strtolower($requested)))) as $name) {
         if (!isset($aliases[$name]) && !in_array($name, $known, true)) {
@@ -73,6 +73,18 @@ if ($requested !== '') {
 set_time_limit(420);
 ignore_user_abort(true);
 
+// Botao Refresh (nao o agendamento): inicia tambem a coleta de PPC no n8n. Os dados novos chegam em alguns
+// minutos, quando o n8n termina e chama este endpoint de novo (?sources=ppc).
+$ppcCollect = null;
+if ($updatedBy !== 'schedule' && ($only === null || array_intersect($only, SNAPSHOT_PPC) !== [])) {
+    try {
+        $ppcCollect = snapshot_ppc_collect(auth_db(), $config);
+    } catch (Throwable $error) {
+        error_log('[snapshot-refresh] ppc collect: ' . $error->getMessage());
+        $ppcCollect = ['state' => 'failed', 'error' => $error->getMessage()];
+    }
+}
+
 try {
     $result = snapshot_refresh(auth_db(), $config, $updatedBy, $only);
 } catch (Throwable $error) {
@@ -80,17 +92,21 @@ try {
     respond(503, ['ok' => false, 'error' => $error->getMessage()]);
 }
 
-$labels = ['invoices_br' => 'Brazil', 'invoices_int' => 'International', 'invoices_pa' => 'Panama', 'invoices_mx' => 'Mexico', 'ads' => 'Ads', 'costs' => 'Subscription costs (Xero)', 'clients' => 'Clients and NPS (HubSpot)', 'goals' => 'Sales goals (HubSpot)', 'sales' => 'Sales (HubSpot)', 'seo' => 'SEO KPIs', 'ppc_accounts' => 'PPC accounts', 'ppc_campaigns' => 'PPC campaigns', 'ppc_honeymoon' => 'PPC Honeymoon', 'ppc_late' => 'PPC late tasks'];
+$labels = ['invoices_br' => 'Brazil', 'invoices_int' => 'International', 'invoices_pa' => 'Panama', 'invoices_mx' => 'Mexico', 'ads' => 'Ads', 'costs' => 'Subscription costs (Xero)', 'clients' => 'Clients and NPS (HubSpot)', 'goals' => 'Sales goals (HubSpot)', 'sales' => 'Sales (HubSpot)', 'seo' => 'SEO KPIs', 'ppc_accounts' => 'PPC accounts', 'ppc_campaigns' => 'PPC campaigns', 'ppc_honeymoon' => 'PPC Honeymoon', 'ppc_late' => 'PPC late tasks', 'ppc_creatives' => 'PPC creatives'];
 $errors = [];
 foreach ($result['sources'] as $source) {
     if (!$source['ok']) {
         $errors[] = ($labels[$source['source']] ?? $source['source']) . ': ' . $source['error'];
     }
 }
+if ($ppcCollect !== null && $ppcCollect['state'] === 'failed') {
+    $errors[] = 'PPC collection: ' . $ppcCollect['error'];
+}
 respond($result['ok'] ? 200 : 502, [
     'ok' => $result['ok'],
     'skipped' => $result['skipped'],
     'sources' => $result['sources'],
+    'ppcCollection' => $ppcCollect['state'] ?? null,
     'errors' => $errors,
     'at' => gmdate('Y-m-d\TH:i:s\Z'),
 ]);
