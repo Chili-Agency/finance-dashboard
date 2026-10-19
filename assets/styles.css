@@ -463,11 +463,6 @@ table.shows-service .service-col{display:table-cell}
 .sales-kpi p.sales-tier{margin-top:6px;font:500 10px 'DM Mono',monospace;color:var(--muted)}
 .sales-kpi p.sales-tier:empty{display:none}
 .sales-kpi p.sales-tier.is-reached{color:var(--green,#57745d)}
-.sales-goals-table{min-width:760px}
-.sales-goals-table .goal-actions{white-space:nowrap;text-align:right}
-.sales-goals-table .goal-actions button{padding:0 0 0 12px;border:0;background:none;font:600 10px Manrope;color:var(--muted);cursor:pointer}
-.sales-goals-table .goal-actions button:hover{color:var(--red-deep)}
-.sales-goals-table tr.is-editing td{background:rgba(212,155,53,.10)}
 .sales-funnel-panel,.sales-atv-panel{margin-bottom:18px}
 .sales-atv{display:grid;grid-template-columns:minmax(180px,.35fr) 1fr;gap:24px;align-items:center}
 .sales-atv-summary strong{display:block;font-size:2rem;line-height:1.1}
