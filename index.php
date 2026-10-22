@@ -4,6 +4,7 @@ require __DIR__ . '/auth.php';
 $currentUser = auth_require_page();
 $canManualInputs = auth_can($currentUser, 'manual_inputs');
 $canSalesTargets = auth_can($currentUser, 'sales_targets');
+$canCogsSheet = auth_can($currentUser, 'cogs_sheet');
 $csrfToken = (string) ($_SESSION['csrf_token'] ?? '');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
@@ -49,6 +50,9 @@ function asset(string $path): string
                 <button class="nav-item" data-view="retention" data-title="Retention"><span class="nav-icon">◐</span>Retention</button>
                 <button class="nav-item" data-view="targets" data-title="Targets"><span class="nav-icon">◎</span>Targets</button>
                 <button class="nav-item" data-view="margin" data-title="Margin &amp; COGS"><span class="nav-icon">◇</span>Margin &amp; COGS</button>
+<?php if ($canCogsSheet): ?>
+                <button class="nav-item" data-view="cogs-sheet" data-title="COGS spreadsheet"><span class="nav-icon">▤</span>COGS spreadsheet</button>
+<?php endif; ?>
             </nav>
             <div class="sidebar-bottom">
                 <div class="sync-card" id="sync-card" data-state="loading" role="status" aria-live="polite">
@@ -913,6 +917,40 @@ function asset(string $path): string
                     </div>
                 </article>
             </section>
+
+<?php if ($canCogsSheet): ?>
+            <section class="view" id="cogs-sheet-view" aria-labelledby="page-title">
+                <div class="section-intro">
+                    <div>
+                        <p class="eyebrow">Spreadsheets</p>
+                        <h2>COGS spreadsheet</h2>
+                        <p class="section-copy">Upload a COGS spreadsheet to build a new one from it. The file is only read for this session and nothing is saved on the dashboard.</p>
+                        <div class="manual-input-bar">
+                            <button type="button" class="input-button" id="cogs-sheet-upload"><span aria-hidden="true">+</span> Upload spreadsheet</button>
+                            <input type="file" id="cogs-sheet-file-input" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+                            <p class="manual-input-status" id="cogs-sheet-status" aria-live="polite"></p>
+                        </div>
+                        <p class="form-error" id="cogs-sheet-error" role="alert" hidden></p>
+                    </div>
+                </div>
+
+                <article class="panel cogs-sheet-panel" id="cogs-sheet-panel" hidden>
+                    <div class="panel-header">
+                        <div>
+                            <h3 id="cogs-sheet-file">—</h3>
+                            <span class="panel-meta" id="cogs-sheet-meta">—</span>
+                        </div>
+                        <button type="button" class="link-button" id="cogs-sheet-clear">Clear</button>
+                    </div>
+                    <div class="scope-tabs cogs-sheet-tabs" id="cogs-sheet-tabs" role="tablist" aria-label="Spreadsheet tabs"></div>
+                    <div id="cogs-sheet-notes" hidden></div>
+                    <div class="table-scroll cogs-sheet-scroll">
+                        <table class="cogs-sheet-table" id="cogs-sheet-table"></table>
+                        <div class="table-empty" id="cogs-sheet-empty" hidden></div>
+                    </div>
+                </article>
+            </section>
+<?php endif; ?>
         </main>
     </div>
 
@@ -1337,6 +1375,9 @@ function asset(string $path): string
     <script src="<?= asset('assets/retention.js') ?>"></script>
     <script src="<?= asset('assets/targets.js') ?>"></script>
     <script src="<?= asset('assets/margin-cogs.js') ?>"></script>
+<?php if ($canCogsSheet): ?>
+    <script src="<?= asset('assets/cogs-sheet.js') ?>"></script>
+<?php endif; ?>
     <script src="<?= asset('assets/seo.js') ?>"></script>
     <script src="<?= asset('assets/ppc.js') ?>"></script>
     <script src="<?= asset('assets/app.js') ?>"></script>

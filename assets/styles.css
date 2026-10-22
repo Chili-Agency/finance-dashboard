@@ -644,3 +644,15 @@ button.ppc-bar-row.is-active{background:var(--paper)}
 .ppc-legend-inline i{display:inline-block;width:8px;height:8px;margin-right:6px}
 @media(max-width:900px){.ppc-donuts{grid-template-columns:1fr}}
 @media(max-width:700px){.ppc-bar-row{grid-template-columns:1fr;gap:6px}.ppc-clear{margin-left:0}.ppc-nps-side{text-align:left}}
+.cogs-sheet-panel{margin-top:18px}
+.cogs-sheet-panel[hidden],#cogs-sheet-notes[hidden],#cogs-sheet-empty[hidden]{display:none}
+.cogs-sheet-tabs{margin-top:18px;overflow-x:auto;white-space:nowrap}
+.cogs-sheet-scroll{max-height:560px;margin-top:0}
+.cogs-sheet-table{min-width:0;width:max-content}
+.cogs-sheet-table th{position:sticky;top:0;z-index:1;padding:8px 10px;background:var(--panel);text-align:center;border-right:1px solid #ebe9e3}
+.cogs-sheet-table tbody th{position:sticky;left:0;top:auto;z-index:1;padding:8px 10px;font-weight:500;border-bottom:1px solid #ebe9e3}
+.cogs-sheet-table thead th:first-child{left:0;z-index:2}
+.cogs-sheet-table td{padding:8px 10px;font-weight:400;border-right:1px solid #ebe9e3;max-width:320px;overflow:hidden;text-overflow:ellipsis}
+.cogs-sheet-table td:first-child{padding-left:10px;font-weight:400}
+.cogs-sheet-table td.mono{font:500 11px 'DM Mono',monospace}
+.cogs-sheet-table th:first-child{padding-left:10px}
