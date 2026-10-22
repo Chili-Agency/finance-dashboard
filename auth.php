@@ -26,7 +26,7 @@ const AUTH_FRAME_ANCESTORS = ['https://app.clickup.com', 'https://*.clickup.com'
  * Perfil com lista vazia só visualiza. Perfil que não está aqui também não grava nada.
  */
 const AUTH_ROLES = [
-    'admin' => ['manual_inputs', 'sales_targets'],
+    'admin' => ['manual_inputs', 'sales_targets', 'cogs_sheet'],
     'sales' => ['sales_targets'],
     'ppc' => [],
     'seo' => [],
