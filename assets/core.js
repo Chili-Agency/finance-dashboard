@@ -255,6 +255,7 @@ async function loadInvoices() {
         }
         state.invoices = Array.isArray(data.invoices) ? data.invoices : [];
         state.cogsBills = Array.isArray(data.cogsLines) ? data.cogsLines : [];
+        state.fxBrlPerUsd = (data.fx && data.fx.brlPerUsd) || {};
         state.monthlyRows = null;
         state.sourceTypeCounts = data.sourceTypeCounts || {};
         state.categoryCounts = data.categoryCounts || {};

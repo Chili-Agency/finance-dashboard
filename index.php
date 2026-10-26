@@ -924,10 +924,12 @@ function asset(string $path): string
                     <div>
                         <p class="eyebrow">Spreadsheets</p>
                         <h2>COGS spreadsheet</h2>
-                        <p class="section-copy">Upload a COGS spreadsheet to build a new one from it. The file is only read for this session and nothing is saved on the dashboard.</p>
+                        <p class="section-copy">Upload the P&amp;L cost lines, subscriptions or salaries (.xlsx with Jan–Dec columns) to generate the COGS spreadsheet by entity and service. Preview it, edit any cell, then download it. Files are only read for this session and nothing is saved on the dashboard.</p>
                         <div class="manual-input-bar">
                             <button type="button" class="input-button" id="cogs-sheet-upload"><span aria-hidden="true">+</span> Upload spreadsheet</button>
-                            <input type="file" id="cogs-sheet-file-input" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+                            <input type="file" id="cogs-sheet-file-input" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple hidden>
+                            <label class="cogs-sheet-entity"><span>Entity when the file has none</span>
+                                <select id="cogs-sheet-entity"><option>BR</option><option>DG</option><option>PA</option><option>MEX</option></select></label>
                             <p class="manual-input-status" id="cogs-sheet-status" aria-live="polite"></p>
                         </div>
                         <p class="form-error" id="cogs-sheet-error" role="alert" hidden></p>
@@ -940,9 +942,12 @@ function asset(string $path): string
                             <h3 id="cogs-sheet-file">—</h3>
                             <span class="panel-meta" id="cogs-sheet-meta">—</span>
                         </div>
-                        <button type="button" class="link-button" id="cogs-sheet-clear">Clear</button>
+                        <div class="cogs-sheet-actions">
+                            <button type="button" class="input-button" id="cogs-sheet-download" disabled>Download .xlsx</button>
+                            <button type="button" class="link-button" id="cogs-sheet-clear">Clear</button>
+                        </div>
                     </div>
-                    <div class="scope-tabs cogs-sheet-tabs" id="cogs-sheet-tabs" role="tablist" aria-label="Spreadsheet tabs"></div>
+                    <div class="scope-tabs cogs-sheet-tabs" id="cogs-sheet-tabs" role="tablist" aria-label="Generated spreadsheet tabs"></div>
                     <div id="cogs-sheet-notes" hidden></div>
                     <div class="table-scroll cogs-sheet-scroll">
                         <table class="cogs-sheet-table" id="cogs-sheet-table"></table>
@@ -1376,6 +1381,7 @@ function asset(string $path): string
     <script src="<?= asset('assets/targets.js') ?>"></script>
     <script src="<?= asset('assets/margin-cogs.js') ?>"></script>
 <?php if ($canCogsSheet): ?>
+    <script src="<?= asset('assets/cogs-model.js') ?>"></script>
     <script src="<?= asset('assets/cogs-sheet.js') ?>"></script>
 <?php endif; ?>
     <script src="<?= asset('assets/seo.js') ?>"></script>
