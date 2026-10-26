@@ -357,7 +357,7 @@ function applyMonthlyRates(array &$invoices, array &$sourceWarnings, string $app
     $ready = false;
     $errors = [];
     try {
-        $rates->load(array_merge(array_map($currencyOf, $invoices), array_column($cogsLines, 'currency')));
+        $rates->load(array_merge(['BRL'], array_map($currencyOf, $invoices), array_column($cogsLines, 'currency')));
         $errors = $rates->errors();
         $ready = true;
     } catch (Throwable $error) {
@@ -422,8 +422,26 @@ function applyMonthlyRates(array &$invoices, array &$sourceWarnings, string $app
         $sourceWarnings[$source][] = $count . ' invoice' . ($count === 1 ? '' : 's') . ' converted with the fallback rate';
     }
 
+    // Reais por dólar de cada mês (mesma cotação das invoices), para a página COGS spreadsheet converter o MRR em BRL.
+    $brlPerUsd = [];
+    if ($ready) {
+        $months = array_merge(
+            array_map(static fn (array $invoice): string => FxRates::clampMonth($monthOf($invoice)), $invoices),
+            array_map(static fn (array $costLine): string => FxRates::clampMonth($costLine['month']), $cogsLines),
+            [$current]
+        );
+        foreach (array_unique($months) as $month) {
+            $brl = $rates->resolve($month, 'BRL');
+            if ($brl !== null && $brl['units'] > 0) {
+                $brlPerUsd[$month] = $brl['units'];
+            }
+        }
+        ksort($brlPerUsd);
+    }
+
     return [
         'source' => 'fx_monthly_rates',
+        'brlPerUsd' => (object) $brlPerUsd,
         'byInvoiceMonth' => FX_BY_INVOICE_MONTH,
         'firstStoredMonth' => $ready ? $rates->firstMonth() : null,
         'apiCalls' => $rates->fetches(),

@@ -656,3 +656,14 @@ button.ppc-bar-row.is-active{background:var(--paper)}
 .cogs-sheet-table td:first-child{padding-left:10px;font-weight:400}
 .cogs-sheet-table td.mono{font:500 11px 'DM Mono',monospace}
 .cogs-sheet-table th:first-child{padding-left:10px}
+.cogs-sheet-table td{font:400 11px 'DM Mono',monospace;white-space:nowrap;cursor:text}
+.cogs-sheet-table td:focus{outline:2px solid var(--accent,#2f6f5e);outline-offset:-2px;background:#fff;text-overflow:clip}
+.cogs-sheet-table td.cell-head,.cogs-sheet-table td.cell-section{font-weight:700;background:#e8e6df;text-align:right}
+.cogs-sheet-table td.cell-label,.cogs-sheet-table td.cell-text,.cogs-sheet-table td.cell-labelBold,.cogs-sheet-table td.cell-note,.cogs-sheet-table td.cell-inputText{font-family:inherit;font-size:12px}
+.cogs-sheet-table td.cell-labelBold,.cogs-sheet-table td.cell-moneyBold,.cogs-sheet-table td.cell-pctBold{font-weight:700}
+.cogs-sheet-table td.cell-note{color:var(--muted);font-style:italic}
+.cogs-sheet-table td.cell-input,.cogs-sheet-table td.cell-inputPct,.cogs-sheet-table td.cell-inputText{background:#fff8e1}
+.cogs-sheet-actions{display:flex;align-items:center;gap:14px}
+.cogs-sheet-entity{display:inline-flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)}
+.cogs-sheet-entity select{padding:6px 8px;border:1px solid #ddd9cf;border-radius:6px;background:var(--panel);font:inherit;color:inherit}
+#cogs-sheet-download:disabled{opacity:.5;cursor:not-allowed}
