@@ -30,6 +30,8 @@ const AUTH_ROLES = [
     'sales' => ['sales_targets'],
     'ppc' => [],
     'seo' => [],
+    // Soma de seo + ppc: só visualiza (nada de manual_inputs, sales_targets nem cogs_sheet).
+    'account_manager' => [],
 ];
 
 function auth_start(): void
