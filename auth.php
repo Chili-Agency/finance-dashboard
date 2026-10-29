@@ -26,12 +26,12 @@ const AUTH_FRAME_ANCESTORS = ['https://app.clickup.com', 'https://*.clickup.com'
  * Perfil com lista vazia só visualiza. Perfil que não está aqui também não grava nada.
  */
 const AUTH_ROLES = [
-    'admin' => ['manual_inputs', 'sales_targets', 'cogs_sheet'],
+    'admin' => ['manual_inputs', 'sales_targets', 'cogs_sheet', 'account_map'],
     'sales' => ['sales_targets'],
     'ppc' => [],
     'seo' => [],
     // Soma de seo + ppc: só visualiza (nada de manual_inputs, sales_targets nem cogs_sheet).
-    'account_manager' => [],
+    'account_manager' => ['account_map'],
 ];
 
 function auth_start(): void

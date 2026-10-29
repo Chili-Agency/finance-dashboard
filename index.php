@@ -5,6 +5,7 @@ $currentUser = auth_require_page();
 $canManualInputs = auth_can($currentUser, 'manual_inputs');
 $canSalesTargets = auth_can($currentUser, 'sales_targets');
 $canCogsSheet = auth_can($currentUser, 'cogs_sheet');
+$canAccountMap = auth_can($currentUser, 'account_map');
 $csrfToken = (string) ($_SESSION['csrf_token'] ?? '');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
@@ -28,7 +29,7 @@ function asset(string $path): string
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="<?= asset('assets/styles.css') ?>">
 </head>
-<body data-manual-inputs="<?= $canManualInputs ? 'on' : 'off' ?>" data-sales-targets="<?= $canSalesTargets ? 'on' : 'off' ?>">
+<body data-manual-inputs="<?= $canManualInputs ? 'on' : 'off' ?>" data-sales-targets="<?= $canSalesTargets ? 'on' : 'off' ?>" data-account-map="<?= $canAccountMap ? 'on' : 'off' ?>" data-user-role="<?= htmlspecialchars(auth_role_of($currentUser), ENT_QUOTES, 'UTF-8') ?>" data-user-name="<?= htmlspecialchars((string) $currentUser['name'], ENT_QUOTES, 'UTF-8') ?>">
     <div class="app-shell">
         <aside class="sidebar">
             <a class="brand" href="index.php" aria-label="Chili Finance home">
@@ -42,6 +43,7 @@ function asset(string $path): string
                 <button class="nav-item" data-view="sales" data-title="Sales"><span class="nav-icon">◆</span>Sales</button>
                 <button class="nav-item" data-view="seo" data-title="SEO"><span class="nav-icon">◑</span>SEO</button>
                 <button class="nav-item" data-view="ppc" data-title="PPC"><span class="nav-icon">◧</span>PPC</button>
+                <button class="nav-item" data-view="account-health" data-title="Account health"><span class="nav-icon">◬</span>Account health</button>
                 <button class="nav-item" data-view="clients" data-title="Client view"><span class="nav-icon">◉</span>Client view</button>
                 <button class="nav-item" data-view="invoices" data-title="Invoices"><span class="nav-icon">◒</span>Invoices</button>
                 <button class="nav-item" data-view="late" data-title="Late invoices"><span class="nav-icon">◔</span>Late invoices</button>
@@ -439,6 +441,177 @@ function asset(string $path): string
                 <div id="ppc-nps"></div>
                 <div id="ppc-honeymoon"></div>
                 <div id="ppc-late"></div>
+            </section>
+
+            <section class="view" id="account-health-view" aria-labelledby="page-title">
+                <div class="section-intro">
+                    <div>
+                        <p class="eyebrow">Account management</p>
+                        <h2>Portfolio health by account manager</h2>
+                        <p class="section-copy">Portfolio value, retention and growth by account manager, from Xero billing. The reporting period above sets the month shown.</p>
+                        <div class="manual-input-bar">
+                            <button type="button" class="input-button" id="open-account-map-modal" data-permission="account_map" aria-haspopup="dialog" aria-controls="account-map-modal"><span aria-hidden="true">+</span> Edit account map</button>
+                            <button type="button" class="input-button" id="open-growth-modal" data-permission="account_map" aria-haspopup="dialog" aria-controls="growth-modal"><span aria-hidden="true">+</span> Log growth entry</button>
+                            <p class="manual-input-status" id="ah-status" data-tone="muted" aria-live="polite"></p>
+                        </div>
+                    </div>
+                    <div class="ah-filters">
+                        <label class="field"><span>Account manager</span><select id="ah-am"><option value="all">All account managers</option></select></label>
+                        <label class="field"><span>Service</span><select id="ah-service"><option value="all">All services</option></select></label>
+                        <label class="field"><span>Priority</span><select id="ah-priority"><option value="all">All priorities</option></select></label>
+                    </div>
+                </div>
+
+                <div class="scorecard-grid is-six" id="ah-kpis"></div>
+
+                <div class="split-grid">
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Portfolio</p><h3>Portfolio value by service</h3></div>
+                            <span class="panel-meta">Accounts · MRR</span>
+                        </div>
+                        <div id="ah-portfolio"></div>
+                    </article>
+
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Retention</p><h3>Retention, month over month</h3></div>
+                            <span class="panel-meta" id="ah-retention-meta">Revenue retained</span>
+                        </div>
+                        <div class="sales-chart-wrap"><canvas id="ah-retention-chart"></canvas><div class="chart-empty is-hidden" id="ah-retention-empty">No retention data in these months</div></div>
+                        <div class="ah-subhead"><h4 id="ah-churn-title">Churn log</h4><span class="panel-meta" id="ah-churn-count"></span></div>
+                        <div class="table-scroll">
+                            <table class="entries-table ah-churn-table">
+                                <thead><tr><th>Client</th><th>Type</th><th>Manager</th><th class="align-right">Reduction</th></tr></thead>
+                                <tbody id="ah-churn-table"></tbody>
+                            </table>
+                            <div class="table-empty is-hidden" id="ah-churn-empty"></div>
+                        </div>
+                    </article>
+                </div>
+
+                <article class="panel">
+                    <div class="panel-header">
+                        <div><p class="eyebrow">Follow-up</p><h3>Accounts needing attention</h3></div>
+                        <span class="panel-meta" id="ah-attention-count"></span>
+                    </div>
+                    <p class="stat-scope">Active clients that break a limit: no biweekly meeting in 14 days, no results meeting in 30 days, no client login in AgencyAnalytics in 14 days, late tasks above 5%, or a latest NPS below 8. Cancelling and Escalation accounts always appear. Ranked by flags and priority, then MRR.</p>
+                    <div class="table-scroll">
+                        <table class="entries-table ah-churn-table">
+                            <thead><tr><th>Account</th><th>Manager</th><th>Priority</th><th class="align-right">MRR</th><th class="align-right">Late %</th><th class="align-right">NPS</th><th class="align-right">Since biweekly</th><th class="align-right">Since results</th><th class="align-right">Since client login</th><th>Flags</th><th>Next action</th></tr></thead>
+                            <tbody id="ah-attention-table"></tbody>
+                        </table>
+                        <div class="table-empty is-hidden" id="ah-attention-empty"></div>
+                    </div>
+                    <button type="button" class="seo-toggle" id="ah-attention-toggle" hidden></button>
+                    <p class="stat-scope" id="ah-attention-note" hidden></p>
+                </article>
+
+                <div class="split-grid">
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">WeHelp</p><h3>NPS</h3></div>
+                            <span class="panel-meta" id="ah-nps-meta">Monthly avg of answers</span>
+                        </div>
+                        <div class="sales-chart-wrap"><canvas id="ah-nps-chart"></canvas><div class="chart-empty is-hidden" id="ah-nps-empty">No NPS answers in these months</div></div>
+                        <div class="ah-subhead"><h4>By account manager · last 3 months</h4></div>
+                        <div class="table-scroll">
+                            <table class="entries-table ah-churn-table">
+                                <thead><tr><th>Manager</th><th class="align-right">Avg score</th><th class="align-right">Fill rate</th><th class="align-right">Answered</th></tr></thead>
+                                <tbody id="ah-nps-managers"></tbody>
+                            </table>
+                            <div class="table-empty is-hidden" id="ah-nps-managers-empty"></div>
+                        </div>
+                        <p class="stat-scope" id="ah-nps-note" hidden></p>
+                    </article>
+
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Follow-up</p><h3>Accounts to escalate</h3></div>
+                            <span class="panel-meta" id="ah-escalate-count"></span>
+                        </div>
+                        <p class="stat-scope">Latest answer in the last 3 months is below 8.</p>
+                        <div class="table-scroll">
+                            <table class="entries-table ah-churn-table">
+                                <thead><tr><th>Client</th><th>Manager</th><th class="align-right">Score</th><th>Answered</th></tr></thead>
+                                <tbody id="ah-escalate-table"></tbody>
+                            </table>
+                            <div class="table-empty is-hidden" id="ah-escalate-empty"></div>
+                        </div>
+                    </article>
+                </div>
+
+                <div class="split-grid">
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">ClickUp</p><h3>Late tasks by account manager</h3></div>
+                            <span class="panel-meta">Due in the last 30 days · target ≤ 5%</span>
+                        </div>
+                        <div class="table-scroll">
+                            <table class="entries-table ah-churn-table">
+                                <thead><tr><th>Manager</th><th class="align-right">Late</th><th class="align-right">Due</th><th class="align-right">Late %</th><th>vs 5%</th></tr></thead>
+                                <tbody id="ah-late-managers"></tbody>
+                            </table>
+                            <div class="table-empty is-hidden" id="ah-late-managers-empty"></div>
+                        </div>
+                        <p class="stat-scope" id="ah-late-note" hidden></p>
+                    </article>
+
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">ClickUp</p><h3>Late tasks by assignee</h3></div>
+                            <span class="panel-meta" id="ah-late-count"></span>
+                        </div>
+                        <div class="table-scroll">
+                            <table class="entries-table ah-churn-table">
+                                <thead><tr><th>Assignee</th><th class="align-right">Late</th><th class="align-right">Due</th><th class="align-right">Late %</th><th>vs 5%</th></tr></thead>
+                                <tbody id="ah-late-owners"></tbody>
+                            </table>
+                            <div class="table-empty is-hidden" id="ah-late-owners-empty"></div>
+                        </div>
+                    </article>
+                </div>
+
+                <div class="split-grid">
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Growth</p><h3>Growth leaderboard</h3></div>
+                            <span class="panel-meta"><span id="ah-growth-month"></span> · <span id="ah-growth-count"></span></span>
+                        </div>
+                        <p class="stat-scope">Ranked by new plus upsell MRR closed in the month. Pipeline, won deals and HubSpot MRR come from HubSpot; referrals and logged upsells come from the growth log.</p>
+                        <div class="table-scroll">
+                            <table class="entries-table ah-churn-table">
+                                <thead><tr><th>#</th><th>Person</th><th class="align-right">Referrals won</th><th class="align-right">Open opps</th><th class="align-right">Pipeline</th><th class="align-right">Won deals</th><th class="align-right">New MRR</th><th class="align-right">Upsell MRR</th></tr></thead>
+                                <tbody id="ah-growth-table"></tbody>
+                            </table>
+                            <div class="table-empty is-hidden" id="ah-growth-empty"></div>
+                        </div>
+                        <p class="stat-scope" id="ah-growth-note" hidden></p>
+                    </article>
+
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Growth log</p><h3>Open opportunities</h3></div>
+                            <span class="panel-meta" id="ah-open-count"></span>
+                        </div>
+                        <div class="table-scroll">
+                            <table class="entries-table ah-churn-table">
+                                <thead><tr><th>Client</th><th>Person</th><th>Type</th><th class="align-right">MRR</th><th>Logged</th><th>Note</th><th></th></tr></thead>
+                                <tbody id="ah-open-table"></tbody>
+                            </table>
+                            <div class="table-empty is-hidden" id="ah-open-empty"></div>
+                        </div>
+                        <button type="button" class="seo-toggle" id="ah-open-toggle" hidden></button>
+                    </article>
+                </div>
+
+                <article class="panel">
+                    <div class="panel-header">
+                        <div><p class="eyebrow">Sources</p><h3>Data health</h3></div>
+                        <span class="panel-meta">What each number on this page needs</span>
+                    </div>
+                    <ul class="ah-health" id="ah-health"></ul>
+                </article>
             </section>
 
             <section class="view" id="invoices-view" aria-labelledby="page-title">
@@ -1368,6 +1541,65 @@ function asset(string $path): string
             <div id="ppc-campaigns-body"></div>
         </div>
     </dialog>
+    <dialog class="modal ah-modal" id="account-map-modal" aria-labelledby="account-map-modal-title">
+        <form class="modal-form" id="account-map-form" novalidate>
+            <header class="modal-header">
+                <div>
+                    <p class="eyebrow">Manual input</p>
+                    <h2 id="account-map-modal-title">Account map</h2>
+                </div>
+                <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+            </header>
+            <p class="modal-copy">Assign each client to an account manager and a service. Clients without a manager stay out of the manager filters. Clear the manager to remove a client from the map. Clients billed in the last 120 days are listed.</p>
+            <div class="table-scroll ah-map-scroll">
+                <table class="entries-table ah-map-table">
+                    <thead><tr><th>Client</th><th>Account manager</th><th>Service</th><th>Priority</th><th>Next action</th></tr></thead>
+                    <tbody id="account-map-rows"></tbody>
+                </table>
+            </div>
+            <datalist id="ah-am-list"></datalist>
+            <p class="form-error" id="account-map-error" role="alert" hidden></p>
+            <footer class="modal-footer">
+                <p class="modal-footnote" id="account-map-meta"></p>
+                <div class="modal-actions">
+                    <button type="button" class="button-secondary" data-close-modal>Cancel</button>
+                    <button type="submit" class="button-primary" id="account-map-submit">Save account map</button>
+                </div>
+            </footer>
+        </form>
+    </dialog>
+    <dialog class="modal" id="growth-modal" aria-labelledby="growth-modal-title">
+        <form class="modal-form" id="growth-form" novalidate>
+            <header class="modal-header">
+                <div>
+                    <p class="eyebrow">Manual input</p>
+                    <h2 id="growth-modal-title">Log growth entry</h2>
+                </div>
+                <button type="button" class="modal-close" data-close-modal aria-label="Close">&times;</button>
+            </header>
+            <p class="modal-copy">Record a referral, upsell or cross-sell. Open entries show under Open opportunities. Won entries count in the leaderboard for the month of their date, and need the monthly value (MRR).</p>
+            <input type="hidden" name="id">
+            <div class="ah-form-grid">
+                <label class="field"><span>Date</span><input class="ah-input" type="date" name="loggedOn" required></label>
+                <label class="field"><span>Person</span><input class="ah-input" type="text" name="person" list="growth-people" maxlength="80" autocomplete="off" required></label>
+                <label class="field"><span>Type</span><select class="ah-input" name="kind"><option value="referral">Referral</option><option value="upsell">Upsell</option><option value="crosssell">Cross-sell</option></select></label>
+                <label class="field"><span>Status</span><select class="ah-input" name="status"><option value="open">Open</option><option value="won">Won</option><option value="lost">Lost</option></select></label>
+                <label class="field"><span>Client</span><input class="ah-input" type="text" name="clientName" maxlength="190" autocomplete="off" required></label>
+                <label class="field"><span>MRR (USD)</span><input class="ah-input" type="number" name="mrr" min="0" step="0.01" inputmode="decimal"></label>
+                <label class="field ah-form-wide"><span>Note</span><input class="ah-input" type="text" name="note" maxlength="255" autocomplete="off"></label>
+            </div>
+            <datalist id="growth-people"></datalist>
+            <p class="form-error" id="growth-error" role="alert" hidden></p>
+            <footer class="modal-footer">
+                <p class="modal-footnote"></p>
+                <div class="modal-actions">
+                    <button type="button" class="button-secondary" id="growth-delete" hidden>Delete</button>
+                    <button type="button" class="button-secondary" data-close-modal>Cancel</button>
+                    <button type="submit" class="button-primary" id="growth-submit">Save entry</button>
+                </div>
+            </footer>
+        </form>
+    </dialog>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     <script src="<?= asset('assets/core.js') ?>"></script>
     <script src="<?= asset('assets/overview.js') ?>"></script>
@@ -1386,6 +1618,7 @@ function asset(string $path): string
 <?php endif; ?>
     <script src="<?= asset('assets/seo.js') ?>"></script>
     <script src="<?= asset('assets/ppc.js') ?>"></script>
+    <script src="<?= asset('assets/account-health.js') ?>"></script>
     <script src="<?= asset('assets/app.js') ?>"></script>
 </body>
 </html>

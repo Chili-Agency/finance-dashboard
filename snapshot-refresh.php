@@ -58,7 +58,7 @@ $only = null;
 $requested = trim((string) ($_GET['sources'] ?? ''));
 if ($requested !== '') {
     $aliases = ['invoices' => ['invoices_br', 'invoices_int', 'invoices_pa', 'invoices_mx'], 'ppc' => SNAPSHOT_PPC];
-    $known = ['invoices_br', 'invoices_int', 'invoices_pa', 'invoices_mx', 'ads', 'costs', 'clients', 'sales', 'seo', 'ppc_accounts', 'ppc_campaigns', 'ppc_honeymoon', 'ppc_late', 'ppc_creatives'];
+    $known = ['invoices_br', 'invoices_int', 'invoices_pa', 'invoices_mx', 'ads', 'costs', 'clients', 'sales', 'seo', 'ppc_accounts', 'ppc_campaigns', 'ppc_honeymoon', 'ppc_late', 'ppc_creatives', 'ah_late', 'ah_meetings', 'ah_aa'];
     $only = [];
     foreach (array_filter(array_map('trim', explode(',', strtolower($requested)))) as $name) {
         if (!isset($aliases[$name]) && !in_array($name, $known, true)) {
@@ -85,6 +85,22 @@ if ($updatedBy !== 'schedule' && ($only === null || array_intersect($only, SNAPS
     }
 }
 
+$ahCollect = [];
+$ahCollectors = ['ah_late' => 'ah_late_refresh', 'ah_meetings' => 'ah_meetings_refresh', 'ah_aa' => 'ah_aa_refresh'];
+if ($updatedBy !== 'schedule') {
+    foreach ($ahCollectors as $ahSource => $ahRefreshKey) {
+        if ($only !== null && !in_array($ahSource, $only, true)) {
+            continue;
+        }
+        try {
+            $ahCollect[$ahSource] = snapshot_ppc_collect(auth_db(), $config, $ahSource, $ahRefreshKey);
+        } catch (Throwable $error) {
+            error_log('[snapshot-refresh] ' . $ahSource . ' collect: ' . $error->getMessage());
+            $ahCollect[$ahSource] = ['state' => 'failed', 'error' => $error->getMessage()];
+        }
+    }
+}
+
 try {
     $result = snapshot_refresh(auth_db(), $config, $updatedBy, $only);
 } catch (Throwable $error) {
@@ -92,7 +108,7 @@ try {
     respond(503, ['ok' => false, 'error' => $error->getMessage()]);
 }
 
-$labels = ['invoices_br' => 'Brazil', 'invoices_int' => 'International', 'invoices_pa' => 'Panama', 'invoices_mx' => 'Mexico', 'ads' => 'Ads', 'costs' => 'Subscription costs (Xero)', 'clients' => 'Clients and NPS (HubSpot)', 'sales' => 'Sales (HubSpot)', 'seo' => 'SEO KPIs', 'ppc_accounts' => 'PPC accounts', 'ppc_campaigns' => 'PPC campaigns', 'ppc_honeymoon' => 'PPC Honeymoon', 'ppc_late' => 'PPC late tasks', 'ppc_creatives' => 'PPC creatives'];
+$labels = ['invoices_br' => 'Brazil', 'invoices_int' => 'International', 'invoices_pa' => 'Panama', 'invoices_mx' => 'Mexico', 'ads' => 'Ads', 'costs' => 'Subscription costs (Xero)', 'clients' => 'Clients and NPS (HubSpot)', 'sales' => 'Sales (HubSpot)', 'seo' => 'SEO KPIs', 'ppc_accounts' => 'PPC accounts', 'ppc_campaigns' => 'PPC campaigns', 'ppc_honeymoon' => 'PPC Honeymoon', 'ppc_late' => 'PPC late tasks', 'ppc_creatives' => 'PPC creatives', 'ah_late' => 'Account health late tasks', 'ah_meetings' => 'Account health meetings', 'ah_aa' => 'Account health client logins'];
 $errors = [];
 foreach ($result['sources'] as $source) {
     if (!$source['ok']) {
@@ -102,11 +118,17 @@ foreach ($result['sources'] as $source) {
 if ($ppcCollect !== null && $ppcCollect['state'] === 'failed') {
     $errors[] = 'PPC collection: ' . $ppcCollect['error'];
 }
+foreach ($ahCollect as $ahSource => $ahState) {
+    if ($ahState['state'] === 'failed') {
+        $errors[] = ($labels[$ahSource] ?? $ahSource) . ' collection: ' . $ahState['error'];
+    }
+}
 respond($result['ok'] ? 200 : 502, [
     'ok' => $result['ok'],
     'skipped' => $result['skipped'],
     'sources' => $result['sources'],
     'ppcCollection' => $ppcCollect['state'] ?? null,
+    'ahCollection' => array_map(static fn (array $state): ?string => $state['state'] ?? null, $ahCollect),
     'errors' => $errors,
     'at' => gmdate('Y-m-d\TH:i:s\Z'),
 ]);
