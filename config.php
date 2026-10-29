@@ -90,6 +90,12 @@ return (static function (): array {
             'ppc_campaigns' => $env('N8N_WEBHOOK_PPC_CAMPAIGNS', ''),
             'ppc_honeymoon' => $env('N8N_WEBHOOK_PPC_HONEYMOON', ''),
             'ppc_late' => $env('N8N_WEBHOOK_PPC_LATE_TASKS', ''),
+            'ah_late' => $env('N8N_WEBHOOK_AH_LATE_TASKS', ''),
+            'ah_late_refresh' => $env('N8N_WEBHOOK_AH_LATE_REFRESH', ''),
+            'ah_meetings' => $env('N8N_WEBHOOK_AH_MEETINGS', ''),
+            'ah_meetings_refresh' => $env('N8N_WEBHOOK_AH_MEETINGS_REFRESH', ''),
+            'ah_aa' => $env('N8N_WEBHOOK_AH_AA', ''),
+            'ah_aa_refresh' => $env('N8N_WEBHOOK_AH_AA_REFRESH', ''),
             // Opcional: webhook ppc-dashboard-creatives-all (top anuncios do mes por conta). Vazio desliga a secao Creatives.
             'ppc_creatives' => $env('N8N_WEBHOOK_PPC_CREATIVES', ''),
             // Opcional: webhook ppc-dashboard-refresh. Com ele, o botao Refresh do dashboard inicia a coleta de PPC no n8n.

@@ -23,7 +23,7 @@ const SNAPSHOT_SESSION_TIMEOUT = 900;  // wait_timeout da conexão durante a bus
 // Fontes que rodam em segundo plano: o webhook só responde "comecei" e o n8n envia o resultado
 // depois para snapshot-push.php (a busca do HubSpot passa dos 100 s que o n8n cloud aceita).
 const SNAPSHOT_ASYNC = ['sales'];
-const SNAPSHOT_PPC = ['ppc_accounts', 'ppc_campaigns', 'ppc_honeymoon', 'ppc_late', 'ppc_creatives'];
+const SNAPSHOT_PPC = ['ppc_accounts', 'ppc_campaigns', 'ppc_honeymoon', 'ppc_late', 'ppc_creatives', 'ah_late', 'ah_meetings', 'ah_aa'];
 // Enquanto uma busca em segundo plano não devolve o resultado, não dispara outra (cliques repetidos
 // no Refresh somavam execuções simultâneas e estouravam o limite de requisições do HubSpot).
 const SNAPSHOT_ASYNC_GUARD = 600; // s
@@ -47,6 +47,9 @@ function snapshot_sources(array $config): array
     $sources['ppc_honeymoon'] = (string) ($config['n8n']['ppc_honeymoon'] ?? '');
     $sources['ppc_late'] = (string) ($config['n8n']['ppc_late'] ?? '');
     $sources['ppc_creatives'] = (string) ($config['n8n']['ppc_creatives'] ?? '');
+    $sources['ah_late'] = (string) ($config['n8n']['ah_late'] ?? '');
+    $sources['ah_meetings'] = (string) ($config['n8n']['ah_meetings'] ?? '');
+    $sources['ah_aa'] = (string) ($config['n8n']['ah_aa'] ?? '');
     return array_filter($sources, static fn (string $url): bool => $url !== '');
 }
 
@@ -161,15 +164,15 @@ function snapshot_started_in_background(string $name, array $result): bool
  * resultado para data_snapshots. Ate la, o dashboard continua mostrando a ultima copia.
  * @return array{state:string, error:?string} state: started | running | off | failed
  */
-function snapshot_ppc_collect(PDO $pdo, array $config): array
+function snapshot_ppc_collect(PDO $pdo, array $config, string $name = 'ppc', string $urlKey = 'ppc_refresh'): array
 {
-    $url = trim((string) ($config['n8n']['ppc_refresh'] ?? ''));
+    $url = trim((string) ($config['n8n'][$urlKey] ?? ''));
     if ($url === '') {
         return ['state' => 'off', 'error' => null];
     }
     try {
         $select = $pdo->prepare("SELECT DATE_FORMAT(fetched_at, '%Y-%m-%d %H:%i:%s') FROM data_snapshots WHERE source = ?");
-        $select->execute([snapshot_request_key('ppc')]);
+        $select->execute([snapshot_request_key($name)]);
         $requested = $select->fetchColumn();
         if (is_string($requested) && strtotime($requested . ' UTC') > time() - SNAPSHOT_PPC_COLLECT_GUARD) {
             return ['state' => 'running', 'error' => null];
@@ -199,7 +202,7 @@ function snapshot_ppc_collect(PDO $pdo, array $config): array
     if ($curlError !== '' || $code < 200 || $code >= 300) {
         return ['state' => 'failed', 'error' => $curlError !== '' ? "Could not reach n8n ({$curlError})." : "n8n answered HTTP {$code}."];
     }
-    snapshot_mark_requested($pdo, 'ppc');
+    snapshot_mark_requested($pdo, $name);
     return ['state' => 'started', 'error' => null];
 }
 

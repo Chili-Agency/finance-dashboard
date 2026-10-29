@@ -36,13 +36,18 @@ async function loadClients() {
             ? { status: 'error', data: null, errors, warnings: [], fetchedAt: null }
             : { status: 'off', data: null, errors: [...new Set(offErrors)], warnings: [], fetchedAt: null };
         renderClientView();
+        if (typeof renderAccountHealth === 'function') renderAccountHealth();
         return;
     }
     const companies = new Map();
     const nps = [];
+    const aggregates = [];
     const seen = new Set();
+    const seenRows = new Set();
     loaded.forEach((source) => {
         source.rows.forEach((row) => {
+            const rowKey = `${row.company}|${row.month}`;
+            if (row.company && row.company !== '__summary__' && !seenRows.has(rowKey)) { seenRows.add(rowKey); aggregates.push(row); }
             if (row.company && row.company !== '__summary__' && !companies.has(row.company)) companies.set(row.company, { id: String(row.company), name: row.dashboard_name || row.company, domain: null });
         });
         source.responses.filter((row) => row.company).forEach((row) => {
@@ -63,8 +68,9 @@ async function loadClients() {
         });
     });
     const fetchedAt = loaded.map((source) => source.fetchedAt).filter(Boolean).sort().pop() || null;
-    state.clients = { status: 'ready', data: { companies: [...companies.values()], nps }, errors: [], warnings: errors, fetchedAt };
+    state.clients = { status: 'ready', data: { companies: [...companies.values()], nps, aggregates }, errors: [], warnings: errors, fetchedAt };
     renderClientView();
+    if (typeof renderAccountHealth === 'function') renderAccountHealth();
 }
 
 // "PLAZA DEL TATUAJE MEXICO (Tarmex)" e "Plaza del Tatuaje México S.A. de C.V." viram o mesmo texto.
