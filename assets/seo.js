@@ -4,6 +4,13 @@ const SEO_CLIENT_ROWS = 6;
 const SEO_EVENT_ROWS = 6;
 const SEO_MOVERS = 3;
 const SEO_DEFAULT_GOALS = { kwPage1: 400, pagespeed: 80, drDelta: 2 };
+// Metas da planilha SEO KPI Tracker (aba Keyword Rankings): % das keywords aprovadas na 1a pagina em 3/6/9/12 meses.
+const SEO_KW_STEPS = [
+    { days: 90, share: 0.1, label: '3 mo' },
+    { days: 180, share: 0.3, label: '6 mo' },
+    { days: 270, share: 0.45, label: '9 mo' },
+    { days: 360, share: 0.6, label: '12 mo' },
+];
 state.seo = { status: 'loading', data: null, errors: [], warnings: [], fetchedAt: null };
 state.seoView = { allClients: false };
 
@@ -259,33 +266,131 @@ function renderSeoKpis() {
     setText('#seo-dr', ready ? number(growing) : blank);
     setText('#seo-dr-note', ready ? `of ${plural(ranked.length, 'client')} gaining ${goals.drDelta}+ DR points in the month` : 'Waiting for SEO KPIs');
 
-    const sorted = [...clients].sort((a, b) => (Number(b.kwPage1) || 0) - (Number(a.kwPage1) || 0) || a.name.localeCompare(b.name));
-    const shown = state.seoView.allClients ? sorted : sorted.slice(0, SEO_CLIENT_ROWS);
-    $('#seo-clients-table').innerHTML = shown.map((client) => {
-        const climb = hasValue(client.kwPage1) && hasValue(client.kwPrev) ? client.kwPage1 - client.kwPrev : null;
-        const drDelta = hasValue(client.drStart) && hasValue(client.drEnd) ? client.drEnd - client.drStart : null;
-        const speedPill = hasValue(client.pagespeed)
-            ? `<span class="status-pill${client.pagespeed >= goals.pagespeed ? '' : ' is-lost'}"${client.pagespeedAt ? ` title="Measured ${escapeHtml(client.pagespeedAt.slice(0, 10))}"` : ''}>${number(client.pagespeed)}</span>`
-            : DASH;
-        const drPill = hasValue(drDelta)
-            ? `<span class="status-pill${drDelta >= goals.drDelta ? '' : ' is-lost'}">${drDelta > 0 ? '+' : ''}${number(drDelta)}</span>`
-            : DASH;
-        return `<tr>
-            <td>${escapeHtml(client.name)}${client.domain ? `<span class="entry-sub">${escapeHtml(client.domain)}</span>` : ''}</td>
-            <td class="align-right mono">${hasValue(client.kwPage1) ? number(client.kwPage1) : DASH} / ${hasValue(client.kwTotal) ? number(client.kwTotal) : DASH}</td>
-            <td class="align-right">${deltaPill(climb, { formatter: (value) => (value > 0 ? '+' : value < 0 ? '−' : '') + number(Math.abs(value)) })}</td>
-            <td class="align-right">${speedPill}</td>
-            <td class="align-right mono">${hasValue(client.drStart) ? number(client.drStart) : DASH} → ${hasValue(client.drEnd) ? number(client.drEnd) : DASH}</td>
-            <td class="align-right">${drPill}</td>
-        </tr>`;
-    }).join('');
-    const emptyNote = $('#seo-clients-empty');
-    emptyNote.classList.toggle('is-hidden', clients.length > 0);
-    emptyNote.textContent = seo.status === 'loading' ? 'Loading SEO KPIs…' : seo.status === 'ready' ? 'The SEO workflow returned no clients.' : 'The SEO KPIs are not available (see the note at the top).';
-    const toggle = $('#seo-clients-toggle');
-    toggle.hidden = clients.length <= SEO_CLIENT_ROWS;
-    toggle.textContent = state.seoView.allClients ? 'Show fewer clients' : `Show all ${clients.length} clients`;
-    setText('#seo-clients-meta', clients.length ? `${plural(clients.length, 'client')}` : 'No data');
+    renderSeoTables(clients, goals);
+}
+
+const seoNumber = (value) => new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }).format(value || 0);
+
+// Mesma regra da coluna "Current Target" da planilha: ate 90 dias de contrato vale 10% das keywords aprovadas,
+// ate 180 dias 30%, ate 270 dias 45%, e depois disso 60%.
+function seoKeywordTarget(client) {
+    const approved = Number(client.kwApproved);
+    const started = /^\d{4}-\d{2}-\d{2}/.test(client.start || '') ? Date.parse(`${client.start.slice(0, 10)}T00:00:00Z`) : NaN;
+    if (!(approved > 0) || Number.isNaN(started)) return null;
+    const now = new Date();
+    const elapsed = Math.floor((Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - started) / 86400000);
+    const step = SEO_KW_STEPS.find((item) => elapsed <= item.days) || SEO_KW_STEPS[SEO_KW_STEPS.length - 1];
+    const current = approved * step.share;
+    return {
+        approved,
+        step,
+        goals: SEO_KW_STEPS.map((item) => approved * item.share),
+        current,
+        met: hasValue(client.kwPage1) ? client.kwPage1 >= current : null,
+        dif: hasValue(client.kwPage1) ? client.kwPage1 - current : null,
+    };
+}
+
+function seoFillTable(key, { rows, total, render, emptyText }) {
+    $(`#seo-${key}-table`).innerHTML = rows.map(render).join('');
+    const empty = $(`#seo-${key}-empty`);
+    empty.classList.toggle('is-hidden', total > 0);
+    empty.textContent = emptyText;
+    const toggle = $(`#seo-${key}-toggle`);
+    toggle.hidden = total <= SEO_CLIENT_ROWS;
+    toggle.textContent = state.seoView.allClients ? 'Show fewer clients' : `Show all ${total} clients`;
+}
+
+function renderSeoTables(clients, goals) {
+    if (!$('#seo-kw-table')) return;
+    const seo = state.seo;
+    const limit = (list) => (state.seoView.allClients ? list : list.slice(0, SEO_CLIENT_ROWS));
+    const emptyText = seo.status === 'loading' ? 'Loading SEO KPIs…' : seo.status === 'ready' ? 'The SEO workflow returned no clients.' : 'The SEO KPIs are not available (see the note at the top).';
+    const byName = (a, b) => a.name.localeCompare(b.name);
+    const match = typeof ahNameMatcher === 'function' && state.accountMap?.status === 'ready' ? ahNameMatcher() : null;
+    const dash = (value) => (value ? escapeHtml(value) : DASH);
+    const sub = (client) => (client.domain ? `<span class="entry-sub">${escapeHtml(client.domain)}</span>` : '');
+
+    // Keywords: mesma estrutura da aba Keyword Rankings da planilha.
+    const kwRows = [...clients].sort((a, b) => (Number(b.kwPage1) || 0) - (Number(a.kwPage1) || 0) || byName(a, b));
+    const kwPage1 = clients.reduce((sum, client) => sum + (Number(client.kwPage1) || 0), 0);
+    const tracked = clients.filter((client) => seoKeywordTarget(client)).length;
+    seoFillTable('kw', {
+        rows: limit(kwRows),
+        total: kwRows.length,
+        emptyText,
+        render: (client) => {
+            const target = seoKeywordTarget(client);
+            const manager = match ? match(client.name)?.am : null;
+            const cell = (index) => {
+                if (!target) return `<td class="align-right mono">${DASH}</td>`;
+                return `<td class="align-right mono"${target.step === SEO_KW_STEPS[index] ? ' style="font-weight:700"' : ''}>${seoNumber(target.goals[index])}</td>`;
+            };
+            const pill = !target || target.met === null ? DASH : `<span class="status-pill${target.met ? '' : ' is-lost'}">${target.met ? 'On target' : 'Under target'}</span>`;
+            return `<tr>
+                <td>${escapeHtml(client.name)}${sub(client)}</td>
+                <td>${dash(manager)}</td>
+                <td>${dash(client.office)}</td>
+                <td class="mono">${client.start ? escapeHtml(client.start) : DASH}</td>
+                <td class="align-right mono">${target ? seoNumber(target.approved) : DASH}</td>
+                <td class="align-right mono">${hasValue(client.kwPage1) ? number(client.kwPage1) : DASH}</td>
+                ${SEO_KW_STEPS.map((step, index) => cell(index)).join('')}
+                <td>${pill}</td>
+                <td class="align-right mono">${target ? seoNumber(target.current) : DASH}</td>
+                <td class="align-right">${target ? deltaPill(target.dif, { formatter: (value) => (value > 0 ? '+' : value < 0 ? '−' : '') + seoNumber(Math.abs(value)) }) : DASH}</td>
+            </tr>`;
+        },
+    });
+    setText('#seo-kw-meta', clients.length ? `${number(kwPage1)} on page 1 · ${plural(clients.length, 'client')}` : 'No data');
+    const kwNote = $('#seo-kw-table-note');
+    const missing = clients.length - tracked;
+    kwNote.classList.toggle('is-hidden', !clients.length || missing === 0);
+    kwNote.textContent = `Start date and number of approved keywords are missing for ${missing} of ${clients.length} clients, so their targets cannot be calculated. The SEO workflow has to send start and kwApproved for each client.`;
+
+    // PageSpeed: pior nota primeiro, quem ainda nao foi medido por ultimo.
+    const scored = clients.filter((client) => hasValue(client.pagespeed));
+    const psRows = [...clients].sort((a, b) => (hasValue(a.pagespeed) ? 0 : 1) - (hasValue(b.pagespeed) ? 0 : 1) || (Number(a.pagespeed) || 0) - (Number(b.pagespeed) || 0) || byName(a, b));
+    seoFillTable('ps', {
+        rows: limit(psRows),
+        total: psRows.length,
+        emptyText,
+        render: (client) => {
+            const has = hasValue(client.pagespeed);
+            const gap = has ? client.pagespeed - goals.pagespeed : null;
+            return `<tr>
+                <td>${escapeHtml(client.name)}${sub(client)}</td>
+                <td class="align-right">${has ? `<span class="status-pill${gap >= 0 ? '' : ' is-lost'}">${number(client.pagespeed)}</span>` : DASH}</td>
+                <td class="align-right">${has ? deltaPill(gap, { formatter: (value) => (value > 0 ? '+' : value < 0 ? '−' : '') + number(Math.abs(value)) }) : DASH}</td>
+                <td class="mono">${client.pagespeedAt ? escapeHtml(client.pagespeedAt.slice(0, 10)) : DASH}</td>
+            </tr>`;
+        },
+    });
+    setText('#seo-ps-meta', clients.length ? `${scored.length} of ${plural(clients.length, 'site')} measured · goal ${goals.pagespeed}` : 'No data');
+    const psNote = $('#seo-ps-table-note');
+    psNote.classList.toggle('is-hidden', !clients.length || scored.length > 0);
+    psNote.textContent = 'No PageSpeed score has been saved yet. Scores come from the weekly PageSpeed run in n8n; until it saves results this table stays empty.';
+
+    // DR: maiores ganhos primeiro.
+    const drOf = (client) => (hasValue(client.drStart) && hasValue(client.drEnd) ? client.drEnd - client.drStart : null);
+    const drRows = [...clients].sort((a, b) => (hasValue(drOf(a)) ? 0 : 1) - (hasValue(drOf(b)) ? 0 : 1) || (drOf(b) ?? 0) - (drOf(a) ?? 0) || byName(a, b));
+    seoFillTable('dr', {
+        rows: limit(drRows),
+        total: drRows.length,
+        emptyText,
+        render: (client) => {
+            const change = drOf(client);
+            const pill = hasValue(change)
+                ? `<span class="status-pill${change >= goals.drDelta ? '' : ' is-lost'}">${change > 0 ? '+' : ''}${seoNumber(change)}</span>`
+                : DASH;
+            return `<tr>
+                <td>${escapeHtml(client.name)}${sub(client)}</td>
+                <td class="align-right mono">${hasValue(client.drStart) ? seoNumber(client.drStart) : DASH}</td>
+                <td class="align-right mono">${hasValue(client.drEnd) ? seoNumber(client.drEnd) : DASH}</td>
+                <td class="align-right">${pill}</td>
+            </tr>`;
+        },
+    });
+    setText('#seo-dr-meta', clients.length ? `${plural(clients.filter((client) => hasValue(drOf(client))).length, 'client')} with DR · goal +${goals.drDelta}` : 'No data');
 }
 
 function deltaText(value) {
@@ -304,7 +409,19 @@ function renderSeo() {
     renderSeoKpis();
 }
 
-$('#seo-clients-toggle')?.addEventListener('click', () => {
+['kw', 'ps', 'dr'].forEach((key) => $(`#seo-${key}-toggle`)?.addEventListener('click', () => {
     state.seoView.allClients = !state.seoView.allClients;
     renderSeoKpis();
+}));
+
+// O Account manager vem do mapa de contas (account-health.js), que carrega depois. Quando ele termina,
+// o painel de Keywords precisa ser desenhado de novo.
+document.addEventListener('DOMContentLoaded', () => {
+    if (typeof renderAccountHealth !== 'function') return;
+    const renderAccountHealthOnly = renderAccountHealth;
+    renderAccountHealth = function (...args) {
+        const result = renderAccountHealthOnly.apply(this, args);
+        if (state.accountMap?.status !== 'loading') renderSeo();
+        return result;
+    };
 });

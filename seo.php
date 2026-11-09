@@ -76,9 +76,14 @@ foreach ($data['clients'] as $row) {
     $domain = isset($row['domain']) && $row['domain'] !== '' ? (string) $row['domain'] : null;
     $saved = $domain !== null ? ($pagespeed[seo_domain_key($domain)] ?? null) : null;
     $ownScore = seo_number($row['pagespeed'] ?? null);
+    $office = isset($row['office']) ? trim((string) $row['office']) : '';
+    $start = isset($row['start']) && preg_match('/^\d{4}-\d{2}-\d{2}/', (string) $row['start']) === 1 ? substr((string) $row['start'], 0, 10) : null;
     $clients[] = [
         'name' => $name,
         'domain' => $domain,
+        'office' => $office !== '' ? $office : null,
+        'start' => $start,
+        'kwApproved' => seo_number($row['kwApproved'] ?? null),
         'kwTotal' => seo_number($row['kwTotal'] ?? null),
         'kwPage1' => seo_number($row['kwPage1'] ?? null),
         'kwPrev' => seo_number($row['kwPrev'] ?? null),
