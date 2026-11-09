@@ -96,6 +96,8 @@ return (static function (): array {
             'ah_meetings_refresh' => $env('N8N_WEBHOOK_AH_MEETINGS_REFRESH', ''),
             'ah_aa' => $env('N8N_WEBHOOK_AH_AA', ''),
             'ah_aa_refresh' => $env('N8N_WEBHOOK_AH_AA_REFRESH', ''),
+            // Opcional: webhook ah-clickup-users (usuarios do ClickUp para o dropdown do Edit account map).
+            'ah_users' => $env('N8N_WEBHOOK_AH_CLICKUP_USERS', ''),
             // Opcional: webhook ppc-dashboard-creatives-all (top anuncios do mes por conta). Vazio desliga a secao Creatives.
             'ppc_creatives' => $env('N8N_WEBHOOK_PPC_CREATIVES', ''),
             // Opcional: webhook ppc-dashboard-refresh. Com ele, o botao Refresh do dashboard inicia a coleta de PPC no n8n.

@@ -20,6 +20,8 @@ const AH_LATE_TARGET = 0.05;
 const AH_LATE_OWNER_ROWS = 10;
 const AH_LATE_ENDPOINT = 'late-tasks.php';
 const AH_ATTENTION_ENDPOINT = 'attention-data.php';
+const AH_USERS_ENDPOINT = 'clickup-users.php';
+const AH_USERS_FRESH_MS = 10 * 60 * 1000;
 const AH_BIWEEKLY_MAX_DAYS = 14;
 const AH_RESULTS_MAX_DAYS = 30;
 const AH_LOGIN_MAX_DAYS = 14;
@@ -38,6 +40,7 @@ state.accountMap = { status: 'loading', rows: [], error: null };
 state.lateTasks = { status: 'loading', lists: [], errors: [], warnings: [], fetchedAt: null };
 state.attention = { status: 'loading', meetings: { status: 'loading', rows: [], errors: [] }, logins: { status: 'loading', rows: [], errors: [] }, showAll: false };
 state.growth = { status: 'loading', entries: [], error: null, showAllOpen: false };
+state.clickupUsers = { status: 'idle', names: [], error: null, loadedAt: 0 };
 state.accountHealth = { am: 'all', service: 'all', priority: 'all', amTouched: false, chart: null, npsChart: null };
 
 const ahFold = (value) => String(value || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -122,6 +125,35 @@ async function loadAttention() {
 
 function ahManagers() {
     return [...new Set(state.accountMap.rows.map((row) => row.am).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+// Usuarios do ClickUp (workflow do n8n) para o dropdown de Account manager. Se falhar, o dropdown
+// continua com os gerentes que ja estao no account map.
+async function loadClickupUsers() {
+    const users = state.clickupUsers;
+    if (users.status === 'loading') return;
+    if (users.status === 'ready' && Date.now() - users.loadedAt < AH_USERS_FRESH_MS) return;
+    state.clickupUsers = { ...users, status: 'loading', error: null };
+    try {
+        const response = redirectIfSignedOut(await fetch(AH_USERS_ENDPOINT, { cache: 'no-store' }));
+        const body = await response.json().catch(() => null);
+        if (!body) throw new Error(`The server answered HTTP ${response.status}.`);
+        if (!response.ok || !body.ok) throw new Error((body.errors || []).join(' · ') || `The server answered HTTP ${response.status}.`);
+        const names = [...new Set((body.users || []).map((user) => String(user.username || '').trim()).filter(Boolean))];
+        state.clickupUsers = { status: 'ready', names, error: null, loadedAt: Date.now() };
+    } catch (error) {
+        state.clickupUsers = { ...state.clickupUsers, status: 'error', error: error.message };
+    }
+    refreshManagerSelects();
+    if (state.clickupUsers.status === 'error') showAccountMapError(`Could not load the ClickUp users (${state.clickupUsers.error}). The list shows only the managers already in the account map.`);
+}
+
+function ahManagerOptions(current) {
+    const fromClickup = state.clickupUsers.names;
+    const known = new Set(fromClickup);
+    const names = [...new Set([...fromClickup, ...ahManagers(), ...(current ? [current] : [])])].sort((a, b) => a.localeCompare(b));
+    const label = (name) => (state.clickupUsers.status === 'ready' && !known.has(name) ? `${name} (not in ClickUp)` : name);
+    return `<option value="">—</option>${names.map((name) => `<option value="${escapeHtml(name)}"${name === current ? ' selected' : ''}>${escapeHtml(label(name))}</option>`).join('')}`;
 }
 
 function ahPriorities() {
@@ -954,19 +986,24 @@ function ahEditorClients() {
 
 function renderAccountMapRows() {
     const index = new Map(state.accountMap.rows.map((row) => [row.clientKey, row]));
-    $('#ah-am-list').innerHTML = ahManagers().map((name) => `<option value="${escapeHtml(name)}"></option>`).join('');
     const serviceOptions = (current) => `<option value="">—</option>${AH_SERVICES.map((item) => `<option value="${item.key}"${item.key === current ? ' selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}`;
     const priorityOptions = (current) => `<option value="">—</option>${ahPriorities().map((name) => `<option value="${escapeHtml(name)}"${name === current ? ' selected' : ''}>${escapeHtml(name)}</option>`).join('')}`;
     $('#account-map-rows').innerHTML = ahEditorClients().map((client) => {
         const row = index.get(client.key);
         return `<tr data-key="${escapeHtml(client.key)}" data-name="${escapeHtml(client.name)}" data-mapped="${row ? '1' : '0'}">
             <td><strong>${escapeHtml(client.name)}</strong></td>
-            <td><input class="ah-input" type="text" name="am" list="ah-am-list" maxlength="80" autocomplete="off" value="${escapeHtml(row?.am || '')}" aria-label="Account manager for ${escapeHtml(client.name)}"></td>
+            <td><select class="ah-input" name="am" aria-label="Account manager for ${escapeHtml(client.name)}">${ahManagerOptions(row?.am || '')}</select></td>
             <td><select class="ah-input" name="service" aria-label="Service for ${escapeHtml(client.name)}">${serviceOptions(row?.service || '')}</select></td>
             <td><select class="ah-input" name="priority" aria-label="Priority for ${escapeHtml(client.name)}">${priorityOptions(row?.priority || '')}</select></td>
             <td><input class="ah-input" type="text" name="nextAction" maxlength="255" autocomplete="off" value="${escapeHtml(row?.nextAction || '')}" aria-label="Next action for ${escapeHtml(client.name)}"></td>
         </tr>`;
     }).join('');
+}
+
+function refreshManagerSelects() {
+    $('#account-map-rows').querySelectorAll('select[name="am"]').forEach((select) => {
+        select.innerHTML = ahManagerOptions(select.value);
+    });
 }
 
 function openAccountMapModal() {
@@ -976,6 +1013,7 @@ function openAccountMapModal() {
     const latest = state.accountMap.rows.map((row) => row.enteredAt).filter(Boolean).sort().pop();
     setText('#account-map-meta', latest ? `Last saved ${new Date(latest).toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}.` : 'Nothing saved yet.');
     accountMapModal.showModal();
+    loadClickupUsers();
 }
 
 function closeAccountMapModal() {
