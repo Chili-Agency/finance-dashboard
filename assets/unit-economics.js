@@ -103,7 +103,7 @@ async function loadUnitInputs() {
 async function saveUnitInput(entry) {
     const { entry: saved } = await unitRequest({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || '' },
         body: JSON.stringify(entry),
     });
     storeUnitEntry(saved);
