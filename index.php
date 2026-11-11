@@ -412,20 +412,53 @@ function asset(string $path): string
                     </article>
                 </div>
 
-                <article class="panel table-panel">
-                    <div class="panel-header">
-                        <div><p class="eyebrow">Per client</p><h3>Keywords, PageSpeed and DR</h3></div>
-                        <span class="panel-meta" id="seo-clients-meta">No data</span>
-                    </div>
-                    <div class="table-scroll">
-                        <table class="entries-table seo-table">
-                            <thead><tr><th>Client</th><th class="align-right">Page 1 / ranking</th><th class="align-right">Vs previous month</th><th class="align-right">PageSpeed</th><th class="align-right">DR start → end</th><th class="align-right">DR change</th></tr></thead>
-                            <tbody id="seo-clients-table"></tbody>
-                        </table>
-                        <div class="table-empty is-hidden" id="seo-clients-empty"></div>
-                    </div>
-                    <button type="button" class="seo-toggle" id="seo-clients-toggle" hidden></button>
-                </article>
+                <div class="seo-tables" id="seo-tables" style="display:grid;gap:18px">
+                    <article class="panel table-panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Per client</p><h3>Keywords on page 1</h3></div>
+                            <span class="panel-meta" id="seo-kw-meta">No data</span>
+                        </div>
+                        <p class="manual-input-status is-hidden" id="seo-kw-table-note" data-tone="sample"></p>
+                        <div class="table-scroll">
+                            <table class="entries-table seo-table">
+                                <thead><tr><th>Project</th><th>Account manager</th><th>Office</th><th>Start</th><th class="align-right">Number of keywords</th><th class="align-right">KW 1 page</th><th class="align-right">3 mo (10%)</th><th class="align-right">6 mo (30%)</th><th class="align-right">9 mo (45%)</th><th class="align-right">12 mo (60%)</th><th>Target</th><th class="align-right">Current target</th><th class="align-right">Dif</th></tr></thead>
+                                <tbody id="seo-kw-table"></tbody>
+                            </table>
+                            <div class="table-empty is-hidden" id="seo-kw-empty"></div>
+                        </div>
+                        <button type="button" class="seo-toggle" id="seo-kw-toggle" hidden></button>
+                    </article>
+                    <article class="panel table-panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Per client</p><h3>PageSpeed</h3></div>
+                            <span class="panel-meta" id="seo-ps-meta">No data</span>
+                        </div>
+                        <p class="manual-input-status is-hidden" id="seo-ps-table-note" data-tone="sample"></p>
+                        <div class="table-scroll">
+                            <table class="entries-table seo-table">
+                                <thead><tr><th>Client</th><th class="align-right">PageSpeed (mobile)</th><th class="align-right">Vs goal</th><th>Measured</th></tr></thead>
+                                <tbody id="seo-ps-table"></tbody>
+                            </table>
+                            <div class="table-empty is-hidden" id="seo-ps-empty"></div>
+                        </div>
+                        <button type="button" class="seo-toggle" id="seo-ps-toggle" hidden></button>
+                    </article>
+                    <article class="panel table-panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Per client</p><h3>Domain Rating (DR)</h3></div>
+                            <span class="panel-meta" id="seo-dr-meta">No data</span>
+                        </div>
+                        <p class="manual-input-status is-hidden" id="seo-dr-table-note" data-tone="sample"></p>
+                        <div class="table-scroll">
+                            <table class="entries-table seo-table">
+                                <thead><tr><th>Client</th><th class="align-right">DR start</th><th class="align-right">DR end</th><th class="align-right">DR change</th></tr></thead>
+                                <tbody id="seo-dr-table"></tbody>
+                            </table>
+                            <div class="table-empty is-hidden" id="seo-dr-empty"></div>
+                        </div>
+                        <button type="button" class="seo-toggle" id="seo-dr-toggle" hidden></button>
+                    </article>
+                </div>
             </section>
 
             <section class="view" id="ppc-view" aria-labelledby="page-title">
