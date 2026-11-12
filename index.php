@@ -6,6 +6,7 @@ $canManualInputs = auth_can($currentUser, 'manual_inputs');
 $canSalesTargets = auth_can($currentUser, 'sales_targets');
 $canCogsSheet = auth_can($currentUser, 'cogs_sheet');
 $canAccountMap = auth_can($currentUser, 'account_map');
+$canKpiScorecard = auth_can($currentUser, 'kpi_scorecard');
 $csrfToken = (string) ($_SESSION['csrf_token'] ?? '');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
@@ -28,6 +29,9 @@ function asset(string $path): string
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="<?= asset('assets/styles.css') ?>">
+<?php if ($canKpiScorecard): ?>
+    <link rel="stylesheet" href="<?= asset('assets/kpi-scorecard.css') ?>">
+<?php endif; ?>
 </head>
 <body data-manual-inputs="<?= $canManualInputs ? 'on' : 'off' ?>" data-sales-targets="<?= $canSalesTargets ? 'on' : 'off' ?>" data-account-map="<?= $canAccountMap ? 'on' : 'off' ?>" data-user-role="<?= htmlspecialchars(auth_role_of($currentUser), ENT_QUOTES, 'UTF-8') ?>" data-user-name="<?= htmlspecialchars((string) $currentUser['name'], ENT_QUOTES, 'UTF-8') ?>">
     <div class="app-shell">
@@ -52,6 +56,9 @@ function asset(string $path): string
                 <button class="nav-item" data-view="retention" data-title="Retention"><span class="nav-icon">◐</span>Retention</button>
                 <button class="nav-item" data-view="targets" data-title="Targets"><span class="nav-icon">◎</span>Targets</button>
                 <button class="nav-item" data-view="margin" data-title="Margin &amp; COGS"><span class="nav-icon">◇</span>Margin &amp; COGS</button>
+<?php if ($canKpiScorecard): ?>
+                <button class="nav-item" data-view="kpi-scorecard" data-title="KPI scorecard"><span class="nav-icon">▦</span>KPI scorecard</button>
+<?php endif; ?>
 <?php if ($canCogsSheet): ?>
                 <button class="nav-item" data-view="cogs-sheet" data-title="COGS spreadsheet"><span class="nav-icon">▤</span>COGS spreadsheet</button>
 <?php endif; ?>
@@ -646,6 +653,8 @@ function asset(string $path): string
                     <ul class="ah-health" id="ah-health"></ul>
                 </article>
             </section>
+
+<?php if ($canKpiScorecard) { require __DIR__ . '/kpi-scorecard-view.php'; } ?>
 
             <section class="view" id="invoices-view" aria-labelledby="page-title">
                 <div class="section-intro">
@@ -1652,6 +1661,9 @@ function asset(string $path): string
     <script src="<?= asset('assets/seo.js') ?>"></script>
     <script src="<?= asset('assets/ppc.js') ?>"></script>
     <script src="<?= asset('assets/account-health.js') ?>"></script>
+<?php if ($canKpiScorecard): ?>
+    <script src="<?= asset('assets/kpi-scorecard.js') ?>"></script>
+<?php endif; ?>
     <script src="<?= asset('assets/app.js') ?>"></script>
 </body>
 </html>

@@ -23,10 +23,11 @@ const AUTH_FRAME_ANCESTORS = ['https://app.clickup.com', 'https://*.clickup.com'
  *   manual_inputs: Target MRR, COGS e margem, outros custos de aquisição, juros de atraso,
  *                  importação da planilha de metas.
  *   sales_targets: meta de vendas da página Sales.
+ *   kpi_scorecard: página KPI scorecard (só admin).
  * Perfil com lista vazia só visualiza. Perfil que não está aqui também não grava nada.
  */
 const AUTH_ROLES = [
-    'admin' => ['manual_inputs', 'sales_targets', 'cogs_sheet', 'account_map'],
+    'admin' => ['manual_inputs', 'sales_targets', 'cogs_sheet', 'account_map', 'kpi_scorecard'],
     'sales' => ['sales_targets'],
     'ppc' => [],
     'seo' => [],
