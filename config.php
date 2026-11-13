@@ -100,6 +100,8 @@ return (static function (): array {
             'ah_users' => $env('N8N_WEBHOOK_AH_CLICKUP_USERS', ''),
             // Opcional: webhook kpi-user-data (KPI 1 e KPI 3 de um usuario do ClickUp, para a pagina KPI scorecard).
             'kpi_data' => $env('N8N_WEBHOOK_KPI_DATA', ''),
+            // Opcional: webhook kpi-scorecard-send (cria/atualiza o scorecard no ClickUp a partir da pagina KPI scorecard).
+            'kpi_send' => $env('N8N_WEBHOOK_KPI_SEND', ''),
             // Opcional: webhook ppc-dashboard-creatives-all (top anuncios do mes por conta). Vazio desliga a secao Creatives.
             'ppc_creatives' => $env('N8N_WEBHOOK_PPC_CREATIVES', ''),
             // Opcional: webhook ppc-dashboard-refresh. Com ele, o botao Refresh do dashboard inicia a coleta de PPC no n8n.

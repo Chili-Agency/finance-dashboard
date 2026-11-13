@@ -4,7 +4,7 @@ declare(strict_types=1);
 /*
  * Scorecards de KPI por usuário do ClickUp (tabela kpi_scorecards, ver sql/kpi_scorecards.sql).
  * GET    -> lista os scorecards salvos (mais recentes primeiro).
- * POST   -> salva (cria ou atualiza pelo nome). O nome é montado aqui: KPI-YYYYMM-Sobrenome-Nome-SEO|PPC.
+ * POST   -> salva (cria ou atualiza pelo nome). O nome é montado aqui: KPI-YYYYMM-Sobrenome-Nome-Departamento (SEO, PPC, Tech, AM ou Creative).
  *           Score de cada KPI, score geral e zona são recalculados aqui (a página só mostra o mesmo cálculo).
  * DELETE -> remove pelo nome (?name=...).
  * Só admin (permissão kpi_scorecard). O envio ao ClickUp virá depois, por um workflow do n8n que lê estes registros.
@@ -23,7 +23,8 @@ auth_require_permission($currentUser, 'kpi_scorecard');
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
-const KPI_SERVICES = ['SEO', 'PPC'];
+// Opções do campo Department do ClickUp usadas pela página (o ClickUp também tem Sales e Ops).
+const KPI_SERVICES = ['SEO', 'PPC', 'Tech', 'AM', 'Creative'];
 const KPI_MAX_SLOTS = 7;
 const KPI_SCORE_CAP = 1.2;
 const KPI_LIST_LIMIT = 200;
@@ -153,9 +154,16 @@ function kpi_validate(array $input): array
     if (preg_match('/^20\d{2}(0[1-9]|1[0-2])$/', $period) !== 1) {
         throw new InvalidArgumentException('Choose a valid month (YYYYMM).');
     }
-    $service = strtoupper(trim((string) ($input['service'] ?? '')));
-    if (!in_array($service, KPI_SERVICES, true)) {
-        throw new InvalidArgumentException('Choose the department: SEO or PPC.');
+    $serviceInput = strtolower(trim((string) ($input['service'] ?? '')));
+    $service = null;
+    foreach (KPI_SERVICES as $option) {
+        if (strtolower($option) === $serviceInput) {
+            $service = $option;
+            break;
+        }
+    }
+    if ($service === null) {
+        throw new InvalidArgumentException('Choose the department: ' . implode(', ', KPI_SERVICES) . '.');
     }
     $level = strtoupper(trim((string) ($input['level'] ?? '')));
     if (preg_match('/^L[1-9]$/', $level) !== 1) {
@@ -213,6 +221,10 @@ function kpi_validate(array $input): array
 
     $overall = $scoredWeight > 0 ? round($scoredSum / $scoredWeight, 1) : null;
     $provisional = ($input['provisional'] ?? false) === true;
+    $dueDate = trim((string) ($input['dueDate'] ?? ''));
+    if ($dueDate !== '' && (preg_match('/^(\d{4})-(\d{2})-(\d{2})$/', $dueDate, $dueParts) !== 1 || !checkdate((int) $dueParts[2], (int) $dueParts[3], (int) $dueParts[1]))) {
+        throw new InvalidArgumentException('The due date must be a valid date.');
+    }
     $billable = kpi_number($input['billable'] ?? null, 'Billable %', false, 0, 1000);
 
     return [
@@ -233,6 +245,7 @@ function kpi_validate(array $input): array
             'employeeName' => $userName,
             'managerId' => kpi_text($input['managerId'] ?? '', 40),
             'managerName' => kpi_text($input['managerName'] ?? '', 120),
+            'dueDate' => $dueDate,
             'provisional' => $provisional,
             'overallScore' => $overall,
             'billable' => $billable,
@@ -247,6 +260,15 @@ function kpi_validate(array $input): array
 
 function kpi_save(PDO $pdo, array $card, string $email): void
 {
+    // Salvar de novo não apaga os links do ClickUp de um envio anterior (payload.clickup, gravado por kpi-send.php).
+    $existing = $pdo->prepare('SELECT payload FROM kpi_scorecards WHERE name = ?');
+    $existing->execute([$card['name']]);
+    $old = json_decode((string) $existing->fetchColumn(), true);
+    if (is_array($old) && isset($old['clickup'])) {
+        $fresh = json_decode($card['payload'], true);
+        $fresh['clickup'] = $old['clickup'];
+        $card['payload'] = json_encode($fresh, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+    }
     $pdo->prepare(
         'INSERT INTO kpi_scorecards (name, period, service, clickup_id, user_name, payload, created_by, updated_by)
          VALUES (:name, :period, :service, :clickup_id, :user_name, :payload, :by, :by2)

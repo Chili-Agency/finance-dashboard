@@ -3,7 +3,7 @@
  * (nível, KPI 1-7 com peso/meta/atual/score/fonte/direção, score geral, zona, gerente) e salva em kpi-scorecards.php.
  * O envio ao ClickUp será feito depois por um workflow do n8n.
  *
- * Nome do scorecard: KPI-YYYYMM-Sobrenome-Nome-SEO|PPC.
+ * Nome do scorecard: KPI-YYYYMM-Sobrenome-Nome-Departamento (SEO, PPC, Tech, AM ou Creative).
  * Para mudar os KPIs padrão (nome, peso, meta, direção, fonte), edite KPI_DEFAULTS logo abaixo.
  */
 const KPI_ENDPOINT = 'kpi-scorecards.php';
@@ -28,12 +28,12 @@ const KPI_DEFAULTS = {
 };
 const KPI_ROLE_DEFAULT = { SEO: 'SEO Analyst', PPC: 'PPC Analyst' };
 
-state.kpi = { users: [], usersStatus: 'idle', usersError: null, usersLoadedAt: 0, saved: [], savedStatus: 'idle', savedError: null, rows: [], monthLabel: '', basis: '', billableTouched: false, data: { status: 'idle', key: '', kpis: null, errors: [] } };
+state.kpi = { users: [], usersStatus: 'idle', usersError: null, usersLoadedAt: 0, saved: [], savedStatus: 'idle', savedError: null, rows: [], monthLabel: '', basis: '', billableTouched: false, dueTouched: false, currentName: '', dirty: false, sending: false, data: { status: 'idle', key: '', kpis: null, errors: [] } };
 
 const kpiEl = {
     form: () => $('#kpi-form'), user: () => $('#kpi-user'), manager: () => $('#kpi-manager'), month: () => $('#kpi-month'),
     service: () => $('#kpi-service'), first: () => $('#kpi-first'), last: () => $('#kpi-last'), level: () => $('#kpi-level'),
-    role: () => $('#kpi-role'), billable: () => $('#kpi-billable'), provisional: () => $('#kpi-provisional'), notes: () => $('#kpi-notes'),
+    role: () => $('#kpi-role'), due: () => $('#kpi-due'), billable: () => $('#kpi-billable'), provisional: () => $('#kpi-provisional'), notes: () => $('#kpi-notes'),
 };
 
 const kpiToken = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
@@ -65,16 +65,28 @@ function kpiOverall() {
 
 const kpiZoneOf = (overall) => (overall >= 80 ? 'GREEN' : overall >= 70 ? 'YELLOW' : overall >= 50 ? 'ORANGE' : 'RED');
 
+// Vencimento padrão da subtask no ClickUp: dia 7 do mês seguinte ao mês de revisão (padrão visto nos scorecards existentes).
+const KPI_DUE_DAY = 7;
+function kpiDefaultDue() {
+    const period = kpiPeriod();
+    if (!/^\d{6}$/.test(period)) return '';
+    let year = Number(period.slice(0, 4));
+    let month = Number(period.slice(4)) + 1;
+    if (month > 12) { month = 1; year += 1; }
+    return `${year}-${String(month).padStart(2, '0')}-${String(KPI_DUE_DAY).padStart(2, '0')}`;
+}
+
 function kpiName() {
     const period = kpiPeriod();
-    return `KPI-${/^\d{6}$/.test(period) ? period : 'YYYYMM'}-${kpiPart(kpiEl.last().value) || 'Surname'}-${kpiPart(kpiEl.first().value) || 'Name'}-${kpiEl.service().value || 'SEO|PPC'}`;
+    return `KPI-${/^\d{6}$/.test(period) ? period : 'YYYYMM'}-${kpiPart(kpiEl.last().value) || 'Surname'}-${kpiPart(kpiEl.first().value) || 'Name'}-${kpiEl.service().value || 'Department'}`;
 }
 
 function kpiSplitName(full) {
     const parts = String(full || '').trim().split(/\s+/).filter(Boolean);
     if (parts.length < 2) return { first: parts[0] || '', last: '' };
-    const cut = parts.length >= 4 ? 2 : 1;
-    return { first: parts.slice(0, cut).join(' '), last: parts.slice(cut).join(' ') };
+    // Primeira e última palavra ("Giovanna de Lima Cunha" -> Giovanna / Cunha), como nas tasks já existentes no ClickUp.
+    // Se o nome real for outro, os campos Nome e Sobrenome da página são editáveis.
+    return { first: parts[0], last: parts[parts.length - 1] };
 }
 
 function kpiUserById(id) { return state.kpi.users.find((u) => String(u.id) === String(id)) || null; }
@@ -152,7 +164,7 @@ function kpiApplyData() {
         const item = s.data.kpis[n];
         if (!row || !item || !Number.isFinite(item.value)) return;
         const fresh = kpiFmt(item.value);
-        if (String(row.actual).trim() === '' || String(row.actual) === row.dashActual) row.actual = fresh;
+        if (String(row.actual).trim() === '' || String(row.actual) === row.dashActual) { if (row.actual !== fresh) s.dirty = true; row.actual = fresh; }
         row.dashActual = fresh;
         row.dashNote = item.note || '';
     });
@@ -295,7 +307,7 @@ function kpiPayload() {
         period: kpiPeriod(), service: kpiEl.service().value, level: kpiEl.level().value, roleTitle: kpiEl.role().value,
         userId: id && id !== '__manual' ? id : '', userName: kpiEmployeeName(),
         firstName: kpiEl.first().value, lastName: kpiEl.last().value,
-        managerId: manager ? String(manager.id) : '', managerName: manager ? manager.username : '',
+        managerId: manager ? String(manager.id) : '', managerName: manager ? manager.username : '', dueDate: kpiEl.due().value,
         provisional: kpiEl.provisional().checked, billable: kpiEl.billable().value, notes: kpiEl.notes().value,
         description: kpiDescription(), dashboardPeriod: s.monthLabel,
         kpis: s.rows.map((r) => ({ name: r.name, weight: r.weight, target: r.target, actual: String(r.actual).trim(), direction: r.direction, source: r.source, dashboardActual: r.dashActual })),
@@ -304,7 +316,7 @@ function kpiPayload() {
 
 function kpiValidate() {
     if (!/^20\d{4}$/.test(kpiPeriod())) return 'Choose the review month.';
-    if (!kpiEl.service().value) return 'Choose the department: SEO or PPC.';
+    if (!kpiEl.service().value) return 'Choose the department.';
     if (!kpiPart(kpiEl.first().value) || !kpiPart(kpiEl.last().value)) return 'Fill in the first and last name.';
     const rows = state.kpi.rows;
     if (!rows.length) return 'Add at least one KPI.';
@@ -329,8 +341,10 @@ async function kpiSave(event) {
         const body = await kpiRequest({ method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': kpiToken() }, body: JSON.stringify(kpiPayload()) });
         state.kpi.saved = body.scorecards || [];
         state.kpi.savedStatus = 'ready';
+        state.kpi.currentName = body.savedName;
+        state.kpi.dirty = false;
         kpiRenderSaved();
-        kpiSetStatus(`Saved ${body.savedName}.`, 'good');
+        kpiSetStatus(`Saved ${body.savedName}. Use "Send to ClickUp" when it is ready.`, 'good');
     } catch (error) {
         kpiShowError(error.message);
         kpiSetStatus('');
@@ -339,22 +353,93 @@ async function kpiSave(event) {
     }
 }
 
+const kpiWhen = (iso) => new Date(iso).toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
 function kpiRenderSaved() {
     const s = state.kpi;
     $('#kpi-saved-count').textContent = s.saved.length ? `${s.saved.length} saved` : '';
     $('#kpi-saved-rows').innerHTML = s.saved.map((card, i) => {
         const p = card.payload || {};
+        const sent = card.sentAt ? new Date(card.sentAt) : null;
+        const changed = sent && card.updatedAt && new Date(card.updatedAt).getTime() - sent.getTime() > 2000;
+        const link = p.clickup && p.clickup.subtaskUrl ? `<div><a class="kpi-link" href="${escapeHtml(p.clickup.subtaskUrl)}" target="_blank" rel="noopener">Open in ClickUp</a></div>` : '';
+        const clickup = sent
+            ? `<span class="kpi-tag" data-source="${changed ? 'edited' : 'dashboard'}">${changed ? 'Changed since sent' : 'Sent'}</span><div class="client-sub">${escapeHtml(kpiWhen(sent))}</div>${link}`
+            : '<span class="kpi-tag" data-source="manual">Not sent</span>';
+        const busy = s.sending ? ' disabled' : '';
         return `<tr data-i="${i}">
         <td><strong>${escapeHtml(card.name)}</strong>${p.provisional ? '<div class="client-sub">Provisional</div>' : ''}</td>
         <td>${escapeHtml(card.userName)}</td>
         <td>${Number.isFinite(p.overallScore) ? escapeHtml(String(p.overallScore)) : DASH}${p.performanceZone ? ` · ${escapeHtml(p.performanceZone)}` : ''}</td>
-        <td>${card.updatedAt ? escapeHtml(new Date(card.updatedAt).toLocaleString([], { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })) : DASH}${card.updatedBy ? `<div class="client-sub">${escapeHtml(card.updatedBy)}</div>` : ''}</td>
-        <td><button type="button" class="kpi-link" data-act="load">Open</button> <button type="button" class="kpi-link" data-act="delete">Delete</button></td>
+        <td>${clickup}</td>
+        <td>${card.updatedAt ? escapeHtml(kpiWhen(card.updatedAt)) : DASH}${card.updatedBy ? `<div class="client-sub">${escapeHtml(card.updatedBy)}</div>` : ''}</td>
+        <td><button type="button" class="kpi-link" data-act="load">Open</button> <button type="button" class="kpi-link" data-act="send"${busy}>${sent ? 'Send again' : 'Send'}</button> <button type="button" class="kpi-link" data-act="delete"${busy}>Delete</button></td>
     </tr>`;
     }).join('');
     const empty = $('#kpi-saved-empty');
     empty.classList.toggle('is-hidden', s.saved.length > 0);
     empty.textContent = s.savedStatus === 'off' || s.savedStatus === 'error' ? (s.savedError || 'Could not load the saved scorecards.') : 'No scorecards saved yet.';
+    kpiUpdateSendButton();
+}
+
+// Botão do formulário: só envia o que está salvo e igual ao que está na tela.
+function kpiUpdateSendButton() {
+    const s = state.kpi;
+    const button = $('#kpi-send');
+    if (!button) return;
+    const saved = s.saved.find((card) => card.name === s.currentName);
+    const ready = !!saved && !s.dirty && !s.sending;
+    button.disabled = !ready;
+    button.textContent = s.sending ? 'Sending…' : saved && saved.sentAt ? 'Send again to ClickUp' : 'Send to ClickUp';
+    button.title = ready ? '' : s.sending ? 'Sending…' : !saved ? 'Save the scorecard first.' : 'Save your changes first.';
+}
+
+function kpiMarkDirty() {
+    state.kpi.dirty = true;
+    kpiUpdateSendButton();
+}
+
+function kpiHideSendLink() {
+    const link = $('#kpi-send-link');
+    if (link) { link.hidden = true; link.removeAttribute('href'); }
+}
+
+async function kpiSend(name) {
+    const s = state.kpi;
+    if (s.sending) return;
+    const card = s.saved.find((c) => c.name === name);
+    if (!card) { kpiShowError('Save the scorecard first.'); return; }
+    const zone = (card.payload || {}).performanceZone;
+    const note = zone ? `\n\nThis scorecard has Performance Zone ${zone}. ClickUp automations may react to it.` : '';
+    if (!window.confirm(`${card.sentAt ? 'Update' : 'Create'} ${card.name} in ClickUp?${note}`)) return;
+    s.sending = true;
+    kpiShowError('');
+    kpiHideSendLink();
+    kpiSetStatus('Sending to ClickUp. This can take up to a minute…');
+    kpiUpdateSendButton();
+    kpiRenderSaved();
+    try {
+        const response = redirectIfSignedOut(await fetch('kpi-send.php', { method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': kpiToken() }, body: JSON.stringify({ name }) }));
+        const body = await response.json().catch(() => null);
+        if (!body) throw new Error(`The server answered HTTP ${response.status}.`);
+        if (!response.ok || (body.ok === false && !body.result)) throw new Error(body.error || `The server answered HTTP ${response.status}.`);
+        const result = body.result || {};
+        if (body.ok) {
+            const what = result.action === 'updated' ? 'Updated' : 'Created';
+            kpiSetStatus(`${what} ${name} in ClickUp${result.parentCreated ? ' (the parent task was created too)' : ''}.${body.warning ? ' ' + body.warning : ''}`, 'good');
+            if (result.subtaskUrl) { const link = $('#kpi-send-link'); link.href = result.subtaskUrl; link.hidden = false; }
+        } else {
+            const list = (result.failures || []).map((f) => `${f.field || 'field'} (${f.reason || 'HTTP ' + f.status})`).join(', ');
+            kpiShowError(`The subtask exists but some fields were not saved: ${list || 'unknown'}. It is not marked as sent. Fix it and send again, which updates the same subtask.`);
+            kpiSetStatus('');
+        }
+    } catch (error) {
+        kpiShowError(error.message);
+        kpiSetStatus('');
+    } finally {
+        s.sending = false;
+        await kpiLoadSaved();
+    }
 }
 
 function kpiLoadCard(card) {
@@ -369,6 +454,8 @@ function kpiLoadCard(card) {
     kpiEl.first().value = p.firstName || '';
     kpiEl.last().value = p.lastName || '';
     kpiEl.provisional().checked = !!p.provisional;
+    kpiEl.due().value = p.dueDate || '';
+    s.dueTouched = true;
     kpiEl.notes().value = p.notes || '';
     s.rows = (p.kpis || []).map((k) => {
         const dash = Number.isFinite(k.dashboardActual) ? kpiFmt(k.dashboardActual) : '';
@@ -378,8 +465,12 @@ function kpiLoadCard(card) {
     kpiRenderRows();
     kpiEl.billable().value = Number.isFinite(p.billable) ? kpiFmt(p.billable) : '';
     s.basis = 'Loaded from a saved scorecard. "Reset" pulls the defaults and the current dashboard figures again.';
+    s.currentName = card.name;
+    s.dirty = false;
     kpiRenderDerived();
     kpiShowError('');
+    kpiHideSendLink();
+    kpiUpdateSendButton();
     kpiSetStatus(`Opened ${card.name}.`);
     kpiEl.form().scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -398,6 +489,8 @@ function kpiInit() {
     // Revisão do mês que acabou: em novembro, o padrão é outubro (o scorecard é montado depois do fechamento).
     const review = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     kpiEl.month().value = `${review.getFullYear()}-${String(review.getMonth() + 1).padStart(2, '0')}`;
+    kpiEl.due().value = kpiDefaultDue();
+    kpiEl.due().addEventListener('input', () => { state.kpi.dueTouched = true; });
 
     kpiEl.user().addEventListener('change', () => {
         const user = kpiUserById(kpiEl.user().value);
@@ -412,7 +505,10 @@ function kpiInit() {
         kpiRebuild();
         kpiFetchData();
     });
-    kpiEl.month().addEventListener('input', () => kpiFetchData());
+    kpiEl.month().addEventListener('input', () => {
+        if (!state.kpi.dueTouched) kpiEl.due().value = kpiDefaultDue();
+        kpiFetchData();
+    });
     [kpiEl.month(), kpiEl.first(), kpiEl.last(), kpiEl.level(), kpiEl.role(), kpiEl.manager(), kpiEl.provisional(), kpiEl.notes()].forEach((el) => el.addEventListener('input', kpiRenderDerived));
     kpiEl.billable().addEventListener('input', () => { state.kpi.billableTouched = true; });
 
@@ -442,12 +538,17 @@ function kpiInit() {
     $('#kpi-copy-desc').addEventListener('click', () => kpiCopy(kpiDescription(), 'Description copied.'));
     $('#kpi-copy-json').addEventListener('click', () => kpiCopy(JSON.stringify({ name: kpiName(), ...kpiPayload() }, null, 2), 'JSON copied.'));
     form.addEventListener('submit', kpiSave);
+    $('#kpi-send').addEventListener('click', () => kpiSend(state.kpi.currentName));
+    form.addEventListener('input', kpiMarkDirty);
+    form.addEventListener('change', kpiMarkDirty);
+    form.addEventListener('click', (event) => { if (event.target.closest('#kpi-add, #kpi-reset, #kpi-rows button')) kpiMarkDirty(); });
 
     $('#kpi-saved-rows').addEventListener('click', async (event) => {
         const button = event.target.closest('button[data-act]');
         if (!button) return;
         const card = state.kpi.saved[Number(button.closest('tr').dataset.i)];
         if (button.dataset.act === 'load') return kpiLoadCard(card);
+        if (button.dataset.act === 'send') return kpiSend(card.name);
         if (!window.confirm(`Delete ${card.name}?`)) return;
         try {
             const body = await kpiRequest({ method: 'DELETE', headers: { 'X-CSRF-Token': kpiToken() } }, `?name=${encodeURIComponent(card.name)}`);

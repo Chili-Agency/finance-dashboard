@@ -14,12 +14,13 @@
                     <div class="kpi-grid">
                         <label class="field"><span>Employee (ClickUp user)</span><select id="kpi-user"><option value="">Loading users…</option></select></label>
                         <label class="field"><span>Review month</span><input type="month" id="kpi-month" required></label>
-                        <label class="field"><span>Department (manual)</span><select id="kpi-service" required><option value="">Choose…</option><option value="SEO">SEO</option><option value="PPC">PPC</option></select></label>
+                        <label class="field"><span>Department (manual)</span><select id="kpi-service" required><option value="">Choose…</option><option value="SEO">SEO</option><option value="PPC">PPC</option><option value="Tech">Tech</option><option value="AM">AM</option><option value="Creative">Creative</option></select></label>
+                        <label class="field"><span>Level</span><select id="kpi-level"><option>L1</option><option>L2</option><option>L3</option><option>L4</option><option>L5</option></select></label>
                         <label class="field"><span>First name</span><input type="text" id="kpi-first" maxlength="60" autocomplete="off" required></label>
                         <label class="field"><span>Last name</span><input type="text" id="kpi-last" maxlength="60" autocomplete="off" required></label>
-                        <label class="field"><span>Level</span><select id="kpi-level"><option>L1</option><option>L2</option><option>L3</option><option>L4</option><option>L5</option></select></label>
                         <label class="field"><span>Role / Title</span><input type="text" id="kpi-role" maxlength="80" autocomplete="off" placeholder="e.g. PPC Analyst"></label>
-                        <label class="field"><span>Manager (ClickUp user)</span><select id="kpi-manager"><option value="">—</option></select></label>
+                        <label class="field"><span>Manager (assignee in ClickUp)</span><select id="kpi-manager"><option value="">—</option></select></label>
+                        <label class="field"><span>Due date in ClickUp</span><input type="date" id="kpi-due"></label>
                         <div class="field kpi-name-box"><span>Scorecard name</span>
                             <div class="kpi-name-row"><code id="kpi-name">KPI-…</code><button type="button" class="button-secondary" id="kpi-copy-name">Copy</button></div>
                         </div>
@@ -56,9 +57,11 @@
 
                     <p class="form-error" id="kpi-error" role="alert" hidden></p>
                     <p class="manual-input-status" id="kpi-status" data-tone="muted" aria-live="polite"></p>
+                    <p class="kpi-hint"><a class="kpi-link" id="kpi-send-link" href="#" target="_blank" rel="noopener" hidden>Open in ClickUp</a></p>
                     <div class="modal-actions kpi-submit-row">
                         <button type="button" class="button-secondary" id="kpi-copy-json">Copy JSON</button>
                         <button type="submit" class="button-primary" id="kpi-save">Save scorecard</button>
+                        <button type="button" class="button-secondary" id="kpi-send" disabled title="Save the scorecard first.">Send to ClickUp</button>
                     </div>
                 </form>
 
@@ -66,7 +69,7 @@
                     <div class="panel-header"><h3>Saved scorecards</h3><span class="panel-meta" id="kpi-saved-count"></span></div>
                     <div class="table-scroll">
                         <table class="entries-table kpi-saved-table">
-                            <thead><tr><th>Name</th><th>Employee</th><th>Score</th><th>Updated</th><th></th></tr></thead>
+                            <thead><tr><th>Name</th><th>Employee</th><th>Score</th><th>ClickUp</th><th>Updated</th><th></th></tr></thead>
                             <tbody id="kpi-saved-rows"></tbody>
                         </table>
                     </div>

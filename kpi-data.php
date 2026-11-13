@@ -16,6 +16,7 @@ auth_require_permission($currentUser, 'kpi_scorecard');
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+@set_time_limit(150); // o n8n pagina as tarefas do mês e pode passar de 30 s
 
 $userId = trim((string) ($_GET['userId'] ?? ''));
 $month = trim((string) ($_GET['month'] ?? ''));
