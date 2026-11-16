@@ -1,39 +1,34 @@
 /*
  * Página "KPI scorecard" (admin): monta o scorecard de KPI de um usuário do ClickUp com a mesma estrutura da subtask do ClickUp
  * (nível, KPI 1-7 com peso/meta/atual/score/fonte/direção, score geral, zona, gerente) e salva em kpi-scorecards.php.
- * O envio ao ClickUp será feito depois por um workflow do n8n.
+ * O envio ao ClickUp é feito pelo workflow do n8n (kpi-send.php).
  *
- * Nome do scorecard: KPI-YYYYMM-Sobrenome-Nome-Departamento (SEO, PPC, Tech, AM ou Creative).
- * Para mudar os KPIs padrão (nome, peso, meta, direção, fonte), edite KPI_DEFAULTS logo abaixo.
+ * Nome do scorecard: KPI-YYYYMM-Sobrenome-Nome-Departamento (SEO, PPC, Tech, AM, Creative, Sales ou Ops).
+ * Os KPIs de cada cargo vêm de assets/kpi-templates.js (KPI_ROLE_TEMPLATES), gerado da planilha de KPIs por
+ * tools/kpi-templates-from-xlsx.py. Para mudar KPI, peso ou meta de um cargo, ajuste a planilha e gere o arquivo de novo.
  */
 const KPI_ENDPOINT = 'kpi-scorecards.php';
 const KPI_USERS_ENDPOINT = 'clickup-users.php';
 const KPI_DATA_ENDPOINT = 'kpi-data.php'; // KPI 1 e KPI 3 vêm do n8n (workflow "Data Fetching Workflow for KPIs")
-const KPI_DATA_ROWS = { 1: 0, 3: 2 }; // número do KPI no n8n -> posição da linha na tabela
 const KPI_USERS_FRESH_MS = 10 * 60 * 1000;
 const KPI_MAX_SLOTS = 7;
 const KPI_SCORE_CAP = 1.2;
-const KPI_TEMPLATE_DOC = 'Chili_KPIs_by_Department_v5';
+const KPI_TEMPLATE_DOC = 'Chili_KPI_OKR_Framework_2026_v3';
 
-// Nomes, pesos e metas são os mesmos em todo L1 de todo departamento; só a fonte muda.
-// As fontes abaixo foram copiadas do scorecard PPC. A fonte de SEO é a mesma até alguém informar outra.
-const KPI_DEFAULTS = {
-    default: [
-        { name: 'Delivery / SLA Hit-Rate', weight: 25, target: 95, direction: 'higher', source: 'ClickUp' },
-        { name: 'Quality / Rework Rate', weight: 25, target: 10, direction: 'lower', source: 'ClickUp QA' },
-        { name: 'Time Tracking + Billable %', weight: 20, target: 95, direction: 'higher', source: 'ClickUp' },
-        { name: 'Scope Support Contribution', weight: 15, target: 80, direction: 'higher', source: 'Platform/HubSpot' },
-        { name: 'Training & Certification', weight: 15, target: 100, direction: 'higher', source: 'Platform (certifications)' },
-    ],
-};
-const KPI_ROLE_DEFAULT = { SEO: 'SEO Analyst', PPC: 'PPC Analyst' };
+// Modelos de KPI por departamento do ClickUp e cargo (assets/kpi-templates.js). Departamento sem modelo (ex.: Tech) começa sem KPIs.
+const kpiTemplatesOf = (department) => (typeof KPI_ROLE_TEMPLATES !== 'undefined' && KPI_ROLE_TEMPLATES.departments[department] && KPI_ROLE_TEMPLATES.departments[department].roles) || [];
 
-state.kpi = { users: [], usersStatus: 'idle', usersError: null, usersLoadedAt: 0, saved: [], savedStatus: 'idle', savedError: null, rows: [], monthLabel: '', basis: '', billableTouched: false, dueTouched: false, currentName: '', dirty: false, sending: false, data: { status: 'idle', key: '', kpis: null, errors: [] } };
+state.kpi = { users: [], usersStatus: 'idle', usersError: null, usersLoadedAt: 0, saved: [], savedStatus: 'idle', savedError: null, rows: [], monthLabel: '', basis: '', billableTouched: false, dueTouched: false, currentName: '', autoRole: '', dirty: false, sending: false, data: { status: 'idle', key: '', kpis: null, errors: [] } };
 
 const kpiEl = {
     form: () => $('#kpi-form'), user: () => $('#kpi-user'), manager: () => $('#kpi-manager'), month: () => $('#kpi-month'),
-    service: () => $('#kpi-service'), first: () => $('#kpi-first'), last: () => $('#kpi-last'), level: () => $('#kpi-level'),
+    service: () => $('#kpi-service'), template: () => $('#kpi-template'), first: () => $('#kpi-first'), last: () => $('#kpi-last'), level: () => $('#kpi-level'),
     role: () => $('#kpi-role'), due: () => $('#kpi-due'), billable: () => $('#kpi-billable'), provisional: () => $('#kpi-provisional'), notes: () => $('#kpi-notes'),
+};
+
+const kpiSelectedTemplate = () => {
+    const value = kpiEl.template().value;
+    return value === '' ? null : kpiTemplatesOf(kpiEl.service().value)[Number(value)] || null;
 };
 
 const kpiToken = () => document.querySelector('meta[name="csrf-token"]')?.content || '';
@@ -159,15 +154,24 @@ function kpiDataKey() {
 function kpiApplyData() {
     const s = state.kpi;
     if (!s.data.kpis || s.data.key !== kpiDataKey()) return;
-    Object.entries(KPI_DATA_ROWS).forEach(([n, index]) => {
-        const row = s.rows[index];
-        const item = s.data.kpis[n];
-        if (!row || !item || !Number.isFinite(item.value)) return;
-        const fresh = kpiFmt(item.value);
-        if (String(row.actual).trim() === '' || String(row.actual) === row.dashActual) { if (row.actual !== fresh) s.dirty = true; row.actual = fresh; }
-        row.dashActual = fresh;
-        row.dashNote = item.note || '';
-    });
+    // KPIs de entrega no prazo (autofill 'on_time' no modelo do cargo)
+    const onTime = s.data.kpis[1];
+    if (onTime && Number.isFinite(onTime.value)) {
+        const fresh = kpiFmt(onTime.value);
+        s.rows.forEach((row) => {
+            if (row.autofill !== 'on_time') return;
+            if (String(row.actual).trim() === '' || String(row.actual) === row.dashActual) { if (row.actual !== fresh) s.dirty = true; row.actual = fresh; }
+            row.dashActual = fresh;
+            row.dashNote = onTime.note || '';
+        });
+    }
+    // Campo Billable % do ClickUp: horas billable / capacidade, do workflow de dados
+    const billable = s.data.kpis[3];
+    if (!s.billableTouched && billable && Number.isFinite(billable.value)) {
+        const fresh = kpiFmt(billable.value);
+        if (kpiEl.billable().value !== fresh) s.dirty = true;
+        kpiEl.billable().value = fresh;
+    }
 }
 
 async function kpiFetchData(force = false) {
@@ -208,17 +212,31 @@ function kpiBasisText() {
     const d = s.data;
     if (d.status === 'loading') return 'Loading the ClickUp data for this user and month…';
     if (d.status === 'error') return `Could not load the ClickUp data (${d.errors[0] || 'unknown error'}). Type the values by hand.`;
-    if (d.status === 'ready') return `KPI 1 and KPI 3 come from ClickUp for the review month.${d.errors.length ? ` Partial data: ${d.errors.join(' · ')}.` : ''} The other KPIs have no automatic source yet: type them in.`;
+    if (d.status === 'ready') return `On-time delivery KPIs and Billable % come from ClickUp for the review month.${d.errors.length ? ` Partial data: ${d.errors.join(' · ')}.` : ''} The other KPIs have no automatic source yet: type them in.`;
     return 'No automatic data for a typed user. Choose the user from the ClickUp list, or type the values by hand.';
 }
 
 function kpiBuildRows() {
     const s = state.kpi;
-    s.rows = KPI_DEFAULTS.default.map((d) => ({ ...d, actual: '', dashActual: '', dashNote: '' }));
+    const template = kpiSelectedTemplate();
+    s.rows = template ? template.kpis.map((k) => ({
+        name: k.name, weight: String(k.weight), target: String(k.target), direction: k.direction, source: k.source || '',
+        unit: k.unit || '', description: k.description || '', autofill: k.autofill || null, actual: '', dashActual: '', dashNote: '',
+    })) : [];
     s.billableTouched = false;
+    kpiEl.billable().value = '';
     s.monthLabel = '';
     s.basis = '';
     kpiApplyData();
+}
+
+function kpiRenderTemplateOptions() {
+    const select = kpiEl.template();
+    const department = kpiEl.service().value;
+    const roles = kpiTemplatesOf(department);
+    const hint = !department ? 'Choose the department first' : roles.length ? 'Choose the role…' : 'No KPI template for this department yet';
+    select.innerHTML = `<option value="">${hint}</option>${roles.map((t, i) => `<option value="${i}">${escapeHtml(t.role)} · ${escapeHtml(t.level)}</option>`).join('')}`;
+    select.disabled = !roles.length;
 }
 
 function kpiRenderRows() {
@@ -227,16 +245,17 @@ function kpiRenderRows() {
         const edited = row.dashActual !== '' && String(row.actual) !== row.dashActual;
         return `<tr data-i="${i}">
         <td>${i + 1}</td>
-        <td><input class="ah-input" type="text" data-f="name" maxlength="120" value="${escapeHtml(row.name)}" aria-label="KPI ${i + 1} name"></td>
+        <td><input class="ah-input" type="text" data-f="name" maxlength="120" value="${escapeHtml(row.name)}" aria-label="KPI ${i + 1} name">${row.unit || row.description ? `<div class="kpi-row-note">${escapeHtml([row.unit, row.description].filter(Boolean).join(' · '))}</div>` : ''}</td>
         <td><input class="ah-input" type="text" inputmode="decimal" data-f="weight" maxlength="6" value="${escapeHtml(row.weight)}" aria-label="KPI ${i + 1} weight"></td>
         <td><input class="ah-input" type="text" inputmode="decimal" data-f="target" maxlength="10" value="${escapeHtml(row.target)}" aria-label="KPI ${i + 1} target"></td>
         <td><select class="ah-input" data-f="direction" aria-label="KPI ${i + 1} direction"><option value="higher"${row.direction === 'higher' ? ' selected' : ''}>Higher is better</option><option value="lower"${row.direction === 'lower' ? ' selected' : ''}>Lower is better</option></select></td>
         <td><input class="ah-input" type="text" inputmode="decimal" data-f="actual" maxlength="10" value="${escapeHtml(row.actual)}" aria-label="KPI ${i + 1} actual">
             ${row.dashNote ? `<div class="kpi-dash-note"><span>ClickUp: ${escapeHtml(row.dashNote)}</span>${edited ? '<button type="button" class="kpi-link" data-act="restore">Restore</button>' : ''}</div>` : ''}</td>
         <td><span class="kpi-score" data-score>—</span></td>
-        <td><input class="ah-input" type="text" data-f="source" maxlength="80" value="${escapeHtml(row.source)}" aria-label="KPI ${i + 1} source or tool">${i >= 5 ? '<button type="button" class="kpi-link" data-act="remove">Remove</button>' : ''}</td>
+        <td><input class="ah-input" type="text" data-f="source" maxlength="80" value="${escapeHtml(row.source)}" aria-label="KPI ${i + 1} source or tool"><button type="button" class="kpi-link" data-act="remove">Remove</button></td>
     </tr>`;
     }).join('');
+    if (!s.rows.length) $('#kpi-rows').innerHTML = '<tr><td colspan="8" class="table-empty">Choose the department and the role to load its KPIs, or add KPIs by hand.</td></tr>';
     kpiRenderDerived();
 }
 
@@ -257,7 +276,8 @@ function kpiDescription() {
     const lines = [`KPI scorecard — ${full} · ${kpiEl.role().value.trim() || dept} (${level}) · ${mon || '—'}`, ''];
     if (kpiEl.provisional().checked) lines.push(`⚠️ Provisional data. ${scoredWeight}% of the weight could be scored from system data.${kpiEl.notes().value.trim() ? ' ' + kpiEl.notes().value.trim() : ''} Do not use this for a zone, a PIP or a probation decision. Performance Zone is intentionally left blank.`, '');
     else if (kpiEl.notes().value.trim()) lines.push(kpiEl.notes().value.trim(), '');
-    lines.push(`Template: ${level} · ${dept} tab of ${KPI_TEMPLATE_DOC}. The KPI names, weights and targets are identical for every ${level} in every department. Only the Source / Tool column varies.`, '');
+    const template = kpiSelectedTemplate();
+    if (template) lines.push(`KPI framework: ${template.role} (${level}), ${KPI_TEMPLATE_DOC}.`, '');
     lines.push(`| # | KPI | Weight | Target | Actual (${monShort}) | Score % | Source / note |`, '|---|---|---|---|---|---|---|');
     s.rows.forEach((row, i) => {
         const score = kpiScore(row);
@@ -285,7 +305,6 @@ function kpiRenderDerived() {
     const weights = $('#kpi-weights');
     weights.textContent = `${Math.round(total * 100) / 100}`;
     weights.style.color = Math.abs(total - 100) > 0.01 ? '#b3261e' : '';
-    if (!s.billableTouched) kpiEl.billable().value = s.rows[2] && kpiNum(s.rows[2].actual) !== null ? kpiFmt(kpiNum(s.rows[2].actual)) : '';
     const zone = $('#kpi-zone');
     const name = overall === null || provisional ? '' : kpiZoneOf(overall);
     zone.textContent = name || '—';
@@ -447,6 +466,10 @@ function kpiLoadCard(card) {
     const p = card.payload || {};
     kpiEl.month().value = `${card.period.slice(0, 4)}-${card.period.slice(4)}`;
     kpiEl.service().value = card.service;
+    kpiRenderTemplateOptions();
+    const found = kpiTemplatesOf(card.service).findIndex((t) => t.role.toLowerCase() === String(p.roleTitle || '').trim().toLowerCase());
+    kpiEl.template().value = found >= 0 ? String(found) : '';
+    s.autoRole = found >= 0 ? kpiTemplatesOf(card.service)[found].role : '';
     kpiEl.level().value = p.level || 'L1';
     kpiEl.role().value = p.roleTitle || '';
     kpiEl.user().value = kpiUserById(card.userId) ? String(card.userId) : '__manual';
@@ -464,7 +487,7 @@ function kpiLoadCard(card) {
     s.billableTouched = Number.isFinite(p.billable);
     kpiRenderRows();
     kpiEl.billable().value = Number.isFinite(p.billable) ? kpiFmt(p.billable) : '';
-    s.basis = 'Loaded from a saved scorecard. "Reset" pulls the defaults and the current dashboard figures again.';
+    s.basis = 'Loaded from a saved scorecard. "Reset" reloads the KPIs of the selected role and the current ClickUp figures.';
     s.currentName = card.name;
     s.dirty = false;
     kpiRenderDerived();
@@ -500,8 +523,24 @@ function kpiInit() {
         kpiFetchData();
     });
     kpiEl.service().addEventListener('change', () => {
-        const role = kpiEl.role().value.trim();
-        if (!role || Object.values(KPI_ROLE_DEFAULT).includes(role)) kpiEl.role().value = KPI_ROLE_DEFAULT[kpiEl.service().value] || '';
+        const s = state.kpi;
+        if (kpiEl.role().value.trim() === s.autoRole) kpiEl.role().value = '';
+        s.autoRole = '';
+        kpiRenderTemplateOptions();
+        kpiRebuild();
+        kpiFetchData();
+    });
+    kpiEl.template().addEventListener('change', () => {
+        const s = state.kpi;
+        const template = kpiSelectedTemplate();
+        if (template) {
+            kpiEl.level().value = template.level;
+            kpiEl.role().value = template.role;
+            s.autoRole = template.role;
+        } else if (kpiEl.role().value.trim() === s.autoRole) {
+            kpiEl.role().value = '';
+            s.autoRole = '';
+        }
         kpiRebuild();
         kpiFetchData();
     });
@@ -564,6 +603,7 @@ function kpiInit() {
         if (!state.kpi.rows.length) kpiRebuild();
     }));
     kpiRenderUsers();
+    kpiRenderTemplateOptions();
     kpiBuildRows();
     kpiRenderRows();
 }

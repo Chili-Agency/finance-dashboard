@@ -23,8 +23,8 @@ auth_require_permission($currentUser, 'kpi_scorecard');
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
 
-// Opções do campo Department do ClickUp usadas pela página (o ClickUp também tem Sales e Ops).
-const KPI_SERVICES = ['SEO', 'PPC', 'Tech', 'AM', 'Creative'];
+// Opções do campo Department do ClickUp usadas pela página (são as mesmas do ClickUp).
+const KPI_SERVICES = ['SEO', 'PPC', 'Tech', 'AM', 'Creative', 'Sales', 'Ops'];
 const KPI_MAX_SLOTS = 7;
 const KPI_SCORE_CAP = 1.2;
 const KPI_LIST_LIMIT = 200;
@@ -166,8 +166,8 @@ function kpi_validate(array $input): array
         throw new InvalidArgumentException('Choose the department: ' . implode(', ', KPI_SERVICES) . '.');
     }
     $level = strtoupper(trim((string) ($input['level'] ?? '')));
-    if (preg_match('/^L[1-9]$/', $level) !== 1) {
-        throw new InvalidArgumentException('Choose the level (for example L1).');
+    if (preg_match('/^L[0-5]$/', $level) !== 1) {
+        throw new InvalidArgumentException('Choose the level (L0 to L5).');
     }
     $first = kpi_clean($input['firstName'] ?? '', 'First name', 60);
     $last = kpi_clean($input['lastName'] ?? '', 'Last name', 60);

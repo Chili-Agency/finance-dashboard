@@ -1662,6 +1662,7 @@ function asset(string $path): string
     <script src="<?= asset('assets/ppc.js') ?>"></script>
     <script src="<?= asset('assets/account-health.js') ?>"></script>
 <?php if ($canKpiScorecard): ?>
+    <script src="<?= asset('assets/kpi-templates.js') ?>"></script>
     <script src="<?= asset('assets/kpi-scorecard.js') ?>"></script>
 <?php endif; ?>
     <script src="<?= asset('assets/app.js') ?>"></script>
