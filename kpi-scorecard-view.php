@@ -6,7 +6,7 @@
                     <div>
                         <p class="eyebrow">Team performance</p>
                         <h2>KPI scorecard builder</h2>
-                        <p class="section-copy">Same fields as the ClickUp scorecard subtask. Delivery and Time Tracking are filled from ClickUp for the review month; edit or type any value, and type the other KPIs. Scores, overall score and zone are calculated for you. Saved scorecards are what the n8n workflow will send to ClickUp.</p>
+                        <p class="section-copy">Pick the department and the role: the KPIs, weights and targets come from the KPI framework for that role and can be edited. On-time delivery KPIs and Billable % are filled from ClickUp for the review month; type the other values. Scores, overall score and zone are calculated for you.</p>
                     </div>
                 </div>
 
@@ -14,12 +14,13 @@
                     <div class="kpi-grid">
                         <label class="field"><span>Employee (ClickUp user)</span><select id="kpi-user"><option value="">Loading users…</option></select></label>
                         <label class="field"><span>Review month</span><input type="month" id="kpi-month" required></label>
-                        <label class="field"><span>Department (manual)</span><select id="kpi-service" required><option value="">Choose…</option><option value="SEO">SEO</option><option value="PPC">PPC</option><option value="Tech">Tech</option><option value="AM">AM</option><option value="Creative">Creative</option></select></label>
-                        <label class="field"><span>Level</span><select id="kpi-level"><option>L1</option><option>L2</option><option>L3</option><option>L4</option><option>L5</option></select></label>
+                        <label class="field"><span>Department (manual)</span><select id="kpi-service" required><option value="">Choose…</option><option value="SEO">SEO</option><option value="PPC">PPC</option><option value="Tech">Tech</option><option value="AM">AM</option><option value="Creative">Creative</option><option value="Sales">Sales</option><option value="Ops">Ops</option></select></label>
+                        <label class="field"><span>Role (loads the KPIs)</span><select id="kpi-template" disabled><option value="">Choose the department first</option></select></label>
+                        <label class="field"><span>Level</span><select id="kpi-level"><option>L0</option><option selected>L1</option><option>L2</option><option>L3</option><option>L4</option></select></label>
                         <label class="field"><span>First name</span><input type="text" id="kpi-first" maxlength="60" autocomplete="off" required></label>
                         <label class="field"><span>Last name</span><input type="text" id="kpi-last" maxlength="60" autocomplete="off" required></label>
-                        <label class="field"><span>Role / Title</span><input type="text" id="kpi-role" maxlength="80" autocomplete="off" placeholder="e.g. PPC Analyst"></label>
                         <label class="field"><span>Manager (assignee in ClickUp)</span><select id="kpi-manager"><option value="">—</option></select></label>
+                        <label class="field"><span>Role / Title</span><input type="text" id="kpi-role" maxlength="80" autocomplete="off" placeholder="e.g. PPC Analyst"></label>
                         <label class="field"><span>Due date in ClickUp</span><input type="date" id="kpi-due"></label>
                         <div class="field kpi-name-box"><span>Scorecard name</span>
                             <div class="kpi-name-row"><code id="kpi-name">KPI-…</code><button type="button" class="button-secondary" id="kpi-copy-name">Copy</button></div>

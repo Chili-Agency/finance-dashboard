@@ -1,6 +1,6 @@
 .kpi-form{margin-bottom:18px}
 .kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
-.kpi-name-box{grid-column:span 3}
+.kpi-name-box{grid-column:span 2}
 .kpi-name-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .kpi-name-row code{flex:1;min-width:0;overflow-wrap:anywhere;background:#f1efe9;border:1px solid var(--line);padding:10px 12px;font:500 12px 'DM Mono',monospace}
 .kpi-hint{color:var(--muted);font-size:11px;line-height:1.6;margin:12px 0 0}
@@ -11,6 +11,7 @@
 .kpi-table input.ah-input,.kpi-table select.ah-input{min-width:70px}
 .kpi-table td:nth-child(2) input{min-width:190px}
 .kpi-table td:last-child input{min-width:150px}
+.kpi-row-note{color:var(--muted);font:500 10px 'DM Mono',monospace;margin-top:6px;line-height:1.5;max-width:260px}
 .kpi-score{font:500 13px 'DM Mono',monospace;padding-top:9px;display:block}
 .kpi-dash-note{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:5px;font:500 10px 'DM Mono',monospace;color:var(--muted)}
 .kpi-link{border:0;background:transparent;color:var(--muted);font:600 11px Manrope;cursor:pointer;padding:2px 4px;text-decoration:underline}
