@@ -14,6 +14,11 @@ declare(strict_types=1);
  * Só as moedas de CURRENCIES são pedidas e gravadas. Para incluir outra, acrescente o código
  * ali; ela passa a ser gravada a partir da próxima busca.
  * Sem OER_APP_ID no .env, usa só o que já está no banco (dá para preencher à mão no DBeaver).
+ *
+ * BRL é a exceção: logo depois de gravar as cotações da OER, o mês corrente tem o BRL trocado pela
+ * PTAX (venda) do Banco Central, a do último dia útil até hoje (API pública, sem chave). Ao longo do
+ * mês fica a PTAX mais recente; no último disparo do mês, a de fechamento. Se o Banco Central falhar,
+ * o BRL fica com o valor da OER e o erro aparece em errors().
  */
 
 final class FxRates
@@ -25,6 +30,9 @@ final class FxRates
     private const LOCK_NAME = 'chili_finance_fx_rates';
     private const LOCK_WAIT_SECONDS = 20;
     private const API = 'https://openexchangerates.org/api/latest.json';
+    private const PTAX_API = 'https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/CotacaoDolarPeriodo(dataInicial=@dataInicial,dataFinalCotacao=@dataFinalCotacao)';
+    /** Dias para trás em que se procura a PTAX mais recente (cobre fim de semana e feriados seguidos). */
+    private const PTAX_LOOKBACK_DAYS = 10;
 
     /** @var array<string, array<string, float>> moeda => ["YYYY-MM" => unidades por USD], meses em ordem */
     private array $rates = [];
@@ -265,6 +273,70 @@ final class FxRates
                 source = VALUES(source),
                 fetched_at = VALUES(fetched_at)'
         )->execute($params);
+
+        $this->storePtax($month); // só depois da OER: a linha do mês já existe e o lock está com a gente
+    }
+
+    /** Troca o BRL do mês pela PTAX. Falha do Banco Central não derruba a busca da OER. */
+    private function storePtax(string $month): void
+    {
+        try {
+            $quote = $this->requestPtax();
+            $this->pdo->prepare(
+                'INSERT INTO fx_monthly_rates
+                    (period_month, currency, units_per_usd, rate_date, is_final, source, fetched_at)
+                 VALUES (?, ?, ?, ?, 0, ?, ?)
+                 ON DUPLICATE KEY UPDATE
+                    units_per_usd = VALUES(units_per_usd),
+                    rate_date = VALUES(rate_date),
+                    source = VALUES(source),
+                    fetched_at = VALUES(fetched_at)'
+            )->execute([$month . '-01', 'BRL', round($quote['rate'], 10), $quote['date'], 'bcb-ptax', gmdate('Y-m-d H:i:s')]);
+        } catch (Throwable $error) {
+            error_log("[fx-rates] {$month} PTAX: " . $error->getMessage());
+            $this->errors[] = 'Banco Central PTAX: ' . $error->getMessage();
+        }
+    }
+
+    /**
+     * PTAX (venda) mais recente do Banco Central até hoje.
+     * @return array{rate:float, date:string}
+     */
+    private function requestPtax(): array
+    {
+        $today = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        $query = '@dataInicial=' . rawurlencode("'" . $today->modify('-' . self::PTAX_LOOKBACK_DAYS . ' days')->format('m-d-Y') . "'")
+            . '&@dataFinalCotacao=' . rawurlencode("'" . $today->format('m-d-Y') . "'")
+            . '&$orderby=' . rawurlencode('dataHoraCotacao desc') . '&$top=1&$format=json';
+        $curl = curl_init(self::PTAX_API . '?' . $query);
+        curl_setopt_array($curl, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT => 15,
+            CURLOPT_HTTPHEADER => ['Accept: application/json'],
+            CURLOPT_USERAGENT => 'Chili Finance Dashboard/1.0',
+        ]);
+        $raw = curl_exec($curl);
+        $status = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($curl);
+        curl_close($curl);
+
+        if ($raw === false || $curlError !== '') {
+            throw new RuntimeException('could not connect (' . ($curlError ?: 'unknown error') . ').');
+        }
+        $data = json_decode((string) $raw, true);
+        if ($status !== 200 || !is_array($data)) {
+            throw new RuntimeException("HTTP {$status} with an unexpected body.");
+        }
+        $row = $data['value'][0] ?? null;
+        if (!is_array($row) || !isset($row['cotacaoVenda'], $row['dataHoraCotacao']) || !is_numeric($row['cotacaoVenda']) || (float) $row['cotacaoVenda'] <= 0) {
+            throw new RuntimeException('no PTAX quote in the last ' . self::PTAX_LOOKBACK_DAYS . ' days.');
+        }
+        $date = substr((string) $row['dataHoraCotacao'], 0, 10);
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) !== 1) {
+            throw new RuntimeException('unexpected PTAX date.');
+        }
+        return ['rate' => (float) $row['cotacaoVenda'], 'date' => $date];
     }
 
     /** @return array{timestamp:int, rates:array<string, mixed>} */

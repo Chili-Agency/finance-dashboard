@@ -323,13 +323,15 @@ function summaryPeriod() {
         reactivated: sumOf('retention', 'reactivated'),
         churned: churnSum(),
         onboarding: sumOf('retention', 'onboardingChange'),
+        breakFee: sumOf('retention', 'breakFeeChange'),
     };
     const explained = base
         + (flows.newBusiness || 0)
         + (flows.upsells || 0)
         + (flows.reactivated || 0)
         - (flows.churned || 0)
-        + (flows.onboarding || 0);
+        + (flows.onboarding || 0)
+        + (flows.breakFee || 0);
     const other = Math.abs(end - explained) >= 1 ? end - explained : 0;
     const hasData = months.some((month) => summaryRow('mrr', month) || summaryRow('retention', month)) || Boolean(baseRow);
 
@@ -369,6 +371,7 @@ function renderSummaryHealth(period) {
         { label: 'Upsells', value: flow(period.upsells), tone: tone(period.upsells) },
         ...(period.reactivated > 0 ? [{ label: 'Reactivated', sub: 'clients back after a gap', value: flow(period.reactivated), tone: 'up' }] : []),
         ...(Math.abs(Number(period.onboarding) || 0) >= 1 ? [{ label: 'Onboarding fees', sub: 'started or ended on existing clients, not churn', value: flow(period.onboarding), tone: tone(period.onboarding) }] : []),
+        ...(Math.abs(Number(period.breakFee) || 0) >= 1 ? [{ label: 'Break fees', sub: 'one-off termination fees, not churn', value: flow(period.breakFee), tone: tone(period.breakFee) }] : []),
         ...(period.other ? [{ label: 'Other changes', sub: 'not tied to a service line', value: flow(period.other), tone: tone(period.other) }] : []),
         { label: 'Net change', sub: `recurring base vs ${monthLabel(monthFromKey(period.baseMonth))}`, value: signedMoney(period.net), tone: tone(period.net) },
     ] : [{ label: 'No billable invoices in this period', value: DASH }];
@@ -431,6 +434,7 @@ function renderSummaryBridgeChart(period) {
         { label: 'Reactivated', hint: 'Clients back after a gap', value: optional(period.reactivated) },
         { label: 'Churn', hint: 'Lost clients and downgrades', value: hasValue(period.churned) ? -Number(period.churned) : 0 },
         { label: 'Onboarding fees', hint: 'One-off fees starting or ending', value: optional(period.onboarding), adjust: true },
+        { label: 'Break fees', hint: 'One-off termination fees starting or ending', value: optional(period.breakFee), adjust: true },
         { label: 'Other changes', hint: 'Not tied to a service line', value: optional(period.other), adjust: true },
     ].filter((flow) => flow.value !== null);
     const scale = Math.max(...flows.map((flow) => Math.abs(flow.value)), 1);
