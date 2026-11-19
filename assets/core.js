@@ -461,7 +461,8 @@ function onboardingLineAmount(invoice, line) {
 }
 
 // Multa de rescisão (break fee): receita não recorrente, cobrada quando o cliente sai.
-// Fica fora de todo o MRR; as abas Invoices e Late invoices seguem mostrando o valor cheio da fatura.
+// Entra no MRR do dashboard (decisão de reunião). Só a base da retenção (recurringAmount) a deixa de fora,
+// para que a multa de quem saiu não mascare o churn.
 function breakFeeLineAmount(invoice, line) {
     const share = Number(invoice.breakFeeShares?.[line]) || 0;
     return share ? fullAmount(invoice) * share : 0;
@@ -475,13 +476,13 @@ function breakFeeAmount(invoice) {
     return share ? fullAmount(invoice) * share : 0;
 }
 
-/** Valor que entra no MRR: a fatura sem a multa de rescisão. */
-function mrrAmount(invoice) { return amount(invoice) - breakFeeAmount(invoice); }
+/** Valor que entra no MRR: a fatura inteira, com onboarding fee e break fee. */
+function mrrAmount(invoice) { return amount(invoice); }
 
-function mrrLineAmount(invoice, line) { return lineAmount(invoice, line) - breakFeeLineAmount(invoice, line); }
+function mrrLineAmount(invoice, line) { return lineAmount(invoice, line); }
 
-// Base da retenção: MRR sem a onboarding fee.
-function recurringLineAmount(invoice, line) { return mrrLineAmount(invoice, line) - onboardingLineAmount(invoice, line); }
+// Base da retenção: MRR sem a onboarding fee e sem a break fee.
+function recurringLineAmount(invoice, line) { return mrrLineAmount(invoice, line) - onboardingLineAmount(invoice, line) - breakFeeLineAmount(invoice, line); }
 
 function onboardingAmount(invoice) {
     const shares = invoice.onboardingShares;
@@ -491,7 +492,7 @@ function onboardingAmount(invoice) {
     return share ? fullAmount(invoice) * share : 0;
 }
 
-function recurringAmount(invoice) { return mrrAmount(invoice) - onboardingAmount(invoice); }
+function recurringAmount(invoice) { return mrrAmount(invoice) - onboardingAmount(invoice) - breakFeeAmount(invoice); }
 
 const SETUP_MONTHS = 3;
 const CHURN_MIN_USD = 0.5;
@@ -516,11 +517,13 @@ function totalsByContactLine(invoices) {
             const value = recurringLineAmount(invoice, line);
             const tagged = upsellAmount(invoice, line);
             const onboarding = onboardingLineAmount(invoice, line);
-            if (!value && !tagged && !onboarding) return;
-            const entry = lines.get(line) || { value: 0, tagged: 0, onboarding: 0 };
+            const breakFee = breakFeeLineAmount(invoice, line);
+            if (!value && !tagged && !onboarding && !breakFee) return;
+            const entry = lines.get(line) || { value: 0, tagged: 0, onboarding: 0, breakFee: 0 };
             entry.value += value;
             entry.tagged += tagged;
             entry.onboarding += onboarding;
+            entry.breakFee += breakFee;
             lines.set(line, entry);
         });
     });
@@ -724,6 +727,7 @@ function measureWindow(ctx, windows, meta) {
     let churnedServiceChange = 0;
     let expansion = 0;
     let onboardingChange = 0;
+    let breakFeeChange = 0;
     let setupChange = 0;
     const setupClients = new Set();
     const churnedClients = meta.collectClients ? [] : null;
@@ -751,6 +755,7 @@ function measureWindow(ctx, windows, meta) {
             if (currentValue > 0.005) linesAfter.push(line);
             if (line !== 'other' && previousValue <= 0 && currentValue > 0) newLines += 1;
             onboardingChange += (after.get(line)?.onboarding || 0) - (before.get(line)?.onboarding || 0);
+            breakFeeChange += (after.get(line)?.breakFee || 0) - (before.get(line)?.breakFee || 0);
             beforeTotal += previousValue;
             afterTotal += currentValue;
         });
@@ -817,6 +822,7 @@ function measureWindow(ctx, windows, meta) {
         retained: initial - churned,
         onboardingInBase,
         onboardingChange,
+        breakFeeChange,
         setupChange,
         activeClients: currentByContact.size,
         newBusiness,
@@ -1083,12 +1089,9 @@ function manualMarginEntryFor(month, invoices, scope = state.scope, category = s
 function marginPartRevenue(monthInvoices, part) {
     return monthInvoices.reduce((total, invoice) => {
         if (part.scope !== 'all' && invoice.companyKey !== part.scope) return total;
-        const shares = invoice.breakFeeShares || {};
+        // A break fee conta na receita, igual ao MRR (mrrAmount).
         const share = part.category === 'all' ? 1 : categoryShare(invoice, part.category);
-        const breakFee = part.category === 'all'
-            ? Object.values(shares).reduce((sum, value) => sum + (Number(value) || 0), 0)
-            : Number(shares[part.category]) || 0;
-        return total + fullAmount(invoice) * Math.max(0, share - breakFee);
+        return total + fullAmount(invoice) * Math.max(0, share);
     }, 0);
 }
 
@@ -1400,8 +1403,9 @@ function buildMonthlyRows() {
                     serviceChange: m.hasBase ? m.churnedServiceChange : null,
                     upsells: m.hasBase ? m.expansion : null,
                     retained: m.hasBase ? m.retained : null,
-                    final: m.recurringMrr,
+                    final: m.totalMrr,
                     onboardingChange: m.hasBase ? m.onboardingChange : null,
+                    breakFeeChange: m.hasBase ? m.breakFeeChange : null,
                     setupChange: m.setupChange,
                     rate: m.hasBase ? share(m.retained, m.initial) : null,
                     target: retentionTarget,
