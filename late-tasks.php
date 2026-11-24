@@ -51,7 +51,12 @@ foreach (snapshot_decode_ppc((string) $snapshot['body']) ?? [] as $row) {
     if (is_array($decoded) && !array_is_list($decoded)) {
         foreach ($decoded as $name => $counts) {
             if (is_array($counts) && is_numeric($counts['due'] ?? null) && is_numeric($counts['late'] ?? null)) {
-                $owners[(string) $name] = ['due' => (float) $counts['due'], 'late' => (float) $counts['late']];
+                $owners[(string) $name] = [
+                    'due' => (float) $counts['due'],
+                    'late' => (float) $counts['late'],
+                    'soon' => is_numeric($counts['soon'] ?? null) ? (float) $counts['soon'] : 0.0,
+                    'tracked' => is_numeric($counts['tracked'] ?? null) ? (float) $counts['tracked'] : 0.0,
+                ];
             }
         }
     }
@@ -62,6 +67,8 @@ foreach (snapshot_decode_ppc((string) $snapshot['body']) ?? [] as $row) {
         'listId' => (string) ($row['list_id'] ?? ''),
         'dueTotal' => is_numeric($row['due_total'] ?? null) ? (float) $row['due_total'] : 0.0,
         'lateTotal' => is_numeric($row['late_total'] ?? null) ? (float) $row['late_total'] : 0.0,
+        'dueSoonTotal' => is_numeric($row['due_soon_total'] ?? null) ? (float) $row['due_soon_total'] : null,
+        'trackedMs' => is_numeric($row['tracked_ms'] ?? null) ? (float) $row['tracked_ms'] : null,
         'truncated' => ($row['truncated'] ?? false) === true,
         'computedAt' => isset($row['computed_at']) ? (string) $row['computed_at'] : null,
         'owners' => (object) $owners,
