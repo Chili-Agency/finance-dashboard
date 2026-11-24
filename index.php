@@ -612,6 +612,82 @@ function asset(string $path): string
                     </article>
                 </div>
 
+                <article class="panel">
+                    <div class="panel-header">
+                        <div><p class="eyebrow">ClickUp</p><h3>Clients with the most late tasks</h3></div>
+                        <span class="panel-meta" id="ah-late-clients-count"></span>
+                    </div>
+                    <div class="table-scroll">
+                        <table class="entries-table ah-churn-table">
+                            <thead><tr><th>Client</th><th class="align-right">Late</th><th class="align-right">Due</th><th class="align-right">Late %</th><th>vs 5%</th></tr></thead>
+                            <tbody id="ah-late-clients"></tbody>
+                        </table>
+                        <div class="table-empty is-hidden" id="ah-late-clients-empty"></div>
+                    </div>
+                </article>
+
+                <div class="split-grid">
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">ClickUp</p><h3>Tasks due soon by client</h3></div>
+                            <span class="panel-meta" id="ah-soon-clients-count"></span>
+                        </div>
+                        <div class="table-scroll">
+                            <table class="entries-table ah-churn-table">
+                                <thead><tr><th>Client</th><th class="align-right">Due soon</th><th>vs top</th></tr></thead>
+                                <tbody id="ah-soon-clients"></tbody>
+                            </table>
+                            <div class="table-empty is-hidden" id="ah-soon-clients-empty"></div>
+                        </div>
+                    </article>
+
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">ClickUp</p><h3>Tasks due soon by assignee</h3></div>
+                            <span class="panel-meta" id="ah-soon-owners-count"></span>
+                        </div>
+                        <div class="table-scroll">
+                            <table class="entries-table ah-churn-table">
+                                <thead><tr><th>Assignee</th><th class="align-right">Due soon</th><th>vs top</th></tr></thead>
+                                <tbody id="ah-soon-owners"></tbody>
+                            </table>
+                            <div class="table-empty is-hidden" id="ah-soon-owners-empty"></div>
+                        </div>
+                    </article>
+                </div>
+                <p class="stat-scope" id="ah-soon-total"></p>
+
+                <div class="split-grid">
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">ClickUp</p><h3>Clients by tracked time</h3></div>
+                            <span class="panel-meta" id="ah-time-clients-count"></span>
+                        </div>
+                        <div class="table-scroll">
+                            <table class="entries-table ah-churn-table">
+                                <thead><tr><th>Client</th><th class="align-right">Tracked</th><th>vs top</th></tr></thead>
+                                <tbody id="ah-time-clients"></tbody>
+                            </table>
+                            <div class="table-empty is-hidden" id="ah-time-clients-empty"></div>
+                        </div>
+                    </article>
+
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">ClickUp</p><h3>People by tracked time</h3></div>
+                            <span class="panel-meta" id="ah-time-owners-count"></span>
+                        </div>
+                        <div class="table-scroll">
+                            <table class="entries-table ah-churn-table">
+                                <thead><tr><th>Person</th><th class="align-right">Tracked</th><th>vs top</th></tr></thead>
+                                <tbody id="ah-time-owners"></tbody>
+                            </table>
+                            <div class="table-empty is-hidden" id="ah-time-owners-empty"></div>
+                        </div>
+                    </article>
+                </div>
+                <p class="stat-scope" id="ah-time-total"></p>
+
                 <div class="split-grid">
                     <article class="panel">
                         <div class="panel-header">

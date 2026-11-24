@@ -18,6 +18,10 @@ const AH_ESCALATE_BELOW = 8;
 const AH_NO_MANAGER = 'No manager';
 const AH_LATE_TARGET = 0.05;
 const AH_LATE_OWNER_ROWS = 10;
+const AH_LATE_CLIENT_ROWS = 10;
+const AH_SOON_DAYS = 7;
+const AH_TIME_DAYS = 30;
+const AH_COUNT_ROWS = 10;
 const AH_LATE_ENDPOINT = 'late-tasks.php';
 const AH_ATTENTION_ENDPOINT = 'attention-data.php';
 const AH_USERS_ENDPOINT = 'clickup-users.php';
@@ -276,10 +280,15 @@ function ahLateModel(allowed) {
     const unmatched = [];
     const owners = new Map();
     const managers = new Map();
+    const clients = new Map();
     const services = new Set();
     let due = 0;
     let lateCount = 0;
     let truncated = 0;
+    let soon = 0;
+    let tracked = 0;
+    const soonAvailable = late.lists.some((item) => item.dueSoonTotal !== null && item.dueSoonTotal !== undefined);
+    const trackedAvailable = late.lists.some((item) => item.trackedMs !== null && item.trackedMs !== undefined);
     late.lists.forEach((item) => {
         services.add(item.service);
         const row = match(item.client);
@@ -287,6 +296,8 @@ function ahLateModel(allowed) {
         if (allowed && (!row || !allowed.has(row.clientKey))) return;
         due += item.dueTotal;
         lateCount += item.lateTotal;
+        soon += item.dueSoonTotal || 0;
+        tracked += item.trackedMs || 0;
         if (item.truncated) truncated += 1;
         const am = row ? row.am : AH_NO_MANAGER;
         const manager = managers.get(am) || { name: am, due: 0, late: 0, accounts: 0 };
@@ -294,10 +305,19 @@ function ahLateModel(allowed) {
         manager.late += item.lateTotal;
         manager.accounts += 1;
         managers.set(am, manager);
+        const clientKey = row ? row.clientKey : `unmatched:${normalizeClientName(item.client)}`;
+        const client = clients.get(clientKey) || { name: row ? row.clientName : item.client, am, due: 0, late: 0, soon: 0, tracked: 0 };
+        client.due += item.dueTotal;
+        client.late += item.lateTotal;
+        client.soon += item.dueSoonTotal || 0;
+        client.tracked += item.trackedMs || 0;
+        clients.set(clientKey, client);
         Object.entries(item.owners || {}).forEach(([name, counts]) => {
-            const owner = owners.get(name) || { name, due: 0, late: 0 };
+            const owner = owners.get(name) || { name, due: 0, late: 0, soon: 0, tracked: 0 };
             owner.due += counts.due;
             owner.late += counts.late;
+            owner.soon += counts.soon || 0;
+            owner.tracked += counts.tracked || 0;
             owners.set(name, owner);
         });
     });
@@ -311,6 +331,13 @@ function ahLateModel(allowed) {
         services: [...services],
         managers: [...managers.values()].map(withRate).sort((a, b) => (a.name === AH_NO_MANAGER) - (b.name === AH_NO_MANAGER) || a.name.localeCompare(b.name)),
         owners: [...owners.values()].filter((item) => item.due > 0).map(withRate).sort((a, b) => b.late - a.late || b.due - a.due || a.name.localeCompare(b.name)),
+        soon,
+        tracked,
+        soonAvailable,
+        trackedAvailable,
+        allClients: [...clients.values()],
+        allOwners: [...owners.values()],
+        clients: [...clients.values()].filter((item) => item.due > 0).map(withRate).sort((a, b) => b.late - a.late || b.due - a.due || a.name.localeCompare(b.name)),
         unmatched: [...new Set(unmatched)].sort((a, b) => a.localeCompare(b)),
     };
 }
@@ -803,6 +830,44 @@ function ahLateRows(items) {
     }).join('');
 }
 
+const AH_HOURS = new Intl.NumberFormat('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const ahHours = (ms) => `${AH_HOURS.format((ms || 0) / 3600000)} h`;
+
+function ahCountRows(items, valueOf, format) {
+    const max = items.reduce((top, item) => Math.max(top, valueOf(item)), 0);
+    return items.map((item) => {
+        const value = valueOf(item);
+        const fill = max > 0 ? clampPercent((value / max) * 100) : 0;
+        return `<tr><td><strong>${escapeHtml(item.name)}</strong></td><td class="align-right mono">${format(value)}</td><td><span class="ah-meter"><i class="is-ok" style="width:${fill}%"></i></span></td></tr>`;
+    }).join('');
+}
+
+function ahFillCountPanel(id, late, available, source, valueOf, format, labels) {
+    const ready = late.status === 'ready';
+    const items = ready && available ? source.filter((item) => valueOf(item) > 0).sort((a, b) => valueOf(b) - valueOf(a) || a.name.localeCompare(b.name)) : [];
+    const shown = items.slice(0, AH_COUNT_ROWS);
+    $(`#${id}`).innerHTML = ahCountRows(shown, valueOf, format);
+    const empty = $(`#${id}-empty`);
+    empty.classList.toggle('is-hidden', shown.length > 0);
+    empty.textContent = !ready ? (late.status === 'loading' ? 'Loading ClickUp…' : (late.errors && late.errors[0]) || 'ClickUp late tasks are not connected.')
+        : !available ? labels.pending : labels.none;
+    setText(`#${id}-count`, ready && available ? (items.length > shown.length ? `Top ${shown.length} of ${items.length}` : plural(items.length, labels.unit)) : '');
+}
+
+function renderAhSoonTracked(late) {
+    const ready = late.status === 'ready';
+    const soonOf = (item) => item.soon;
+    const timeOf = (item) => item.tracked;
+    const soonLabels = { pending: 'Due-soon data will appear after the next ClickUp refresh.', none: `No open tasks are due in the next ${AH_SOON_DAYS} days for this selection.` };
+    const timeLabels = { pending: 'Tracked time will appear after the next ClickUp refresh.', none: `No time was tracked in the last ${AH_TIME_DAYS} days for this selection.` };
+    ahFillCountPanel('ah-soon-clients', late, ready && late.soonAvailable, ready ? late.allClients : [], soonOf, number, { ...soonLabels, unit: 'client' });
+    ahFillCountPanel('ah-soon-owners', late, ready && late.soonAvailable, ready ? late.allOwners : [], soonOf, number, { ...soonLabels, unit: 'assignee' });
+    ahFillCountPanel('ah-time-clients', late, ready && late.trackedAvailable, ready ? late.allClients : [], timeOf, ahHours, { ...timeLabels, unit: 'client' });
+    ahFillCountPanel('ah-time-owners', late, ready && late.trackedAvailable, ready ? late.allOwners : [], timeOf, ahHours, { ...timeLabels, unit: 'person' });
+    setText('#ah-soon-total', ready && late.soonAvailable ? `${plural(late.soon, 'task')} due in the next ${AH_SOON_DAYS} days` : '');
+    setText('#ah-time-total', ready && late.trackedAvailable ? `${ahHours(late.tracked)} in the last ${AH_TIME_DAYS} days` : '');
+}
+
 function renderAhLate(model) {
     const late = model ? model.late : { status: 'loading' };
     const ready = late.status === 'ready';
@@ -818,12 +883,19 @@ function renderAhLate(model) {
     ownersEmpty.classList.toggle('is-hidden', owners.length > 0);
     ownersEmpty.textContent = ready ? 'No tasks were due in the last 30 days for this selection.' : empty;
     setText('#ah-late-count', ready && late.owners.length > owners.length ? `Top ${owners.length} of ${late.owners.length}` : ready ? plural(late.owners.length, 'assignee') : '');
+    const clientRows = ready ? late.clients.slice(0, AH_LATE_CLIENT_ROWS) : [];
+    $('#ah-late-clients').innerHTML = ahLateRows(clientRows);
+    const clientsEmpty = $('#ah-late-clients-empty');
+    clientsEmpty.classList.toggle('is-hidden', clientRows.length > 0);
+    clientsEmpty.textContent = ready ? 'No tasks were due in the last 30 days for this selection.' : empty;
+    setText('#ah-late-clients-count', ready && late.clients.length > clientRows.length ? `Top ${clientRows.length} of ${late.clients.length}` : ready ? plural(late.clients.length, 'client') : '');
     const note = $('#ah-late-note');
     const notes = [];
     if (ready && late.truncated) notes.push(`${plural(late.truncated, 'list')} hit the page limit, so the real numbers may be higher.`);
     if (ready && late.unmatched.length) notes.push(`${plural(late.unmatched.length, 'ClickUp client')} not found in the account map, so ${late.unmatched.length === 1 ? 'it is' : 'they are'} left out of the manager filters: ${late.unmatched.join(', ')}.`);
     note.hidden = !notes.length;
     note.textContent = notes.join(' ');
+    renderAhSoonTracked(late);
 }
 
 function ahDaysCell(days, limit, missing) {
