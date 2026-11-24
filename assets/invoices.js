@@ -36,10 +36,13 @@ function renderTable(invoices) {
     $('#table-empty').classList.toggle('is-hidden', invoices.length > 0);
 }
 
+const HIDDEN_LEDGER_STATUSES = ['DRAFT', 'DELETED'];
+
 function renderInvoices() {
-    const invoices = filteredInvoices();
+    const allInvoices = filteredInvoices();
+    const invoices = allInvoices.filter((invoice) => !HIDDEN_LEDGER_STATUSES.includes(normalStatus(invoice)));
     clearDynamicNotice();
-    renderMetrics(invoices);
+    renderMetrics(allInvoices);
     renderStatusChart(invoices);
     renderMarkets(invoices);
     renderTable(invoices);
