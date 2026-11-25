@@ -63,6 +63,27 @@ return (static function (): array {
         return $default;
     };
 
+    // Tokens do MCP: entradas malformadas são ignoradas (registradas no log), nunca derrubam o dashboard.
+    $mcpTokens = [];
+    foreach (explode(',', $env('MCP_READ_TOKENS', '')) as $pair) {
+        $pair = trim($pair);
+        if ($pair === '') {
+            continue;
+        }
+        $sep = strpos($pair, ':');
+        $name = $sep === false ? '' : trim(substr($pair, 0, $sep));
+        $token = $sep === false ? '' : trim(substr($pair, $sep + 1));
+        if (!preg_match('/^[A-Za-z0-9._-]{1,40}$/', $name) || strlen($token) < 32 || preg_match('/\s/', $token)) {
+            error_log('[config] MCP_READ_TOKENS: entrada ignorada (use nome:token, token com 32+ caracteres).');
+            continue;
+        }
+        $mcpTokens[$name] = $token;
+    }
+    $legacyToken = $env('MCP_READ_TOKEN', '');
+    if ($legacyToken !== '' && !in_array($legacyToken, $mcpTokens, true)) {
+        $mcpTokens['default'] = $legacyToken;
+    }
+
     $config = [
         'db' => [
             'host' => $env('DB_HOST', 'localhost'),
@@ -113,6 +134,15 @@ return (static function (): array {
         ],
         'ppc' => [
             'api_key' => $env('PPC_API_KEY', ''),
+        ],
+        'mcp' => [
+            // Tokens de LEITURA, um por pessoa: MCP_READ_TOKENS=ana:token1,bruno:token2 (nome: letras, números, . _ -;
+            // token com 32+ caracteres). MCP_READ_TOKEN sozinho ainda vale, como "default". Nenhum = acesso por token desligado.
+            // Gere cada token com: php -r "echo bin2hex(random_bytes(32)), PHP_EOL;"
+            'tokens' => $mcpTokens,
+            // Opcional: URL base do próprio dashboard (sem barra final), usada pelo mcp.php para ler os dados.
+            // Vazio = deduz do pedido. Preencha se o dashboard estiver atrás de proxy ou com mais de um domínio.
+            'self_url' => rtrim($env('MCP_SELF_URL', ''), '/'),
         ],
         'fx' => [
             // App ID da Open Exchange Rates. Vazio = usa só o que já está em fx_monthly_rates.
