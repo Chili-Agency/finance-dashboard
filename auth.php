@@ -231,8 +231,71 @@ function auth_require_page(): array
     return $user;
 }
 
+/**
+ * Identifica quem chama por token de LEITURA (servidor MCP, integrações), sem sessão.
+ * Os tokens vêm de MCP_READ_TOKENS no .env (um por pessoa: "ana:token1,bruno:token2"; MCP_READ_TOKEN
+ * sozinho ainda vale como "default"). Sem nenhum token configurado, o acesso por token fica desligado.
+ * O token vai em "Authorization: Bearer ..."; com $allowQuery também em ?key=... (conectores que só aceitam URL).
+ * O usuário devolvido tem o perfil 'mcp_readonly', que não está em AUTH_ROLES e portanto não grava nada.
+ * Não reaproveita o FX_REFRESH_TOKEN, que é de escrita. Revogar = tirar a pessoa da lista no .env.
+ *
+ * @return array{id:int,email:string,name:string,role:string,token:string}|null
+ */
+function auth_token_identity(bool $allowQuery = false): ?array
+{
+    $header = (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '');
+    if ($header === '' && function_exists('getallheaders')) {
+        foreach (getallheaders() as $name => $value) {
+            if (strcasecmp((string) $name, 'Authorization') === 0) {
+                $header = (string) $value;
+                break;
+            }
+        }
+    }
+    $given = '';
+    if (preg_match('/^Bearer\s+(\S+)$/i', trim($header), $match)) {
+        $given = $match[1];
+    } elseif ($allowQuery && isset($_GET['key']) && is_string($_GET['key'])) {
+        $given = trim($_GET['key']);
+    }
+    if ($given === '') {
+        return null;
+    }
+    try {
+        $config = require __DIR__ . '/config.php';
+    } catch (Throwable $error) {
+        error_log('[auth] token: ' . $error->getMessage());
+        return null;
+    }
+    $found = null;
+    foreach ((array) ($config['mcp']['tokens'] ?? []) as $name => $token) {
+        // Percorre a lista toda (sem parar no primeiro acerto) para o tempo de resposta não revelar a posição.
+        if ($token !== '' && hash_equals((string) $token, $given)) {
+            $found = (string) $name;
+        }
+    }
+    if ($found === null) {
+        return null;
+    }
+    return ['id' => 0, 'email' => 'mcp:' . $found, 'name' => 'MCP (' . $found . ')', 'role' => 'mcp_readonly', 'token' => $given];
+}
+
+/** Para os endpoints do dashboard: token de leitura só vale em GET/HEAD. */
+function auth_token_user(): ?array
+{
+    $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
+    if ($method !== 'GET' && $method !== 'HEAD') {
+        return null;
+    }
+    return auth_token_identity(false);
+}
+
 function auth_require_api(): array
 {
+    $tokenUser = auth_token_user();
+    if ($tokenUser !== null) {
+        return $tokenUser;
+    }
     $user = auth_user();
     if ($user === null) {
         http_response_code(401);
